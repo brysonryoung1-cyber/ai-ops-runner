@@ -14,3 +14,4 @@ repos/
 *.log
 .pytest_cache/
 .mypy_cache/
+review_packets/

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# post-commit — Optionally trigger ship_auto.sh after commits
+# Disabled by default. Set SHIP_AUTO_ON_COMMIT=1 to enable.
+# Set SHIP_AUTO_SKIP=1 to skip (used as recursion guard).
+# Set REVIEW_FINISH_COMMIT=1 to skip (baseline-advance commits).
+
+# --- recursion guard ---
+if [ "${SHIP_AUTO_SKIP:-0}" = "1" ]; then
+  exit 0
+fi
+
+# --- skip baseline-advance commits ---
+if [ "${REVIEW_FINISH_COMMIT:-0}" = "1" ]; then
+  exit 0
+fi
+
+# --- only run if explicitly enabled ---
+if [ "${SHIP_AUTO_ON_COMMIT:-0}" != "1" ]; then
+  exit 0
+fi
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+SHIP_SCRIPT="$ROOT_DIR/ops/ship_auto.sh"
+
+if [ ! -x "$SHIP_SCRIPT" ]; then
+  exit 0
+fi
+
+echo "post-commit: Running ship_auto.sh --no-push..."
+SHIP_AUTO_SKIP=1 "$SHIP_SCRIPT" --no-push || {
+  echo "post-commit: ship_auto.sh exited with $?" >&2
+}

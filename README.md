@@ -70,6 +70,68 @@ Defined in `configs/job_allowlist.yaml`:
 - **orb_ops_selftests** — run ORB self-tests (1800s timeout)
 - **orb_review_auto_nopush** — run review_auto with --no-push (1800s timeout)
 
+## Ops Automation (Ship Autopilot)
+
+This repo includes a full review + ship automation framework. No manual paste of review packets — everything is self-running.
+
+### First-Time Setup
+
+```bash
+# Install git hooks (pre-push gate + post-commit trigger)
+./ops/INSTALL_HOOKS.sh
+
+# Verify repo health
+./ops/doctor_repo.sh
+```
+
+### Standard Workflow
+
+```bash
+# Implement → commit → ship
+./ops/ship_auto.sh
+```
+
+This single command:
+1. Runs unit tests (pytest + docker compose validation)
+2. Runs Codex review (`review_auto.sh --no-push`)
+3. If BLOCKED → auto-heals (applies fixes) → re-tests → re-reviews (bounded attempts)
+4. If APPROVED → advances baseline → pushes
+
+### Individual Commands
+
+```bash
+# Review only (no push)
+./ops/review_auto.sh --no-push
+
+# Generate review bundle for inspection
+./ops/review_bundle.sh --since "$(cat docs/LAST_REVIEWED_SHA.txt)"
+
+# Advance baseline + push (after external approval)
+./ops/review_finish.sh
+
+# Check repo health
+./ops/doctor_repo.sh
+```
+
+### Push Gate
+
+The pre-push hook enforces that pushes are impossible without an APPROVED verdict for the exact commit range being pushed. If blocked:
+
+```bash
+./ops/review_auto.sh
+```
+
+### Review Artifacts
+
+Review artifacts are stored locally in `review_packets/` (gitignored, never committed):
+
+```
+review_packets/<timestamp>/
+├── REVIEW_BUNDLE.txt      # Diff sent for review
+├── CODEX_VERDICT.json     # Strict JSON verdict
+└── META.json              # Metadata (range, timestamp, mode)
+```
+
 ## Development
 
 ```bash
@@ -82,6 +144,12 @@ pytest -q
 
 # Validate docker compose
 docker compose config
+
+# Run ops selftests
+bash ops/tests/review_bundle_selftest.sh
+bash ops/tests/review_auto_selftest.sh
+bash ops/tests/review_finish_selftest.sh
+bash ops/tests/ship_auto_selftest.sh
 ```
 
 ## Repo Structure
@@ -90,9 +158,32 @@ docker compose config
 ├── docker-compose.yml
 ├── configs/
 │   └── job_allowlist.yaml
+├── docs/
+│   ├── LAST_REVIEWED_SHA.txt
+│   ├── REVIEW_WORKFLOW.md
+│   ├── REVIEW_PACKET.md
+│   └── HANDOFF_CURRENT_STATE.md
 ├── ops/
+│   ├── review_bundle.sh
+│   ├── review_auto.sh
+│   ├── review_finish.sh
+│   ├── ship_auto.sh
+│   ├── autoheal_codex.sh
+│   ├── doctor_repo.sh
+│   ├── INSTALL_HOOKS.sh
 │   ├── runner_smoke.sh
-│   └── runner_submit_job.sh
+│   ├── runner_submit_job.sh
+│   ├── schemas/
+│   │   └── codex_review_verdict.schema.json
+│   └── tests/
+│       ├── review_bundle_selftest.sh
+│       ├── review_auto_selftest.sh
+│       ├── review_finish_selftest.sh
+│       └── ship_auto_selftest.sh
+├── .githooks/
+│   ├── pre-push
+│   └── post-commit
+├── review_packets/          (gitignored)
 ├── services/test_runner/
 │   ├── Dockerfile
 │   ├── requirements.txt

@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Codex Review Verdict",
+  "description": "Strict schema for Codex review verdicts in ai-ops-runner",
+  "type": "object",
+  "required": ["verdict", "blockers", "non_blocking", "tests_run"],
+  "additionalProperties": false,
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["APPROVED", "BLOCKED"],
+      "description": "The review verdict"
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of blocking issues that must be fixed before merge"
+    },
+    "non_blocking": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of non-blocking suggestions or observations"
+    },
+    "tests_run": {
+      "type": "string",
+      "description": "Summary of tests that were run or considered"
+    }
+  }
+}

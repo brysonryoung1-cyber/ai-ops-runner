@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# pre-push — UNBREAKABLE PUSH GATE
+# Requires APPROVED verdict for the EXACT commit range being pushed.
+# Set REVIEW_PUSH_APPROVED=1 to bypass (used by review_finish.sh only).
+set -euo pipefail
+
+# --- bypass for review_finish.sh ---
+if [ "${REVIEW_PUSH_APPROVED:-0}" = "1" ]; then
+  exit 0
+fi
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+
+# --- compute push range ---
+# Read stdin for push info: <local ref> <local sha> <remote ref> <remote sha>
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # Skip delete pushes
+  if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+    continue
+  fi
+
+  # Determine the range start
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    # New branch — use the baseline as range start
+    if [ -f "$ROOT_DIR/docs/LAST_REVIEWED_SHA.txt" ]; then
+      RANGE_START="$(tr -d '[:space:]' < "$ROOT_DIR/docs/LAST_REVIEWED_SHA.txt")"
+    else
+      echo "ERROR: No baseline found. Run: ./ops/review_auto.sh" >&2
+      exit 1
+    fi
+  else
+    RANGE_START="$remote_sha"
+  fi
+
+  RANGE_END="$local_sha"
+
+  echo "pre-push: Checking verdict for range ${RANGE_START}..${RANGE_END}"
+
+  # --- look for APPROVED verdict covering this exact range ---
+  APPROVED=0
+  if [ -d "$ROOT_DIR/review_packets" ]; then
+    for meta_file in $(ls -t "$ROOT_DIR"/review_packets/*/META.json 2>/dev/null); do
+      VERDICT="$(python3 -c "
+import json
+with open('$meta_file') as f:
+    m = json.load(f)
+print(m.get('verdict', ''))
+" 2>/dev/null || echo "")"
+
+      META_SINCE="$(python3 -c "
+import json
+with open('$meta_file') as f:
+    m = json.load(f)
+print(m.get('since_sha', ''))
+" 2>/dev/null || echo "")"
+
+      META_HEAD="$(python3 -c "
+import json
+with open('$meta_file') as f:
+    m = json.load(f)
+print(m.get('head_sha', ''))
+" 2>/dev/null || echo "")"
+
+      if [ "$VERDICT" = "APPROVED" ]; then
+        # Check if this verdict covers the push range
+        # The verdict's head_sha must match or be an ancestor of our range end
+        # and the verdict's since_sha must match or be an ancestor of our range start
+        if git merge-base --is-ancestor "$RANGE_START" "$META_HEAD" 2>/dev/null && \
+           [ "$META_HEAD" = "$RANGE_END" -o "$(git merge-base "$META_HEAD" "$RANGE_END")" = "$META_HEAD" ]; then
+          # Verdict covers a range that includes our push range
+          if [ "$META_HEAD" = "$RANGE_END" ]; then
+            APPROVED=1
+            break
+          fi
+        fi
+      fi
+    done
+  fi
+
+  if [ "$APPROVED" -ne 1 ]; then
+    echo "" >&2
+    echo "========================================" >&2
+    echo "  PUSH BLOCKED — No APPROVED verdict"   >&2
+    echo "  for range: ${RANGE_START}..${RANGE_END}" >&2
+    echo "========================================" >&2
+    echo "" >&2
+    echo "  Fix: ./ops/review_auto.sh" >&2
+    echo "" >&2
+    exit 1
+  fi
+
+  echo "pre-push: APPROVED verdict found. Push allowed."
+done
+
+exit 0
