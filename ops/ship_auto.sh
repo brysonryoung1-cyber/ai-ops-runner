@@ -42,7 +42,13 @@ run_tests() {
     echo "  Running pytest..."
     PYTEST_OUTPUT=""
     PYTEST_RC=0
-    PYTEST_OUTPUT="$(cd "$ROOT_DIR/services/test_runner" && timeout 120 python3 -m pytest -q tests/ 2>&1)" || PYTEST_RC=$?
+    TIMEOUT_CMD=""
+    if command -v timeout &>/dev/null; then
+      TIMEOUT_CMD="timeout 120"
+    elif command -v gtimeout &>/dev/null; then
+      TIMEOUT_CMD="gtimeout 120"
+    fi
+    PYTEST_OUTPUT="$(cd "$ROOT_DIR/services/test_runner" && $TIMEOUT_CMD python3 -m pytest -q tests/ 2>&1)" || PYTEST_RC=$?
     if [ "$PYTEST_RC" -eq 0 ]; then
       echo "  pytest: PASSED"
     elif [ "$PYTEST_RC" -eq 5 ]; then
