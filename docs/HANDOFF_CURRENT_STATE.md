@@ -6,10 +6,22 @@
 
 ## Status
 
-All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested.
+All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation added (private-only, Tailscale-only).
 
 ## Recent Changes
 
+- **VPS deployment**: Added private-only VPS deployment via Tailscale
+  - `ops/vps_bootstrap.sh` — idempotent VPS setup (docker, tailscale, UFW, systemd)
+  - `ops/vps_deploy.sh` — wrapper (bootstrap + doctor)
+  - `ops/vps_doctor.sh` — remote health checks
+  - `ops/vps_self_update.sh` — review-gated self-update (runs on VPS via systemd timer)
+  - `docs/DEPLOY_VPS.md` — full deployment guide
+- **Private-only networking**: docker-compose.yml hardened
+  - Postgres/Redis: no published ports (internal docker network only)
+  - API: bound to `127.0.0.1:8000` only (no public exposure)
+  - Remote access via `tailscale serve` (HTTPS on tailnet)
+- **Review-gated updates**: VPS self-update checks `LAST_REVIEWED_SHA.txt == origin/main HEAD`; fails closed if review gate not passed
+- **Systemd timers**: auto-update every 15 min, daily smoke test at 06:00 UTC
 - **ORB integration**: Added read-only analysis jobs for algo-nt8-orb (orb_review_bundle, orb_doctor, orb_score_run)
 - **Repo allowlist**: New `configs/repo_allowlist.yaml` — runner rejects any repo URL not listed
 - **Job allowlist**: Extended with 3 new ORB job types, each with `requires_repo_allowlist: true`
@@ -38,6 +50,10 @@ ops/
 ├── runner_submit_orb_review.sh  # Submit orb_review_bundle + poll + print
 ├── runner_submit_orb_doctor.sh  # Submit orb_doctor + poll + print
 ├── runner_submit_orb_score.sh   # Submit orb_score_run + poll + print
+├── vps_bootstrap.sh          # Idempotent VPS setup (docker, tailscale, UFW, systemd)
+├── vps_deploy.sh             # Deploy wrapper (bootstrap + doctor)
+├── vps_doctor.sh             # Remote VPS health check
+├── vps_self_update.sh        # Review-gated self-update (runs on VPS)
 ├── schemas/
 │   └── codex_review_verdict.schema.json
 └── tests/
@@ -52,6 +68,14 @@ configs/
 ├── job_allowlist.yaml        # Allowlisted job types (incl. ORB jobs)
 └── repo_allowlist.yaml       # Allowlisted target repos (algo-nt8-orb)
 
+docs/
+├── DEPLOY_VPS.md             # VPS deployment guide
+├── LAST_REVIEWED_SHA.txt
+├── REVIEW_WORKFLOW.md
+├── REVIEW_PACKET.md
+├── HANDOFF_CURRENT_STATE.md
+└── CANONICAL_COMMANDS.md
+
 services/test_runner/
 ├── orb_wrappers/             # Per-job-type scripts (read-only worktree safe)
 │   ├── orb_review_bundle.sh
@@ -61,6 +85,15 @@ services/test_runner/
     ├── repo_allowlist.py     # Repo allowlist enforcement
     └── (existing modules)
 ```
+
+## VPS Deployment Design
+
+1. **Private-only**: No public ports. API on `127.0.0.1:8000` only, exposed to tailnet via `tailscale serve`.
+2. **UFW**: Deny all incoming except Tailscale interface + WireGuard UDP.
+3. **Review-gated updates**: `vps_self_update.sh` checks `LAST_REVIEWED_SHA == origin/main HEAD`; fail-closed.
+4. **Systemd timers**: Update every 15 min, smoke test daily 06:00 UTC.
+5. **Rollback**: If docker compose fails after update, automatic rollback to previous HEAD.
+6. **Secrets**: Never in repo. Auth keys live on VPS in `/etc/ai-ops-runner/env` (chmod 600).
 
 ## ORB Integration Design
 
@@ -87,6 +120,8 @@ The pre-push hook is the last line of defense. It has:
 4. **Repo allowlist** — configs/repo_allowlist.yaml; ORB jobs reject non-listed repos
 5. **Isolated outputs** — non-root, no docker.sock, read-only root filesystem
 6. **MUTATION_DETECTED** — if worktree is dirty post-job, job fails with changed file list
+7. **Private-only networking** — no public ports, Tailscale-only access, UFW deny incoming
+8. **Review-gated VPS updates** — fail-closed if code hasn't been APPROVED by ship_auto
 
 ## Canonical Command
 
@@ -101,4 +136,5 @@ See `docs/CANONICAL_COMMANDS.md` for the full reference.
 1. Run `./ops/INSTALL_HOOKS.sh` to activate git hooks
 2. Run `./ops/doctor_repo.sh` to verify repo health
 3. Use `./ops/ship_auto.sh` for the standard ship workflow
-4. Run ORB integration: `./ops/runner_submit_orb_review.sh` (requires docker stack running)
+4. Deploy to VPS: `VPS_SSH_TARGET=runner@<IP> TAILSCALE_AUTHKEY=tskey-... ./ops/vps_deploy.sh`
+5. Check VPS health: `VPS_SSH_TARGET=runner@<IP> ./ops/vps_doctor.sh`

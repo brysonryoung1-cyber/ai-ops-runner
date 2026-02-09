@@ -91,6 +91,24 @@ SHA defaults to remote HEAD if omitted. All helpers auto-resolve, poll for compl
 }
 ```
 
+## VPS Deployment (Private-Only)
+
+| Command | Purpose |
+|---------|---------|
+| `VPS_SSH_TARGET=runner@<IP> TAILSCALE_AUTHKEY=tskey-... ./ops/vps_bootstrap.sh` | First-time VPS setup (idempotent) |
+| `VPS_SSH_TARGET=runner@<IP> ./ops/vps_deploy.sh` | Full deploy (bootstrap + doctor) |
+| `VPS_SSH_TARGET=runner@<IP> ./ops/vps_doctor.sh` | Remote health check |
+
+See `docs/DEPLOY_VPS.md` for full details.
+
+### VPS Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `VPS_SSH_TARGET` | (required) | SSH target for VPS (e.g. `runner@100.x.y.z`) |
+| `TAILSCALE_AUTHKEY` | (optional) | Tailscale auth key (first-time only) |
+| `REPO_BRANCH` | `main` | Branch to deploy |
+
 ## Selftests
 
 ```bash

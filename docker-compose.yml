@@ -40,8 +40,7 @@ services:
       interval: 3s
       timeout: 3s
       retries: 10
-    ports:
-      - "5432:5432"
+    # No ports published — internal docker network only (private-only)
 
   redis:
     image: redis:7-alpine
@@ -50,14 +49,13 @@ services:
       interval: 3s
       timeout: 3s
       retries: 10
-    ports:
-      - "6379:6379"
+    # No ports published — internal docker network only (private-only)
 
   test_runner_api:
     <<: *runner-common
     command: ["uvicorn", "test_runner.api:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
 
   test_runner_worker:
     <<: *runner-common
