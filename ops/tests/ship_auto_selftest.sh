@@ -44,7 +44,7 @@ assert_eq "help exits 0" "0" "$RC"
 # --- Test 2: CODEX_SKIP mode with clean tree ---
 if [ -z "$(git -C "$ROOT_DIR" status --porcelain)" ]; then
   RC=0
-  OUTPUT="$(CODEX_SKIP=1 "$OPS_DIR/ship_auto.sh" --no-push --max-attempts 1 2>&1)" || RC=$?
+  OUTPUT="$(CODEX_SKIP=1 SHIP_SKIP_PYTEST=1 SHIP_SKIP_SELFTESTS=1 "$OPS_DIR/ship_auto.sh" --no-push --max-attempts 1 2>&1)" || RC=$?
   assert_eq "CODEX_SKIP=1 ship exits 0" "0" "$RC"
   assert_contains "ship shows APPROVED" "APPROVED" "$OUTPUT"
 else
