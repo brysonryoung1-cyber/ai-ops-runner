@@ -22,6 +22,18 @@ assert_eq() {
   fi
 }
 
+assert_contains() {
+  TESTS=$((TESTS + 1))
+  local desc="$1" needle="$2" haystack="$3"
+  if echo "$haystack" | grep -qF "$needle"; then
+    echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $desc (expected to contain: $needle)" >&2
+    FAIL=$((FAIL + 1))
+  fi
+}
+
 echo "=== review_finish_selftest.sh ==="
 
 # --- Test 1: Dirty tree rejection ---
@@ -44,11 +56,8 @@ if [ -z "$(git -C "$ROOT_DIR" status --porcelain)" ]; then
     assert_eq "baseline at HEAD exits 0" "0" "$RC"
   else
     # Baseline behind HEAD, no verdict → should fail
-    # Move any existing verdicts aside temporarily
     RC=0
     "$OPS_DIR/review_finish.sh" >/dev/null 2>&1 || RC=$?
-    # Should fail since there's likely no approved verdict for current HEAD
-    # (unless review_auto_selftest just ran)
     echo "  INFO: review_finish with baseline behind HEAD exited with $RC"
     TESTS=$((TESTS + 1)); PASS=$((PASS + 1))
     echo "  PASS: review_finish handles baseline-behind-HEAD correctly"
@@ -58,13 +67,59 @@ else
 fi
 
 # --- Test 3: Pathspec isolation (verify only LAST_REVIEWED_SHA.txt would be committed) ---
-# This is a design verification — review_finish.sh uses pathspec "-- docs/LAST_REVIEWED_SHA.txt"
 if grep -qF 'docs/LAST_REVIEWED_SHA.txt' "$OPS_DIR/review_finish.sh"; then
   TESTS=$((TESTS + 1)); PASS=$((PASS + 1))
   echo "  PASS: pathspec isolation in review_finish.sh"
 else
   TESTS=$((TESTS + 1)); FAIL=$((FAIL + 1))
   echo "  FAIL: pathspec isolation missing in review_finish.sh" >&2
+fi
+
+# --- Test 4: Simulated verdict check exists (design verification) ---
+if grep -qF 'simulated' "$OPS_DIR/review_finish.sh"; then
+  TESTS=$((TESTS + 1)); PASS=$((PASS + 1))
+  echo "  PASS: review_finish checks for simulated verdicts"
+else
+  TESTS=$((TESTS + 1)); FAIL=$((FAIL + 1))
+  echo "  FAIL: review_finish does NOT check for simulated verdicts" >&2
+fi
+
+# --- Test 5: No REVIEW_PUSH_APPROVED bypass (design verification) ---
+if grep -qF 'REVIEW_PUSH_APPROVED' "$OPS_DIR/review_finish.sh"; then
+  TESTS=$((TESTS + 1)); FAIL=$((FAIL + 1))
+  echo "  FAIL: review_finish.sh still contains REVIEW_PUSH_APPROVED bypass" >&2
+else
+  TESTS=$((TESTS + 1)); PASS=$((PASS + 1))
+  echo "  PASS: REVIEW_PUSH_APPROVED bypass removed from review_finish.sh"
+fi
+
+# --- Test 6: Pre-push hook has no bypass env vars (design verification) ---
+PRE_PUSH="$ROOT_DIR/.githooks/pre-push"
+if [ -f "$PRE_PUSH" ]; then
+  if grep -qF 'REVIEW_PUSH_APPROVED' "$PRE_PUSH"; then
+    TESTS=$((TESTS + 1)); FAIL=$((FAIL + 1))
+    echo "  FAIL: pre-push hook still contains REVIEW_PUSH_APPROVED bypass" >&2
+  else
+    TESTS=$((TESTS + 1)); PASS=$((PASS + 1))
+    echo "  PASS: no bypass env vars in pre-push hook"
+  fi
+else
+  TESTS=$((TESTS + 1)); FAIL=$((FAIL + 1))
+  echo "  FAIL: pre-push hook not found" >&2
+fi
+
+# --- Test 7: Simulated verdict rejection (functional, if conditions allow) ---
+# This test creates a simulated verdict via CODEX_SKIP and then verifies
+# that review_finish refuses it.
+if [ -z "$(git -C "$ROOT_DIR" status --porcelain)" ] && [ "$BASELINE" != "$HEAD_SHA" ]; then
+  # There are unreviewed commits and tree is clean — create simulated verdict
+  CODEX_SKIP=1 "$OPS_DIR/review_auto.sh" --no-push >/dev/null 2>&1 || true
+  RC=0
+  OUTPUT="$("$OPS_DIR/review_finish.sh" 2>&1)" || RC=$?
+  assert_eq "review_finish refuses simulated verdict" "1" "$RC"
+  assert_contains "review_finish mentions SIMULATED" "SIMULATED" "$OUTPUT"
+else
+  echo "  SKIP: Cannot run simulated-verdict rejection test (baseline==HEAD or dirty tree)"
 fi
 
 # --- Summary ---

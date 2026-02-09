@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # review_finish.sh — Advance review baseline + commit isolation + push
-# Only advances baseline when APPROVED verdict exists for current HEAD.
+#
+# Only advances baseline when:
+#   1. Working tree is clean
+#   2. An APPROVED verdict exists for current HEAD
+#   3. The verdict is NOT simulated (meta.simulated must be false)
+#   4. The verdict range matches baseline..HEAD
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -24,44 +29,76 @@ if [ "$CURRENT_BASELINE" = "$HEAD_SHA" ]; then
   exit 0
 fi
 
-# --- check for APPROVED verdict ---
-APPROVED_FOUND=0
+# --- find and validate the most recent verdict ---
+APPROVED_FILE=""
 if [ -d "$ROOT_DIR/review_packets" ]; then
-  # Find the most recent verdict covering this range
-  for meta_file in $(ls -t "$ROOT_DIR"/review_packets/*/META.json 2>/dev/null); do
-    VERDICT="$(python3 -c "
-import json
-with open('$meta_file') as f:
-    m = json.load(f)
-print(m.get('verdict', ''))
-" 2>/dev/null || echo "")"
-    META_HEAD="$(python3 -c "
-import json
-with open('$meta_file') as f:
-    m = json.load(f)
-print(m.get('head_sha', ''))
-" 2>/dev/null || echo "")"
+  for verdict_file in $(ls -t "$ROOT_DIR"/review_packets/*/CODEX_VERDICT.json 2>/dev/null); do
+    # Validate this verdict against all requirements
+    RESULT="$(python3 - "$verdict_file" "$HEAD_SHA" "$CURRENT_BASELINE" <<'PYEOF' 2>&1 || true
+import json, sys
 
-    if [ "$VERDICT" = "APPROVED" ] && [ "$META_HEAD" = "$HEAD_SHA" ]; then
-      APPROVED_FOUND=1
+vfile = sys.argv[1]
+head_sha = sys.argv[2]
+baseline = sys.argv[3]
+
+with open(vfile) as f:
+    v = json.load(f)
+
+# Must be APPROVED
+if v.get("verdict") != "APPROVED":
+    sys.exit(1)
+
+meta = v.get("meta")
+if not isinstance(meta, dict):
+    sys.exit(1)
+
+# Must NOT be simulated
+if meta.get("simulated") is not False:
+    print("SIMULATED")
+    sys.exit(1)
+
+# Range must match: since_sha == baseline, to_sha == HEAD
+if meta.get("to_sha") != head_sha:
+    sys.exit(1)
+if meta.get("since_sha") != baseline:
+    sys.exit(1)
+
+# codex_cli must be present (non-null) for real verdicts
+cli = meta.get("codex_cli")
+if not isinstance(cli, dict) or not cli.get("version"):
+    sys.exit(1)
+
+print("OK")
+PYEOF
+)"
+    if [ "$RESULT" = "OK" ]; then
+      APPROVED_FILE="$verdict_file"
       break
+    elif [ "$RESULT" = "SIMULATED" ]; then
+      echo "ERROR: Found verdict for HEAD but it is SIMULATED (CODEX_SKIP)." >&2
+      echo "  Simulated verdicts cannot advance the baseline." >&2
+      echo "  Run a real review: ./ops/review_auto.sh" >&2
+      exit 1
     fi
   done
 fi
 
-if [ "$APPROVED_FOUND" -eq 0 ]; then
-  echo "ERROR: No APPROVED verdict found for HEAD ($HEAD_SHA)" >&2
+if [ -z "$APPROVED_FILE" ]; then
+  echo "ERROR: No valid APPROVED verdict found for HEAD ($HEAD_SHA)" >&2
+  echo "  Required: non-simulated APPROVED verdict with range ${CURRENT_BASELINE}..${HEAD_SHA}" >&2
   echo "  Run: ./ops/review_auto.sh" >&2
   exit 1
 fi
+
+echo "==> Found valid verdict: $APPROVED_FILE"
 
 # --- advance baseline ---
 echo "$HEAD_SHA" > "$BASELINE_FILE"
 echo "==> Baseline advanced to $HEAD_SHA"
 
 # --- commit with pathspec isolation ---
-REVIEW_FINISH_COMMIT=1 git add -- docs/LAST_REVIEWED_SHA.txt
-git commit -m "$(cat <<'EOF'
+git add -- docs/LAST_REVIEWED_SHA.txt
+REVIEW_FINISH_COMMIT=1 git commit -m "$(cat <<'EOF'
 chore: advance review baseline
 
 Automated baseline advance after APPROVED verdict.
@@ -70,7 +107,7 @@ EOF
 
 echo "==> Committed baseline advance"
 
-# --- push ---
+# --- push (pre-push gate validates the verdict with baseline-advance allowance) ---
 echo "==> Pushing to origin..."
-REVIEW_PUSH_APPROVED=1 git push origin HEAD
+git push origin HEAD
 echo "==> Push complete."

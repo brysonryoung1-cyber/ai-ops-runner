@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # review_auto.sh — One-command Codex review with auto packet-mode fallback
 # Usage: ./ops/review_auto.sh [--no-push] [--since <sha>]
+#
+# CODEX_SKIP=1 produces a SIMULATED verdict (meta.simulated=true).
+# Simulated verdicts are NEVER valid for the push gate.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -110,6 +113,8 @@ else:
   echo "$json_output" > "$verdict_file"
 }
 
+# Validate the complete verdict (with meta) against the schema contract.
+# Prints the verdict value on success, errors on stderr + exits 1 on failure.
 validate_verdict() {
   local verdict_file="$1"
 
@@ -118,51 +123,78 @@ validate_verdict() {
     return 1
   fi
 
-  python3 -c "
+  python3 - "$verdict_file" <<'PYEOF'
 import json, sys
 
-schema = {
-    'required': ['verdict', 'blockers', 'non_blocking', 'tests_run'],
-    'allowed_verdicts': ['APPROVED', 'BLOCKED']
-}
-
+vfile = sys.argv[1]
 try:
-    with open('$verdict_file') as f:
+    with open(vfile) as f:
         v = json.load(f)
-
-    # Check required keys
-    for key in schema['required']:
-        if key not in v:
-            print(f'ERROR: Missing required key: {key}', file=sys.stderr)
-            sys.exit(1)
-
-    # Check no extra keys
-    extra = set(v.keys()) - set(schema['required'])
-    if extra:
-        print(f'ERROR: Extra keys not allowed: {extra}', file=sys.stderr)
-        sys.exit(1)
-
-    # Check verdict value
-    if v['verdict'] not in schema['allowed_verdicts']:
-        print(f'ERROR: Invalid verdict: {v[\"verdict\"]}', file=sys.stderr)
-        sys.exit(1)
-
-    # Check types
-    if not isinstance(v['blockers'], list):
-        print('ERROR: blockers must be an array', file=sys.stderr)
-        sys.exit(1)
-    if not isinstance(v['non_blocking'], list):
-        print('ERROR: non_blocking must be an array', file=sys.stderr)
-        sys.exit(1)
-    if not isinstance(v['tests_run'], str):
-        print('ERROR: tests_run must be a string', file=sys.stderr)
-        sys.exit(1)
-
-    print(v['verdict'])
-except json.JSONDecodeError as e:
-    print(f'ERROR: Invalid JSON: {e}', file=sys.stderr)
+except (json.JSONDecodeError, FileNotFoundError) as e:
+    print("ERROR: %s" % e, file=sys.stderr)
     sys.exit(1)
-" 2>&1
+
+errors = []
+
+# --- top-level keys ---
+required_top = ["verdict", "blockers", "non_blocking", "tests_run", "meta"]
+for key in required_top:
+    if key not in v:
+        errors.append("Missing required key: %s" % key)
+extra_top = set(v.keys()) - set(required_top)
+if extra_top:
+    errors.append("Extra top-level keys not allowed: %s" % extra_top)
+
+# --- verdict value ---
+if v.get("verdict") not in ["APPROVED", "BLOCKED"]:
+    errors.append("Invalid verdict: %s" % v.get("verdict"))
+
+# --- type checks ---
+if not isinstance(v.get("blockers"), list):
+    errors.append("blockers must be an array")
+if not isinstance(v.get("non_blocking"), list):
+    errors.append("non_blocking must be an array")
+if not isinstance(v.get("tests_run"), str):
+    errors.append("tests_run must be a string")
+
+# --- meta validation ---
+meta = v.get("meta")
+if isinstance(meta, dict):
+    meta_required = ["since_sha", "to_sha", "generated_at", "review_mode", "simulated"]
+    for key in meta_required:
+        if key not in meta:
+            errors.append("meta.%s missing" % key)
+    meta_allowed = set(meta_required + ["codex_cli"])
+    meta_extra = set(meta.keys()) - meta_allowed
+    if meta_extra:
+        errors.append("Extra meta keys not allowed: %s" % meta_extra)
+
+    if meta.get("review_mode") not in ["bundle", "packet"]:
+        errors.append("Invalid meta.review_mode: %s" % meta.get("review_mode"))
+
+    if not isinstance(meta.get("simulated"), bool):
+        errors.append("meta.simulated must be boolean")
+
+    # When simulated=false, codex_cli MUST be a non-null object
+    if meta.get("simulated") is False:
+        cli = meta.get("codex_cli")
+        if not isinstance(cli, dict):
+            errors.append("meta.codex_cli required (non-null object) when simulated=false")
+        else:
+            if not cli.get("version"):
+                errors.append("meta.codex_cli.version must be non-empty")
+            if not cli.get("command"):
+                errors.append("meta.codex_cli.command must be non-empty")
+elif meta is not None:
+    errors.append("meta must be an object or is malformed")
+
+if errors:
+    for e in errors:
+        print("ERROR: %s" % e, file=sys.stderr)
+    sys.exit(1)
+
+print(v["verdict"])
+PYEOF
 }
 
 # --- Try single bundle mode first ---
@@ -170,7 +202,7 @@ BUNDLE_FILE="$PACK_DIR/REVIEW_BUNDLE.txt"
 VERDICT_FILE="$PACK_DIR/CODEX_VERDICT.json"
 META_FILE="$PACK_DIR/META.json"
 
-REVIEW_MODE="single"
+REVIEW_MODE="bundle"
 BUNDLE_RC=0
 "$SCRIPT_DIR/review_bundle.sh" --since "$SINCE_SHA" --output "$BUNDLE_FILE" || BUNDLE_RC=$?
 
@@ -182,15 +214,54 @@ elif [ "$BUNDLE_RC" -ne 0 ]; then
   exit 1
 fi
 
-# --- Skip codex if CODEX_SKIP=1 (for testing) ---
+GENERATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# --- CODEX_SKIP path: simulated verdict (tests ONLY) ---
 if [ "${CODEX_SKIP:-0}" = "1" ]; then
-  echo "==> CODEX_SKIP=1: Simulating APPROVED verdict"
-  cat > "$VERDICT_FILE" <<SIMEOF
-{"verdict":"APPROVED","blockers":[],"non_blocking":["CODEX_SKIP=1: simulated"],"tests_run":"skipped (CODEX_SKIP=1)"}
-SIMEOF
-  REVIEW_MODE="single-simulated"
+  echo ""
+  echo "╔══════════════════════════════════════════════════════════╗"
+  echo "║  SIMULATED VERDICT — NOT VALID FOR PUSH GATE            ║"
+  echo "║  CODEX_SKIP=1 is for selftests only.                    ║"
+  echo "╚══════════════════════════════════════════════════════════╝"
+  echo ""
+
+  python3 - "$VERDICT_FILE" "$SINCE_SHA" "$HEAD_SHA" "$GENERATED_AT" <<'PYEOF'
+import json, sys
+vfile, since, to, ts = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+verdict = {
+    "verdict": "APPROVED",
+    "blockers": [],
+    "non_blocking": ["CODEX_SKIP=1: simulated verdict — NOT valid for push gate"],
+    "tests_run": "skipped (CODEX_SKIP=1)",
+    "meta": {
+        "since_sha": since,
+        "to_sha": to,
+        "generated_at": ts,
+        "review_mode": "bundle",
+        "simulated": True,
+        "codex_cli": None
+    }
+}
+with open(vfile, "w") as f:
+    json.dump(verdict, f, indent=2)
+PYEOF
+
 else
-  if [ "$REVIEW_MODE" = "single" ]; then
+  # --- Real Codex review path ---
+
+  # Capture codex version for provenance
+  if [ -z "$CODEX_CMD" ]; then
+    echo "ERROR: Neither 'codex' nor 'npx' found. Cannot run review." >&2
+    exit 1
+  fi
+  CODEX_VERSION="$($CODEX_CMD --version 2>&1 | head -1 | tr -d '\n' || true)"
+  if [ -z "$CODEX_VERSION" ]; then
+    echo "WARNING: Cannot determine codex version, using 'unknown'" >&2
+    CODEX_VERSION="unknown"
+  fi
+  CODEX_CMD_RECORD="$CODEX_CMD exec -c approval_policy=never --prompt <review>"
+
+  if [ "$REVIEW_MODE" = "bundle" ]; then
     echo "==> Running Codex review (single bundle)..."
     run_codex_review "$BUNDLE_FILE" "$VERDICT_FILE"
   else
@@ -235,77 +306,135 @@ PKTEOF
     done <<< "$FILE_LIST"
 
     # Aggregate verdicts
-    python3 -c "
+    python3 - "$PACK_DIR" "$VERDICT_FILE" <<'PYEOF'
 import json, sys, glob, os
 
-pack_dir = '$PACK_DIR'
-verdict_files = sorted(glob.glob(os.path.join(pack_dir, 'VERDICT_*.json')))
+pack_dir = sys.argv[1]
+out_file = sys.argv[2]
+verdict_files = sorted(glob.glob(os.path.join(pack_dir, "VERDICT_*.json")))
 
 if not verdict_files:
-    print('ERROR: No verdict files found', file=sys.stderr)
+    print("ERROR: No verdict files found", file=sys.stderr)
     sys.exit(1)
 
 final = {
-    'verdict': 'APPROVED',
-    'blockers': [],
-    'non_blocking': [],
-    'tests_run': f'Reviewed {len(verdict_files)} packets'
+    "verdict": "APPROVED",
+    "blockers": [],
+    "non_blocking": [],
+    "tests_run": "Reviewed %d packets" % len(verdict_files)
 }
 
 for vf in verdict_files:
     with open(vf) as f:
         v = json.load(f)
-    if v.get('verdict') == 'BLOCKED':
-        final['verdict'] = 'BLOCKED'
-    final['blockers'].extend(v.get('blockers', []))
-    final['non_blocking'].extend(v.get('non_blocking', []))
+    if v.get("verdict") == "BLOCKED":
+        final["verdict"] = "BLOCKED"
+    final["blockers"].extend(v.get("blockers", []))
+    final["non_blocking"].extend(v.get("non_blocking", []))
 
-with open('$VERDICT_FILE', 'w') as f:
+with open(out_file, "w") as f:
     json.dump(final, f, indent=2)
-print(final['verdict'])
-"
+print(final["verdict"])
+PYEOF
   fi
+
+  # --- Quick check: did codex produce a valid verdict? ---
+  if [ ! -f "$VERDICT_FILE" ]; then
+    echo "ERROR: Codex review did not produce a verdict file." >&2
+    echo "  No verdict artifact left behind." >&2
+    exit 1
+  fi
+
+  RAWCHECK_RC=0
+  python3 - "$VERDICT_FILE" <<'PYEOF' || RAWCHECK_RC=$?
+import json, sys
+with open(sys.argv[1]) as f:
+    v = json.load(f)
+for key in ["verdict", "blockers", "non_blocking", "tests_run"]:
+    if key not in v:
+        print("ERROR: codex output missing required key: %s" % key, file=sys.stderr)
+        sys.exit(1)
+if v["verdict"] not in ["APPROVED", "BLOCKED"]:
+    print("ERROR: codex output has invalid verdict: %s" % v["verdict"], file=sys.stderr)
+    sys.exit(1)
+PYEOF
+  if [ "$RAWCHECK_RC" -ne 0 ]; then
+    echo "ERROR: Codex output validation failed. Removing invalid verdict." >&2
+    rm -f "$VERDICT_FILE"
+    exit 1
+  fi
+
+  # --- Add meta to the verdict ---
+  python3 - "$VERDICT_FILE" "$SINCE_SHA" "$HEAD_SHA" "$GENERATED_AT" "$REVIEW_MODE" "$CODEX_VERSION" "$CODEX_CMD_RECORD" <<'PYEOF'
+import json, sys
+
+vfile = sys.argv[1]
+since, to, ts = sys.argv[2], sys.argv[3], sys.argv[4]
+mode, version, command = sys.argv[5], sys.argv[6], sys.argv[7]
+
+with open(vfile) as f:
+    v = json.load(f)
+
+v["meta"] = {
+    "since_sha": since,
+    "to_sha": to,
+    "generated_at": ts,
+    "review_mode": mode,
+    "simulated": False,
+    "codex_cli": {
+        "version": version,
+        "command": command
+    }
+}
+
+with open(vfile, "w") as f:
+    json.dump(v, f, indent=2)
+PYEOF
 fi
 
-# --- validate verdict ---
+# --- validate complete verdict (with meta) ---
 VERDICT_RESULT="$(validate_verdict "$VERDICT_FILE")"
 if echo "$VERDICT_RESULT" | grep -q "^ERROR"; then
   echo "$VERDICT_RESULT" >&2
-  echo "ERROR: Verdict validation failed. NOT writing an empty verdict." >&2
+  echo "ERROR: Verdict validation failed. Removing invalid verdict." >&2
+  rm -f "$VERDICT_FILE"
   exit 1
 fi
 
-# --- write meta ---
-python3 -c "
-import json
+# --- write META.json (logging convenience — NOT source of truth) ---
+python3 - "$META_FILE" "$SINCE_SHA" "$HEAD_SHA" "$GENERATED_AT" "$REVIEW_MODE" "$VERDICT_RESULT" <<'PYEOF'
+import json, sys
+mfile = sys.argv[1]
 meta = {
-    'since_sha': '$SINCE_SHA',
-    'head_sha': '$HEAD_SHA',
-    'timestamp': '$(date -u +%Y-%m-%dT%H:%M:%SZ)',
-    'mode': '$REVIEW_MODE',
-    'verdict': '$VERDICT_RESULT'
+    "since_sha": sys.argv[2],
+    "head_sha": sys.argv[3],
+    "timestamp": sys.argv[4],
+    "mode": sys.argv[5],
+    "verdict": sys.argv[6]
 }
-with open('$META_FILE', 'w') as f:
+with open(mfile, "w") as f:
     json.dump(meta, f, indent=2)
-"
+PYEOF
 
 echo ""
 echo "=== Review Result ==="
 echo "  Verdict: $VERDICT_RESULT"
 echo "  Artifacts: $PACK_DIR"
-python3 -c "
-import json
-with open('$VERDICT_FILE') as f:
+python3 - "$VERDICT_FILE" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
     v = json.load(f)
-if v['blockers']:
-    print('  Blockers:')
-    for b in v['blockers']:
-        print(f'    - {b}')
-if v['non_blocking']:
-    print('  Non-blocking:')
-    for n in v['non_blocking']:
-        print(f'    - {n}')
-"
+if v["blockers"]:
+    print("  Blockers:")
+    for b in v["blockers"]:
+        print("    - %s" % b)
+if v["non_blocking"]:
+    print("  Non-blocking:")
+    for n in v["non_blocking"]:
+        print("    - %s" % n)
+meta = v.get("meta", {})
+print("  Simulated: %s" % meta.get("simulated", "unknown"))
+PYEOF
 
 if [ "$VERDICT_RESULT" = "APPROVED" ]; then
   echo ""

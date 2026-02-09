@@ -1,95 +1,171 @@
 #!/usr/bin/env bash
 # pre-push — UNBREAKABLE PUSH GATE
-# Requires APPROVED verdict for the EXACT commit range being pushed.
-# Set REVIEW_PUSH_APPROVED=1 to bypass (used by review_finish.sh only).
+#
+# A push to origin/main requires a REAL (non-simulated) APPROVED verdict
+# for the EXACT commit range being pushed.
+#
+# NO bypass env vars. NO exceptions. Simulated verdicts NEVER pass.
+#
+# Checks enforced:
+#   1. verdict == APPROVED
+#   2. meta.simulated == false
+#   3. meta.codex_cli.version is non-empty
+#   4. meta.since_sha == BASE  (git merge-base HEAD origin/main)
+#   5. meta.to_sha   == TO    (git rev-parse HEAD)
+#      — OR — the only diff between meta.to_sha and TO is
+#      docs/LAST_REVIEWED_SHA.txt (baseline-advance allowance)
 set -euo pipefail
-
-# --- bypass for review_finish.sh ---
-if [ "${REVIEW_PUSH_APPROVED:-0}" = "1" ]; then
-  exit 0
-fi
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 
-# --- compute push range ---
-# Read stdin for push info: <local ref> <local sha> <remote ref> <remote sha>
+# --- read stdin (git push protocol) ---
+PUSHING_TO_MAIN=0
 while read -r local_ref local_sha remote_ref remote_sha; do
   # Skip delete pushes
   if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
     continue
   fi
-
-  # Determine the range start
-  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
-    # New branch — use the baseline as range start
-    if [ -f "$ROOT_DIR/docs/LAST_REVIEWED_SHA.txt" ]; then
-      RANGE_START="$(tr -d '[:space:]' < "$ROOT_DIR/docs/LAST_REVIEWED_SHA.txt")"
-    else
-      echo "ERROR: No baseline found. Run: ./ops/review_auto.sh" >&2
-      exit 1
-    fi
-  else
-    RANGE_START="$remote_sha"
+  # Only gate pushes targeting refs/heads/main
+  if [ "$remote_ref" = "refs/heads/main" ]; then
+    PUSHING_TO_MAIN=1
   fi
+done
 
-  RANGE_END="$local_sha"
+if [ "$PUSHING_TO_MAIN" -ne 1 ]; then
+  exit 0
+fi
 
-  echo "pre-push: Checking verdict for range ${RANGE_START}..${RANGE_END}"
-
-  # --- look for APPROVED verdict covering this exact range ---
-  APPROVED=0
-  if [ -d "$ROOT_DIR/review_packets" ]; then
-    for meta_file in $(ls -t "$ROOT_DIR"/review_packets/*/META.json 2>/dev/null); do
-      VERDICT="$(python3 -c "
-import json
-with open('$meta_file') as f:
-    m = json.load(f)
-print(m.get('verdict', ''))
-" 2>/dev/null || echo "")"
-
-      META_SINCE="$(python3 -c "
-import json
-with open('$meta_file') as f:
-    m = json.load(f)
-print(m.get('since_sha', ''))
-" 2>/dev/null || echo "")"
-
-      META_HEAD="$(python3 -c "
-import json
-with open('$meta_file') as f:
-    m = json.load(f)
-print(m.get('head_sha', ''))
-" 2>/dev/null || echo "")"
-
-      if [ "$VERDICT" = "APPROVED" ]; then
-        # Check if this verdict covers the push range
-        # The verdict's head_sha must match or be an ancestor of our range end
-        # and the verdict's since_sha must match or be an ancestor of our range start
-        if git merge-base --is-ancestor "$RANGE_START" "$META_HEAD" 2>/dev/null && \
-           [ "$META_HEAD" = "$RANGE_END" -o "$(git merge-base "$META_HEAD" "$RANGE_END")" = "$META_HEAD" ]; then
-          # Verdict covers a range that includes our push range
-          if [ "$META_HEAD" = "$RANGE_END" ]; then
-            APPROVED=1
-            break
-          fi
-        fi
-      fi
-    done
-  fi
-
-  if [ "$APPROVED" -ne 1 ]; then
+# --- ensure origin/main is reachable ---
+if ! git rev-parse origin/main >/dev/null 2>&1; then
+  if ! git fetch origin main --no-tags 2>/dev/null; then
     echo "" >&2
     echo "========================================" >&2
-    echo "  PUSH BLOCKED — No APPROVED verdict"   >&2
-    echo "  for range: ${RANGE_START}..${RANGE_END}" >&2
+    echo "  PUSH BLOCKED — cannot resolve origin/main" >&2
     echo "========================================" >&2
-    echo "" >&2
-    echo "  Fix: ./ops/review_auto.sh" >&2
+    echo "  Run:  git fetch origin main" >&2
     echo "" >&2
     exit 1
   fi
+fi
 
-  echo "pre-push: APPROVED verdict found. Push allowed."
-done
+# --- compute push range ---
+BASE="$(git merge-base HEAD origin/main)"
+TO="$(git rev-parse HEAD)"
 
+echo "pre-push: Checking verdict for range ${BASE:0:12}..${TO:0:12}"
+
+# --- locate most recent verdict ---
+VERDICT_FILE=""
+if [ -d "$ROOT_DIR/review_packets" ]; then
+  for vf in $(ls -t "$ROOT_DIR"/review_packets/*/CODEX_VERDICT.json 2>/dev/null); do
+    VERDICT_FILE="$vf"
+    break
+  done
+fi
+
+if [ -z "$VERDICT_FILE" ] || [ ! -f "$VERDICT_FILE" ]; then
+  echo "" >&2
+  echo "========================================" >&2
+  echo "  PUSH BLOCKED — No verdict file found" >&2
+  echo "========================================" >&2
+  echo "" >&2
+  echo "  Fix: ./ops/review_auto.sh" >&2
+  echo "" >&2
+  exit 1
+fi
+
+# --- strict gate validation (Python) ---
+GATE_RC=0
+python3 - "$VERDICT_FILE" "$BASE" "$TO" <<'PYEOF' || GATE_RC=$?
+import json, sys, subprocess
+
+verdict_file = sys.argv[1]
+BASE = sys.argv[2]
+TO   = sys.argv[3]
+
+with open(verdict_file) as f:
+    v = json.load(f)
+
+errors = []
+
+# 1. verdict == APPROVED
+if v.get("verdict") != "APPROVED":
+    errors.append('verdict is "%s", expected "APPROVED"' % v.get("verdict"))
+
+# 2. meta must exist as dict
+meta = v.get("meta")
+if not isinstance(meta, dict):
+    errors.append("meta field missing or not an object")
+    for e in errors:
+        print("  GATE FAIL: %s" % e, file=sys.stderr)
+    sys.exit(1)
+
+# 3. meta.simulated must be exactly False
+if meta.get("simulated") is not False:
+    errors.append("meta.simulated is not false — simulated verdicts NEVER satisfy the gate")
+
+# 4. codex_cli must be a non-null object with non-empty version
+codex_cli = meta.get("codex_cli")
+if not isinstance(codex_cli, dict):
+    errors.append("meta.codex_cli missing or null — real Codex provenance required")
+elif not codex_cli.get("version"):
+    errors.append("meta.codex_cli.version is empty — real Codex provenance required")
+
+# 5. Range check
+meta_since = meta.get("since_sha", "")
+meta_to    = meta.get("to_sha", "")
+
+range_ok = False
+range_errors = []
+
+if meta_since == BASE and meta_to == TO:
+    # Exact match
+    range_ok = True
+elif meta_since == BASE and meta_to != TO:
+    # Allow baseline-advance extension:
+    # If the ONLY file changed between meta.to_sha and TO is
+    # docs/LAST_REVIEWED_SHA.txt, the verdict still covers all real code.
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", meta_to, TO],
+            capture_output=True, text=True, timeout=10
+        )
+        diff_files = [f for f in result.stdout.strip().split("\n") if f]
+        if diff_files == ["docs/LAST_REVIEWED_SHA.txt"]:
+            range_ok = True
+        else:
+            range_errors.append(
+                "meta.to_sha (%s) != TO (%s) and diff contains more than "
+                "baseline advance: %s" % (meta_to[:12], TO[:12], diff_files)
+            )
+    except Exception as exc:
+        range_errors.append("baseline-advance check failed: %s" % exc)
+else:
+    range_errors.append(
+        "meta.since_sha (%s) != BASE (%s)" % (meta_since[:12], BASE[:12])
+    )
+
+if not range_ok:
+    errors.extend(range_errors)
+
+if errors:
+    print("", file=sys.stderr)
+    print("========================================", file=sys.stderr)
+    print("  PUSH BLOCKED — verdict gate failed", file=sys.stderr)
+    print("========================================", file=sys.stderr)
+    for e in errors:
+        print("  %s" % e, file=sys.stderr)
+    print("", file=sys.stderr)
+    print("  Fix: ./ops/review_auto.sh", file=sys.stderr)
+    print("", file=sys.stderr)
+    sys.exit(1)
+
+print("  All gate checks passed.")
+PYEOF
+
+if [ "$GATE_RC" -ne 0 ]; then
+  exit 1
+fi
+
+echo "pre-push: APPROVED verdict validated. Push allowed."
 exit 0

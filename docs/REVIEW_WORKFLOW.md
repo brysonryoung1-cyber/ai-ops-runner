@@ -3,10 +3,53 @@
 ## Invariants
 
 1. **No code reaches `origin/main` without an APPROVED verdict** for the exact commit range being pushed.
-2. **Verdicts are strict JSON** validated against `ops/schemas/codex_review_verdict.schema.json`.
-3. **Baseline SHA** lives in `docs/LAST_REVIEWED_SHA.txt` and advances ONLY after an APPROVED verdict.
-4. **Review artifacts** live in `review_packets/` (gitignored, never committed).
-5. **Commit isolation**: baseline-advance commits touch ONLY `docs/LAST_REVIEWED_SHA.txt` via pathspec.
+2. **Simulated verdicts (CODEX_SKIP) NEVER satisfy the push gate.** They are for selftests only.
+3. **Verdicts are strict JSON** validated against `ops/schemas/codex_review_verdict.schema.json`, including `meta` provenance.
+4. **Baseline SHA** lives in `docs/LAST_REVIEWED_SHA.txt` and advances ONLY after a real (non-simulated) APPROVED verdict.
+5. **Review artifacts** live in `review_packets/` (gitignored, never committed).
+6. **Commit isolation**: baseline-advance commits touch ONLY `docs/LAST_REVIEWED_SHA.txt` via pathspec.
+7. **No bypass env vars** in the pre-push gate. `REVIEW_PUSH_APPROVED` has been removed.
+
+## Push Gate Checks (pre-push hook)
+
+The pre-push hook enforces ALL of the following for every push to `refs/heads/main`:
+
+| Check | Requirement |
+|-------|-------------|
+| `verdict` | Must be `"APPROVED"` |
+| `meta.simulated` | Must be exactly `false` |
+| `meta.codex_cli.version` | Must exist and be non-empty |
+| `meta.since_sha` | Must match `git merge-base HEAD origin/main` |
+| `meta.to_sha` | Must match `git rev-parse HEAD` (or baseline-advance extension) |
+
+**Baseline-advance extension**: If the only diff between `meta.to_sha` and the actual push HEAD is `docs/LAST_REVIEWED_SHA.txt`, the verdict is accepted (covers the mechanical baseline-advance commit).
+
+## Verdict Schema
+
+See `ops/schemas/codex_review_verdict.schema.json` for the canonical JSON Schema.
+
+Key fields:
+```json
+{
+  "verdict": "APPROVED" | "BLOCKED",
+  "blockers": ["..."],
+  "non_blocking": ["..."],
+  "tests_run": "...",
+  "meta": {
+    "since_sha": "<start of reviewed range>",
+    "to_sha": "<end of reviewed range>",
+    "generated_at": "<ISO 8601>",
+    "review_mode": "bundle" | "packet",
+    "simulated": false,
+    "codex_cli": {
+      "version": "<codex --version output>",
+      "command": "<exact invocation>"
+    }
+  }
+}
+```
+
+When `simulated=true` (CODEX_SKIP), `codex_cli` is `null`.
 
 ## Canonical Commands
 
@@ -45,6 +88,16 @@
    └── Pre-push hook verifies APPROVED verdict for exact range
 ```
 
+## CODEX_SKIP
+
+`CODEX_SKIP=1` is a testing-only env var that produces a **simulated** verdict (`meta.simulated=true`).
+
+**CODEX_SKIP will NEVER allow a push to origin/main.**
+
+- The pre-push gate rejects simulated verdicts unconditionally.
+- `review_finish.sh` refuses to advance the baseline for simulated verdicts.
+- A loud banner is printed: `SIMULATED VERDICT — NOT VALID FOR PUSH GATE`.
+
 ## Review Modes
 
 ### Single-bundle mode
@@ -64,6 +117,6 @@ Each review run creates a timestamped directory under `review_packets/`:
 ```
 review_packets/<YYYYMMDD_HHMMSS>/
 ├── REVIEW_BUNDLE.txt     # The diff sent for review
-├── CODEX_VERDICT.json    # Strict JSON verdict
-└── META.json             # Metadata (range, timestamp, mode)
+├── CODEX_VERDICT.json    # Strict JSON verdict (with embedded meta)
+└── META.json             # Logging convenience (NOT source of truth)
 ```
