@@ -1,5 +1,3 @@
-version: "3.9"
-
 x-runner-common: &runner-common
   build:
     context: ./services/test_runner

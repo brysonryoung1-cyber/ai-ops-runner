@@ -6,12 +6,15 @@
 #
 # NO bypass env vars. NO exceptions. Simulated verdicts NEVER pass.
 #
+# Uses the actual local_sha from git push stdin (NOT HEAD) to prevent
+# `git push origin otherbranch:main` from bypassing the gate.
+#
 # Checks enforced:
 #   1. verdict == APPROVED
 #   2. meta.simulated == false
 #   3. meta.codex_cli.version is non-empty
-#   4. meta.since_sha == BASE  (git merge-base HEAD origin/main)
-#   5. meta.to_sha   == TO    (git rev-parse HEAD)
+#   4. meta.since_sha == BASE  (merge-base of local_sha and remote tip)
+#   5. meta.to_sha   == TO    (the actual local_sha being pushed)
 #      — OR — the only diff between meta.to_sha and TO is
 #      docs/LAST_REVIEWED_SHA.txt (baseline-advance allowance)
 set -euo pipefail
@@ -19,7 +22,10 @@ set -euo pipefail
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 
 # --- read stdin (git push protocol) ---
-PUSHING_TO_MAIN=0
+# Each line: <local_ref> <local_sha> <remote_ref> <remote_sha>
+# We capture the ACTUAL local_sha being pushed to refs/heads/main.
+PUSH_LOCAL_SHA=""
+PUSH_REMOTE_SHA=""
 while read -r local_ref local_sha remote_ref remote_sha; do
   # Skip delete pushes
   if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
@@ -27,11 +33,12 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   fi
   # Only gate pushes targeting refs/heads/main
   if [ "$remote_ref" = "refs/heads/main" ]; then
-    PUSHING_TO_MAIN=1
+    PUSH_LOCAL_SHA="$local_sha"
+    PUSH_REMOTE_SHA="$remote_sha"
   fi
 done
 
-if [ "$PUSHING_TO_MAIN" -ne 1 ]; then
+if [ -z "$PUSH_LOCAL_SHA" ]; then
   exit 0
 fi
 
@@ -48,9 +55,11 @@ if ! git rev-parse origin/main >/dev/null 2>&1; then
   fi
 fi
 
-# --- compute push range ---
-BASE="$(git merge-base HEAD origin/main)"
-TO="$(git rev-parse HEAD)"
+# --- compute push range using actual pushed SHA ---
+# Always use merge-base of the pushed SHA and origin/main as BASE.
+# This matches what review_auto.sh computes when generating the review range.
+BASE="$(git merge-base "$PUSH_LOCAL_SHA" origin/main)"
+TO="$PUSH_LOCAL_SHA"
 
 echo "pre-push: Checking verdict for range ${BASE:0:12}..${TO:0:12}"
 

@@ -86,8 +86,8 @@ Apply the fixes now."
 echo ""
 echo "==> Running Codex autoheal..."
 HEAL_OUTPUT="$($CODEX_CMD exec \
-  -c approval_policy=never \
-  --prompt "$HEAL_PROMPT" \
+  --full-auto \
+  "$HEAL_PROMPT" \
   2>/dev/null || true)"
 
 echo "$HEAL_OUTPUT"
@@ -116,7 +116,7 @@ fi
 # --- commit fixes if any ---
 if [ -n "$(git status --porcelain)" ]; then
   git add -A
-  git commit -m "$(cat <<'EOF'
+  SHIP_AUTO_SKIP=1 git commit -m "$(cat <<'EOF'
 fix: autoheal blockers from review verdict
 
 Automated fixes applied by autoheal_codex.sh.

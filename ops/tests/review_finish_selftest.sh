@@ -110,14 +110,14 @@ fi
 
 # --- Test 7: Simulated verdict rejection (functional, if conditions allow) ---
 # This test creates a simulated verdict via CODEX_SKIP and then verifies
-# that review_finish refuses it.
+# that review_finish skips it (no real verdict → exits 1).
 if [ -z "$(git -C "$ROOT_DIR" status --porcelain)" ] && [ "$BASELINE" != "$HEAD_SHA" ]; then
   # There are unreviewed commits and tree is clean — create simulated verdict
   CODEX_SKIP=1 "$OPS_DIR/review_auto.sh" --no-push >/dev/null 2>&1 || true
   RC=0
   OUTPUT="$("$OPS_DIR/review_finish.sh" 2>&1)" || RC=$?
-  assert_eq "review_finish refuses simulated verdict" "1" "$RC"
-  assert_contains "review_finish mentions SIMULATED" "SIMULATED" "$OUTPUT"
+  assert_eq "review_finish refuses when only simulated verdicts exist" "1" "$RC"
+  assert_contains "review_finish skips simulated verdict" "simulated" "$OUTPUT"
 else
   echo "  SKIP: Cannot run simulated-verdict rejection test (baseline==HEAD or dirty tree)"
 fi

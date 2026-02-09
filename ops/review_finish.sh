@@ -5,7 +5,7 @@
 #   1. Working tree is clean
 #   2. An APPROVED verdict exists for current HEAD
 #   3. The verdict is NOT simulated (meta.simulated must be false)
-#   4. The verdict range matches baseline..HEAD
+#   4. The verdict range matches merge-base(HEAD, origin/main)..HEAD
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -22,11 +22,20 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 HEAD_SHA="$(git rev-parse HEAD)"
-CURRENT_BASELINE="$(tr -d '[:space:]' < "$BASELINE_FILE")"
+FILE_BASELINE="$(tr -d '[:space:]' < "$BASELINE_FILE")"
 
-if [ "$CURRENT_BASELINE" = "$HEAD_SHA" ]; then
+if [ "$FILE_BASELINE" = "$HEAD_SHA" ]; then
   echo "INFO: Baseline already at HEAD ($HEAD_SHA). Nothing to advance."
   exit 0
+fi
+
+# --- compute expected baseline ---
+# Use merge-base with origin/main (matches review_auto.sh and pre-push gate).
+# Fall back to file baseline when origin/main is not reachable.
+if git rev-parse origin/main >/dev/null 2>&1; then
+  EXPECTED_BASELINE="$(git merge-base HEAD origin/main)"
+else
+  EXPECTED_BASELINE="$FILE_BASELINE"
 fi
 
 # --- find and validate the most recent verdict ---
@@ -34,7 +43,7 @@ APPROVED_FILE=""
 if [ -d "$ROOT_DIR/review_packets" ]; then
   for verdict_file in $(ls -t "$ROOT_DIR"/review_packets/*/CODEX_VERDICT.json 2>/dev/null); do
     # Validate this verdict against all requirements
-    RESULT="$(python3 - "$verdict_file" "$HEAD_SHA" "$CURRENT_BASELINE" <<'PYEOF' 2>&1 || true
+    RESULT="$(python3 - "$verdict_file" "$HEAD_SHA" "$EXPECTED_BASELINE" <<'PYEOF' 2>&1 || true
 import json, sys
 
 vfile = sys.argv[1]
@@ -75,17 +84,17 @@ PYEOF
       APPROVED_FILE="$verdict_file"
       break
     elif [ "$RESULT" = "SIMULATED" ]; then
-      echo "ERROR: Found verdict for HEAD but it is SIMULATED (CODEX_SKIP)." >&2
-      echo "  Simulated verdicts cannot advance the baseline." >&2
-      echo "  Run a real review: ./ops/review_auto.sh" >&2
-      exit 1
+      # Skip simulated verdicts and keep looking for a real one
+      echo "INFO: Skipping simulated verdict: $verdict_file" >&2
+      continue
     fi
   done
 fi
 
 if [ -z "$APPROVED_FILE" ]; then
   echo "ERROR: No valid APPROVED verdict found for HEAD ($HEAD_SHA)" >&2
-  echo "  Required: non-simulated APPROVED verdict with range ${CURRENT_BASELINE}..${HEAD_SHA}" >&2
+  echo "  Required: non-simulated APPROVED verdict with range ${EXPECTED_BASELINE}..${HEAD_SHA}" >&2
+  echo "  (Simulated verdicts from CODEX_SKIP are never valid for baseline advance.)" >&2
   echo "  Run: ./ops/review_auto.sh" >&2
   exit 1
 fi

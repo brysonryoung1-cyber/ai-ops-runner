@@ -65,6 +65,12 @@ echo ""
 echo "==> Job details:"
 echo "$STATUS_RESPONSE" | python3 -m json.tool
 
+# Assert job succeeded
+if [ "$STATUS" != "success" ]; then
+  echo "ERROR: Smoke test job did not succeed (status=$STATUS)" >&2
+  exit 1
+fi
+
 # Tail logs
 echo ""
 echo "==> stdout:"

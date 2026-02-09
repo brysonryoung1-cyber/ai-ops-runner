@@ -18,7 +18,7 @@ echo ""
 
 # --- Check required files ---
 echo "--- Required Files ---"
-for f in docs/LAST_REVIEWED_SHA.txt docs/REVIEW_WORKFLOW.md docs/REVIEW_PACKET.md docs/HANDOFF_CURRENT_STATE.md; do
+for f in docs/LAST_REVIEWED_SHA.txt docs/REVIEW_WORKFLOW.md docs/REVIEW_PACKET.md docs/HANDOFF_CURRENT_STATE.md docs/CANONICAL_COMMANDS.md; do
   if [ -f "$ROOT_DIR/$f" ]; then
     check_pass "$f exists"
   else
@@ -29,7 +29,7 @@ done
 # --- Check ops scripts ---
 echo ""
 echo "--- Ops Scripts ---"
-for f in ops/review_bundle.sh ops/review_auto.sh ops/review_finish.sh ops/ship_auto.sh ops/autoheal_codex.sh ops/INSTALL_HOOKS.sh; do
+for f in ops/review_bundle.sh ops/review_auto.sh ops/review_finish.sh ops/ship_auto.sh ops/autoheal_codex.sh ops/doctor_repo.sh ops/INSTALL_HOOKS.sh ops/runner_smoke.sh; do
   if [ -f "$ROOT_DIR/$f" ]; then
     if [ -x "$ROOT_DIR/$f" ]; then
       check_pass "$f exists and executable"

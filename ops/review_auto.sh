@@ -36,13 +36,20 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 # --- resolve baseline ---
+# Use merge-base with origin/main as the canonical baseline (matches pre-push gate).
+# Falls back to docs/LAST_REVIEWED_SHA.txt if origin/main is unreachable.
 if [ -z "$SINCE_SHA" ]; then
-  BASELINE_FILE="$ROOT_DIR/docs/LAST_REVIEWED_SHA.txt"
-  if [ -f "$BASELINE_FILE" ]; then
-    SINCE_SHA="$(tr -d '[:space:]' < "$BASELINE_FILE")"
+  if git rev-parse origin/main >/dev/null 2>&1; then
+    SINCE_SHA="$(git merge-base HEAD origin/main)"
   else
-    echo "ERROR: No --since provided and docs/LAST_REVIEWED_SHA.txt not found" >&2
-    exit 1
+    BASELINE_FILE="$ROOT_DIR/docs/LAST_REVIEWED_SHA.txt"
+    if [ -f "$BASELINE_FILE" ]; then
+      SINCE_SHA="$(tr -d '[:space:]' < "$BASELINE_FILE")"
+      echo "WARNING: origin/main not reachable, using LAST_REVIEWED_SHA.txt as baseline" >&2
+    else
+      echo "ERROR: No --since provided and neither origin/main nor docs/LAST_REVIEWED_SHA.txt found" >&2
+      exit 1
+    fi
   fi
 fi
 
@@ -81,21 +88,37 @@ run_codex_review() {
   local prompt
   prompt="$(cat "$bundle_file")"
 
-  # Run codex in non-interactive mode
-  local raw_output
-  raw_output="$($CODEX_CMD exec \
-    -c approval_policy=never \
-    --prompt "$prompt" \
-    2>/dev/null || true)"
+  # Run codex in non-interactive mode with modern CLI flags:
+  #   --full-auto    = non-interactive, sandboxed execution
+  #   -s read-only   = read-only sandbox (review never writes code)
+  #   --output-last-message = capture the agent's final message to a file
+  local raw_output_file="${verdict_file}.raw"
+  local codex_rc=0
+  $CODEX_CMD exec \
+    --full-auto \
+    -s read-only \
+    --output-last-message "$raw_output_file" \
+    "$prompt" \
+    2>/dev/null || codex_rc=$?
 
-  # Extract JSON from output (find first { to last })
+  if [ "$codex_rc" -ne 0 ] && [ ! -f "$raw_output_file" ]; then
+    echo "ERROR: Codex exec failed (rc=$codex_rc) and produced no output" >&2
+    return 1
+  fi
+
+  # Extract JSON from the captured last message
+  local raw_content=""
+  if [ -f "$raw_output_file" ]; then
+    raw_content="$(cat "$raw_output_file")"
+  fi
+
   local json_output
-  json_output="$(echo "$raw_output" | python3 -c "
+  json_output="$(echo "$raw_content" | python3 -c "
 import sys, json, re
 
 text = sys.stdin.read()
-# Find JSON object in output
-match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text, re.DOTALL)
+# Find JSON object in output — handles nested objects
+match = re.search(r'\{[^{}]*(?:\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}[^{}]*)*\}', text, re.DOTALL)
 if match:
     obj = json.loads(match.group())
     print(json.dumps(obj))
@@ -105,12 +128,12 @@ else:
 
   if [ -z "$json_output" ]; then
     echo "ERROR: Failed to extract valid JSON from Codex output" >&2
-    echo "Raw output saved to ${verdict_file}.raw" >&2
-    echo "$raw_output" > "${verdict_file}.raw"
+    echo "Raw output saved to ${raw_output_file}" >&2
     return 1
   fi
 
   echo "$json_output" > "$verdict_file"
+  rm -f "$raw_output_file"
 }
 
 # Validate the complete verdict (with meta) against the schema contract.
@@ -259,7 +282,7 @@ else
     echo "WARNING: Cannot determine codex version, using 'unknown'" >&2
     CODEX_VERSION="unknown"
   fi
-  CODEX_CMD_RECORD="$CODEX_CMD exec -c approval_policy=never --prompt <review>"
+  CODEX_CMD_RECORD="$CODEX_CMD exec --full-auto -s read-only --output-last-message <verdict>"
 
   if [ "$REVIEW_MODE" = "bundle" ]; then
     echo "==> Running Codex review (single bundle)..."
@@ -393,9 +416,10 @@ PYEOF
 fi
 
 # --- validate complete verdict (with meta) ---
-VERDICT_RESULT="$(validate_verdict "$VERDICT_FILE")"
-if echo "$VERDICT_RESULT" | grep -q "^ERROR"; then
-  echo "$VERDICT_RESULT" >&2
+VERDICT_RESULT=""
+VALIDATE_RC=0
+VERDICT_RESULT="$(validate_verdict "$VERDICT_FILE")" || VALIDATE_RC=$?
+if [ "$VALIDATE_RC" -ne 0 ]; then
   echo "ERROR: Verdict validation failed. Removing invalid verdict." >&2
   rm -f "$VERDICT_FILE"
   exit 1
