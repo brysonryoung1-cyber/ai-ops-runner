@@ -1,0 +1,17 @@
+---
+# Allowlisted job types for ai-ops-runner.
+# Only jobs defined here can be executed by the runner.
+# argv is the exact command; callers cannot override it.
+
+jobs:
+  local_echo:
+    argv: ["bash", "-lc", "echo hello && uname -a"]
+    timeout_sec: 60
+
+  orb_ops_selftests:
+    argv: ["bash", "-lc", "./ops/tests/review_auto_selftest.sh && ./ops/tests/ship_auto_selftest.sh"]
+    timeout_sec: 1800
+
+  orb_review_auto_nopush:
+    argv: ["bash", "-lc", "./ops/review_auto.sh --no-push"]
+    timeout_sec: 1800

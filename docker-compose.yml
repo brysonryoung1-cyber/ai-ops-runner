@@ -1,0 +1,69 @@
+version: "3.9"
+
+x-runner-common: &runner-common
+  build:
+    context: ./services/test_runner
+    dockerfile: Dockerfile
+  user: "1000:1000"
+  read_only: true
+  tmpfs:
+    - /tmp:size=256M
+  volumes:
+    - ./artifacts:/artifacts:rw
+    - ./repos:/repos:rw
+    - runner_work:/work:rw
+    - ./configs:/app/configs:ro
+  environment:
+    DATABASE_URL: "postgresql://runner:runner@postgres:5432/runner"
+    REDIS_URL: "redis://redis:6379/0"
+    ALLOWLIST_PATH: "/app/configs/job_allowlist.yaml"
+    ARTIFACTS_ROOT: "/artifacts"
+    REPOS_ROOT: "/repos"
+    WORK_ROOT: "/work"
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: runner
+      POSTGRES_PASSWORD: runner
+      POSTGRES_DB: runner
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./services/test_runner/migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runner -d runner"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "6379:6379"
+
+  test_runner_api:
+    <<: *runner-common
+    command: ["uvicorn", "test_runner.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+
+  test_runner_worker:
+    <<: *runner-common
+    command: ["python", "-m", "test_runner.worker"]
+
+volumes:
+  pgdata:
+  runner_work:
