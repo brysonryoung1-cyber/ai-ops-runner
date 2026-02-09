@@ -82,7 +82,7 @@ for line in data.get('lines', []):
     print(line, end='')
 "
 
-# Optional: ORB tests
+# Optional: ORB legacy tests (via env vars)
 if [ -n "${ORB_REMOTE_URL:-}" ] && [ -n "${ORB_SHA:-}" ]; then
   echo ""
   echo "==> ORB_REMOTE_URL and ORB_SHA set – submitting orb_ops_selftests..."
@@ -111,6 +111,131 @@ if [ -n "${ORB_REMOTE_URL:-}" ] && [ -n "${ORB_SHA:-}" ]; then
         ;;
     esac
   done
+fi
+
+# --- ORB integration smoke (auto-resolves HEAD, skips if network unavailable) ---
+echo ""
+echo "==> ORB integration smoke test..."
+ORB_INT_URL="${ORB_REMOTE_URL:-https://github.com/brysonryoung1-cyber/algo-nt8-orb.git}"
+ORB_INT_SHA=""
+if ORB_INT_SHA=$(git ls-remote "$ORB_INT_URL" HEAD 2>/dev/null | cut -f1) && [ -n "$ORB_INT_SHA" ]; then
+  echo "    ORB HEAD: $ORB_INT_SHA"
+
+  # --- orb_doctor ---
+  echo ""
+  echo "==> Submitting orb_doctor job..."
+  ORB_DOC_RESP=$(curl -s -X POST "$API_BASE/jobs" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"job_type\": \"orb_doctor\",
+      \"repo_name\": \"algo-nt8-orb\",
+      \"remote_url\": \"$ORB_INT_URL\",
+      \"sha\": \"$ORB_INT_SHA\"
+    }")
+  ORB_DOC_JID=$(echo "$ORB_DOC_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
+  echo "    orb_doctor job_id=$ORB_DOC_JID"
+
+  for i in $(seq 1 120); do
+    ORB_DOC_STATUS=$(curl -s "$API_BASE/jobs/$ORB_DOC_JID" | \
+      python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+    case "$ORB_DOC_STATUS" in
+      success|failure|error|timeout)
+        echo "    orb_doctor finished: status=$ORB_DOC_STATUS"
+        break
+        ;;
+      *) sleep 2 ;;
+    esac
+  done
+
+  # Validate invariants in artifact.json
+  ORB_DOC_ART="./artifacts/$ORB_DOC_JID/artifact.json"
+  if [ -f "$ORB_DOC_ART" ]; then
+    python3 -c "
+import json, sys
+with open('$ORB_DOC_ART') as f:
+    d = json.load(f)
+inv = d.get('invariants', {})
+if not inv.get('read_only_ok'):
+    print('ERROR: read_only_ok is False', file=sys.stderr)
+    sys.exit(1)
+if not inv.get('clean_tree_ok'):
+    print('ERROR: clean_tree_ok is False (MUTATION_DETECTED)', file=sys.stderr)
+    sys.exit(1)
+print('    invariants: read_only_ok=True clean_tree_ok=True')
+" || echo "    WARNING: invariant check failed (non-fatal in smoke test)"
+  fi
+
+  # --- orb_review_bundle ---
+  echo ""
+  echo "==> Submitting orb_review_bundle job..."
+  ORB_RB_RESP=$(curl -s -X POST "$API_BASE/jobs" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"job_type\": \"orb_review_bundle\",
+      \"repo_name\": \"algo-nt8-orb\",
+      \"remote_url\": \"$ORB_INT_URL\",
+      \"sha\": \"$ORB_INT_SHA\"
+    }")
+  ORB_RB_JID=$(echo "$ORB_RB_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
+  echo "    orb_review_bundle job_id=$ORB_RB_JID"
+
+  for i in $(seq 1 120); do
+    ORB_RB_STATUS=$(curl -s "$API_BASE/jobs/$ORB_RB_JID" | \
+      python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+    case "$ORB_RB_STATUS" in
+      success|failure|error|timeout)
+        echo "    orb_review_bundle finished: status=$ORB_RB_STATUS"
+        break
+        ;;
+      *) sleep 2 ;;
+    esac
+  done
+
+  # Check REVIEW_BUNDLE.txt exists in artifacts
+  if [ -f "./artifacts/$ORB_RB_JID/REVIEW_BUNDLE.txt" ]; then
+    echo "    REVIEW_BUNDLE.txt present ($(wc -c < "./artifacts/$ORB_RB_JID/REVIEW_BUNDLE.txt" | tr -d ' ') bytes)"
+  else
+    echo "    WARNING: REVIEW_BUNDLE.txt not found in artifacts"
+  fi
+
+  # --- orb_score_run (expected: HARNESS_NOT_FOUND) ---
+  echo ""
+  echo "==> Submitting orb_score_run job (expect HARNESS_NOT_FOUND)..."
+  ORB_SC_RESP=$(curl -s -X POST "$API_BASE/jobs" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"job_type\": \"orb_score_run\",
+      \"repo_name\": \"algo-nt8-orb\",
+      \"remote_url\": \"$ORB_INT_URL\",
+      \"sha\": \"$ORB_INT_SHA\"
+    }")
+  ORB_SC_JID=$(echo "$ORB_SC_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
+  echo "    orb_score_run job_id=$ORB_SC_JID"
+
+  for i in $(seq 1 120); do
+    ORB_SC_STATUS=$(curl -s "$API_BASE/jobs/$ORB_SC_JID" | \
+      python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+    case "$ORB_SC_STATUS" in
+      success|failure|error|timeout)
+        echo "    orb_score_run finished: status=$ORB_SC_STATUS"
+        break
+        ;;
+      *) sleep 2 ;;
+    esac
+  done
+
+  # Score run should fail gracefully with HARNESS_NOT_FOUND
+  if [ -f "./artifacts/$ORB_SC_JID/SCORE_OUTPUT.txt" ]; then
+    if grep -q "HARNESS_NOT_FOUND" "./artifacts/$ORB_SC_JID/SCORE_OUTPUT.txt"; then
+      echo "    HARNESS_NOT_FOUND correctly reported (graceful failure)"
+    else
+      echo "    SCORE_OUTPUT.txt present but no HARNESS_NOT_FOUND message"
+    fi
+  fi
+
+else
+  echo "    WARNING: Could not resolve HEAD for $ORB_INT_URL (network unavailable?)"
+  echo "    Skipping ORB integration tests."
 fi
 
 echo ""

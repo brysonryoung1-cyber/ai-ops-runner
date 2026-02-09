@@ -6,16 +6,21 @@
 
 ## Status
 
-All systems operational. Docker smoke test passing. Full ops/review/ship framework active.
+All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested.
 
 ## Recent Changes
 
-- **Docker compose**: removed deprecated `version: "3.9"` attribute (eliminates warning)
-- **runner_smoke.sh**: added explicit `status=success` assertion (was previously silent on failure)
-- **autoheal_codex.sh**: added `SHIP_AUTO_SKIP=1` recursion guard on commit
-- **review_auto.sh**: fixed dead-code path in verdict validation (set -e was masking the explicit error handler)
-- **doctor_repo.sh**: now checks `docs/CANONICAL_COMMANDS.md`, `ops/doctor_repo.sh`, and `ops/runner_smoke.sh`
-- **docs/CANONICAL_COMMANDS.md**: created as standalone command reference
+- **ORB integration**: Added read-only analysis jobs for algo-nt8-orb (orb_review_bundle, orb_doctor, orb_score_run)
+- **Repo allowlist**: New `configs/repo_allowlist.yaml` — runner rejects any repo URL not listed
+- **Job allowlist**: Extended with 3 new ORB job types, each with `requires_repo_allowlist: true`
+- **Executor**: Now writes `invariants` (read_only_ok, clean_tree_ok), `outputs`, `params` to artifact.json; MUTATION_DETECTED status on dirty worktree with changed file list
+- **API**: Validates params against `allowed_params`; validates repo URL against repo allowlist for ORB jobs
+- **Wrapper scripts**: `orb_wrappers/` contains per-job-type scripts that run inside the read-only worktree
+- **CLI helpers**: `ops/runner_submit_orb_{review,doctor,score}.sh` — auto-resolve HEAD, poll, print artifacts
+- **Smoke test**: `runner_smoke.sh` now includes ORB integration smoke (auto-resolves HEAD, graceful skip if offline)
+- **Selftests**: `ops/tests/orb_integration_selftest.sh` validates configs, wrapper scripts, allowlist enforcement
+- **Python tests**: `test_repo_allowlist.py` (10 tests), `test_orb_integration.py` (12 tests)
+- **Doctor**: Checks for repo_allowlist.yaml, ORB wrapper scripts, and new CLI helpers
 
 ## Architecture
 
@@ -26,19 +31,44 @@ ops/
 ├── review_finish.sh          # Advance baseline + commit isolation (refuses simulated)
 ├── ship_auto.sh              # Full autopilot (test → review → heal → push, bounded)
 ├── autoheal_codex.sh         # Auto-fix blockers from verdict (allowlisted paths only)
-├── doctor_repo.sh            # Verify repo health + hooks
+├── doctor_repo.sh            # Verify repo health + hooks + ORB configs
 ├── INSTALL_HOOKS.sh          # Install git hooks idempotently
-├── runner_smoke.sh           # Docker compose up + smoke test
+├── runner_smoke.sh           # Docker compose up + smoke test (incl. ORB integration)
 ├── runner_submit_job.sh      # Submit a specific job to the runner
+├── runner_submit_orb_review.sh  # Submit orb_review_bundle + poll + print
+├── runner_submit_orb_doctor.sh  # Submit orb_doctor + poll + print
+├── runner_submit_orb_score.sh   # Submit orb_score_run + poll + print
 ├── schemas/
-│   └── codex_review_verdict.schema.json  # Strict: additionalProperties=false at every level
+│   └── codex_review_verdict.schema.json
 └── tests/
-    ├── pre_push_gate_selftest.sh   # 8 gate tests in isolated worktree
-    ├── review_bundle_selftest.sh   # 5 bundle tests
-    ├── review_auto_selftest.sh     # Meta structure + simulated verdict tests
-    ├── review_finish_selftest.sh   # Simulated rejection + pathspec tests
-    └── ship_auto_selftest.sh       # Autopilot + recursion guard tests
+    ├── pre_push_gate_selftest.sh
+    ├── review_bundle_selftest.sh
+    ├── review_auto_selftest.sh
+    ├── review_finish_selftest.sh
+    ├── ship_auto_selftest.sh
+    └── orb_integration_selftest.sh
+
+configs/
+├── job_allowlist.yaml        # Allowlisted job types (incl. ORB jobs)
+└── repo_allowlist.yaml       # Allowlisted target repos (algo-nt8-orb)
+
+services/test_runner/
+├── orb_wrappers/             # Per-job-type scripts (read-only worktree safe)
+│   ├── orb_review_bundle.sh
+│   ├── orb_doctor.sh
+│   └── orb_score_run.sh
+└── test_runner/
+    ├── repo_allowlist.py     # Repo allowlist enforcement
+    └── (existing modules)
 ```
+
+## ORB Integration Design
+
+1. **Repo allowlist** (`configs/repo_allowlist.yaml`): Only `algo-nt8-orb` is allowed
+2. **Job allowlist** (`configs/job_allowlist.yaml`): ORB jobs have `requires_repo_allowlist: true`
+3. **Wrapper scripts** (`orb_wrappers/`): Run inside read-only worktree, write outputs to `$ARTIFACT_DIR`
+4. **Params**: Passed via `params.json` in artifact dir; executor injects as env vars (only `allowed_params` accepted)
+5. **Invariants**: Every job records `read_only_ok` and `clean_tree_ok` in `artifact.json`
 
 ## Push Gate Design
 
@@ -54,7 +84,9 @@ The pre-push hook is the last line of defense. It has:
 1. **No git push** — bare mirrors have push URL set to `DISABLED`
 2. **Read-only worktrees** — ephemeral, pinned SHA, chmod -R a-w, clean-tree assertion
 3. **Allowlisted commands only** — configs/job_allowlist.yaml
-4. **Isolated outputs** — non-root, no docker.sock, read-only root filesystem
+4. **Repo allowlist** — configs/repo_allowlist.yaml; ORB jobs reject non-listed repos
+5. **Isolated outputs** — non-root, no docker.sock, read-only root filesystem
+6. **MUTATION_DETECTED** — if worktree is dirty post-job, job fails with changed file list
 
 ## Canonical Command
 
@@ -69,3 +101,4 @@ See `docs/CANONICAL_COMMANDS.md` for the full reference.
 1. Run `./ops/INSTALL_HOOKS.sh` to activate git hooks
 2. Run `./ops/doctor_repo.sh` to verify repo health
 3. Use `./ops/ship_auto.sh` for the standard ship workflow
+4. Run ORB integration: `./ops/runner_submit_orb_review.sh` (requires docker stack running)

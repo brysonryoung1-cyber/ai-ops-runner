@@ -15,6 +15,7 @@ x-runner-common: &runner-common
     DATABASE_URL: "postgresql://runner:runner@postgres:5432/runner"
     REDIS_URL: "redis://redis:6379/0"
     ALLOWLIST_PATH: "/app/configs/job_allowlist.yaml"
+    REPO_ALLOWLIST_PATH: "/app/configs/repo_allowlist.yaml"
     ARTIFACTS_ROOT: "/artifacts"
     REPOS_ROOT: "/repos"
     WORK_ROOT: "/work"

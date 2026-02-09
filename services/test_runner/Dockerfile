@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY test_runner/ /app/test_runner/
 COPY migrations/ /app/migrations/
+COPY orb_wrappers/ /app/orb_wrappers/
 
 # Ensure directories exist
 RUN mkdir -p /artifacts /repos /work && \

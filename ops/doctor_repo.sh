@@ -29,7 +29,7 @@ done
 # --- Check ops scripts ---
 echo ""
 echo "--- Ops Scripts ---"
-for f in ops/review_bundle.sh ops/review_auto.sh ops/review_finish.sh ops/ship_auto.sh ops/autoheal_codex.sh ops/doctor_repo.sh ops/INSTALL_HOOKS.sh ops/runner_smoke.sh; do
+for f in ops/review_bundle.sh ops/review_auto.sh ops/review_finish.sh ops/ship_auto.sh ops/autoheal_codex.sh ops/doctor_repo.sh ops/INSTALL_HOOKS.sh ops/runner_smoke.sh ops/runner_submit_orb_review.sh ops/runner_submit_orb_doctor.sh ops/runner_submit_orb_score.sh; do
   if [ -f "$ROOT_DIR/$f" ]; then
     if [ -x "$ROOT_DIR/$f" ]; then
       check_pass "$f exists and executable"
@@ -78,6 +78,34 @@ for hook in pre-push post-commit; do
     check_pass ".githooks/$hook exists"
   else
     check_fail ".githooks/$hook missing"
+  fi
+done
+
+# --- Check repo allowlist ---
+echo ""
+echo "--- Repo Allowlist ---"
+if [ -f "$ROOT_DIR/configs/repo_allowlist.yaml" ]; then
+  if python3 -c "import yaml; yaml.safe_load(open('$ROOT_DIR/configs/repo_allowlist.yaml'))" 2>/dev/null; then
+    check_pass "configs/repo_allowlist.yaml valid YAML"
+  else
+    check_fail "configs/repo_allowlist.yaml invalid YAML"
+  fi
+else
+  check_fail "configs/repo_allowlist.yaml missing"
+fi
+
+# --- Check ORB wrapper scripts ---
+echo ""
+echo "--- ORB Wrapper Scripts ---"
+for f in services/test_runner/orb_wrappers/orb_review_bundle.sh services/test_runner/orb_wrappers/orb_doctor.sh services/test_runner/orb_wrappers/orb_score_run.sh; do
+  if [ -f "$ROOT_DIR/$f" ]; then
+    if [ -x "$ROOT_DIR/$f" ]; then
+      check_pass "$f exists and executable"
+    else
+      check_warn "$f exists but NOT executable"
+    fi
+  else
+    check_fail "$f missing"
   fi
 done
 

@@ -30,6 +30,23 @@ def allowlist_file(tmp_path):
                 "argv": ["bash", "-lc", "./ops/review_auto.sh --no-push"],
                 "timeout_sec": 1800,
             },
+            "orb_review_bundle": {
+                "argv": ["bash", "/app/orb_wrappers/orb_review_bundle.sh"],
+                "timeout_sec": 1800,
+                "allowed_params": ["since_sha"],
+                "requires_repo_allowlist": True,
+            },
+            "orb_doctor": {
+                "argv": ["bash", "/app/orb_wrappers/orb_doctor.sh"],
+                "timeout_sec": 600,
+                "requires_repo_allowlist": True,
+            },
+            "orb_score_run": {
+                "argv": ["bash", "/app/orb_wrappers/orb_score_run.sh"],
+                "timeout_sec": 1800,
+                "allowed_params": ["logs_day", "run_id"],
+                "requires_repo_allowlist": True,
+            },
         }
     }
     f = tmp_path / "allowlist.yaml"
@@ -42,7 +59,10 @@ def test_load_allowlist(allowlist_file):
     assert "local_echo" in jobs
     assert "orb_ops_selftests" in jobs
     assert "orb_review_auto_nopush" in jobs
-    assert len(jobs) == 3
+    assert "orb_review_bundle" in jobs
+    assert "orb_doctor" in jobs
+    assert "orb_score_run" in jobs
+    assert len(jobs) == 6
 
 
 def test_allowed_job_fields(allowlist_file):
@@ -52,6 +72,9 @@ def test_allowed_job_fields(allowlist_file):
     assert echo.name == "local_echo"
     assert echo.argv == ["bash", "-lc", "echo hello && uname -a"]
     assert echo.timeout_sec == 60
+    # Legacy jobs have no allowed_params and don't require repo allowlist
+    assert echo.allowed_params == frozenset()
+    assert echo.requires_repo_allowlist is False
 
 
 def test_resolve_valid_job(allowlist_file):
@@ -79,3 +102,29 @@ def test_allowlist_caching(allowlist_file):
     a = load_allowlist(allowlist_file)
     b = load_allowlist(allowlist_file)
     assert a is b  # same dict object from cache
+
+
+# --- ORB job type tests ---
+
+def test_orb_review_bundle_fields(allowlist_file):
+    job = resolve_job("orb_review_bundle", allowlist_file)
+    assert job.name == "orb_review_bundle"
+    assert job.timeout_sec == 1800
+    assert job.allowed_params == frozenset({"since_sha"})
+    assert job.requires_repo_allowlist is True
+
+
+def test_orb_doctor_fields(allowlist_file):
+    job = resolve_job("orb_doctor", allowlist_file)
+    assert job.name == "orb_doctor"
+    assert job.timeout_sec == 600
+    assert job.allowed_params == frozenset()
+    assert job.requires_repo_allowlist is True
+
+
+def test_orb_score_run_fields(allowlist_file):
+    job = resolve_job("orb_score_run", allowlist_file)
+    assert job.name == "orb_score_run"
+    assert job.timeout_sec == 1800
+    assert job.allowed_params == frozenset({"logs_day", "run_id"})
+    assert job.requires_repo_allowlist is True

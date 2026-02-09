@@ -69,6 +69,22 @@ Defined in `configs/job_allowlist.yaml`:
 - **local_echo** — simple echo + uname (60s timeout)
 - **orb_ops_selftests** — run ORB self-tests (1800s timeout)
 - **orb_review_auto_nopush** — run review_auto with --no-push (1800s timeout)
+- **orb_review_bundle** — run ORB's review_bundle.sh, save REVIEW_BUNDLE.txt (1800s timeout)
+- **orb_doctor** — run ORB's doctor_repo.sh in read-only mode (600s timeout)
+- **orb_score_run** — run ORB's scoring harness; HARNESS_NOT_FOUND if absent (1800s timeout)
+
+### ORB Integration (Read-Only)
+
+The runner can execute analysis jobs against the [algo-nt8-orb](https://github.com/brysonryoung1-cyber/algo-nt8-orb.git) repo with strict read-only guarantees. Repos must be listed in `configs/repo_allowlist.yaml`.
+
+```bash
+# Submit ORB jobs (auto-resolves HEAD, polls, prints artifacts)
+./ops/runner_submit_orb_review.sh [sha] [since_sha]
+./ops/runner_submit_orb_doctor.sh [sha]
+./ops/runner_submit_orb_score.sh [sha] [logs_day] [run_id]
+```
+
+Every job writes `artifact.json` with invariants (`read_only_ok`, `clean_tree_ok`) proving the worktree was never mutated.
 
 ## Ops Automation (Ship Autopilot)
 
@@ -157,7 +173,8 @@ bash ops/tests/ship_auto_selftest.sh
 ```
 ├── docker-compose.yml
 ├── configs/
-│   └── job_allowlist.yaml
+│   ├── job_allowlist.yaml
+│   └── repo_allowlist.yaml
 ├── docs/
 │   ├── LAST_REVIEWED_SHA.txt
 │   ├── REVIEW_WORKFLOW.md
@@ -173,13 +190,17 @@ bash ops/tests/ship_auto_selftest.sh
 │   ├── INSTALL_HOOKS.sh
 │   ├── runner_smoke.sh
 │   ├── runner_submit_job.sh
+│   ├── runner_submit_orb_review.sh
+│   ├── runner_submit_orb_doctor.sh
+│   ├── runner_submit_orb_score.sh
 │   ├── schemas/
 │   │   └── codex_review_verdict.schema.json
 │   └── tests/
 │       ├── review_bundle_selftest.sh
 │       ├── review_auto_selftest.sh
 │       ├── review_finish_selftest.sh
-│       └── ship_auto_selftest.sh
+│       ├── ship_auto_selftest.sh
+│       └── orb_integration_selftest.sh
 ├── .githooks/
 │   ├── pre-push
 │   └── post-commit
@@ -187,12 +208,17 @@ bash ops/tests/ship_auto_selftest.sh
 ├── services/test_runner/
 │   ├── Dockerfile
 │   ├── requirements.txt
+│   ├── orb_wrappers/
+│   │   ├── orb_review_bundle.sh
+│   │   ├── orb_doctor.sh
+│   │   └── orb_score_run.sh
 │   ├── test_runner/
 │   │   ├── api.py
 │   │   ├── worker.py
 │   │   ├── db.py
 │   │   ├── models.py
 │   │   ├── allowlist.py
+│   │   ├── repo_allowlist.py
 │   │   ├── git_mirror.py
 │   │   ├── executor.py
 │   │   ├── security.py
@@ -202,6 +228,8 @@ bash ops/tests/ship_auto_selftest.sh
 │   │   └── 001_init.sql
 │   └── tests/
 │       ├── test_allowlist.py
+│       ├── test_repo_allowlist.py
+│       ├── test_orb_integration.py
 │       ├── test_artifacts.py
 │       ├── test_git_push_disabled.py
 │       └── test_readonly_worktree_asserts.py

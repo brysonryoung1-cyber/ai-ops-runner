@@ -37,7 +37,17 @@ REQUIRED_KEYS = frozenset({
     "allowlist_hash",
 })
 
+# Extended keys added by ORB integration (not required for backward compat)
+EXTENDED_KEYS = frozenset({
+    "stdout_path", "stderr_path", "params", "outputs", "invariants",
+})
+
 
 def validate_artifact(data: dict[str, Any]) -> list[str]:
     """Return list of missing required keys."""
     return sorted(REQUIRED_KEYS - set(data.keys()))
+
+
+def validate_artifact_extended(data: dict[str, Any]) -> list[str]:
+    """Return list of missing keys (required + extended)."""
+    return sorted((REQUIRED_KEYS | EXTENDED_KEYS) - set(data.keys()))

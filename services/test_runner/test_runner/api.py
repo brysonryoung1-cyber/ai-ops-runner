@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json as _json
 import os
 from typing import Optional
 
@@ -12,6 +13,7 @@ from .allowlist import resolve_job
 from .db import enqueue_job, get_pg, get_redis, insert_job, get_job
 from .models import JobRecord, JobRequest, JobStatus
 from .artifacts import artifact_dir, ARTIFACTS_ROOT
+from .repo_allowlist import validate_repo_url
 from .util import iso, new_job_id, now_utc
 
 app = FastAPI(title="ai-ops-runner", version="0.1.0")
@@ -27,6 +29,7 @@ class SubmitJobRequest(BaseModel):
     sha: str
     job_type: str
     idempotency_key: Optional[str] = None
+    params: Optional[dict[str, str]] = None
 
 
 class SubmitJobResponse(BaseModel):
@@ -65,14 +68,39 @@ def healthz():
 
 @app.post("/jobs", response_model=SubmitJobResponse, status_code=201)
 def submit_job(req: SubmitJobRequest):
-    # Validate against allowlist
+    # Validate against job allowlist
     try:
         allowed = resolve_job(req.job_type)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    # Validate repo against repo allowlist if required
+    if allowed.requires_repo_allowlist:
+        try:
+            validate_repo_url(req.remote_url)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    # Validate params against allowed_params
+    if req.params:
+        invalid_params = set(req.params.keys()) - allowed.allowed_params
+        if invalid_params:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Parameters not allowed for {req.job_type}: "
+                    f"{sorted(invalid_params)}. "
+                    f"Allowed: {sorted(allowed.allowed_params)}"
+                ),
+            )
+
     jid = new_job_id()
     art = artifact_dir(jid)
+
+    # Write params to artifact dir for executor to pick up
+    if req.params:
+        with open(os.path.join(art, "params.json"), "w") as f:
+            _json.dump(req.params, f)
 
     record = JobRecord(
         job_id=jid,

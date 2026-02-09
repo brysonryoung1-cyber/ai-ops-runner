@@ -22,6 +22,8 @@ class AllowedJob:
     name: str
     argv: list[str]
     timeout_sec: int
+    allowed_params: frozenset[str] = frozenset()
+    requires_repo_allowlist: bool = False
 
 
 def load_allowlist(path: str | None = None) -> dict[str, AllowedJob]:
@@ -42,6 +44,8 @@ def load_allowlist(path: str | None = None) -> dict[str, AllowedJob]:
             name=name,
             argv=spec["argv"],
             timeout_sec=spec.get("timeout_sec", 600),
+            allowed_params=frozenset(spec.get("allowed_params", [])),
+            requires_repo_allowlist=spec.get("requires_repo_allowlist", False),
         )
     _cache = (digest, jobs)
     return jobs

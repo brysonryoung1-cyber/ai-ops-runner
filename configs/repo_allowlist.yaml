@@ -1,0 +1,19 @@
+---
+# Repo allowlist for ai-ops-runner.
+# Only repos listed here can be targeted by jobs with requires_repo_allowlist: true.
+# The runner will NEVER push to or modify these repos — read-only clone/worktree only.
+#
+# Security guarantees:
+#   - Push URL set to DISABLED on bare mirror (even without tokens)
+#   - Ephemeral worktree checkout at pinned SHA
+#   - chmod -R a-w (preserving execute bits)
+#   - git status --porcelain + git diff --exit-code assertion post-execution
+#   - Worktree deleted after every job
+
+repos:
+  algo-nt8-orb:
+    url: "https://github.com/brysonryoung1-cyber/algo-nt8-orb.git"
+    allowed_branches:
+      - main
+      - master
+    default_branch: main
