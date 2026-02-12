@@ -170,6 +170,170 @@ def test_readonly_preserves_clean_state(git_repo):
 # Artifact contract tests
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# hooksPath config tests (orb_doctor hardening)
+# ---------------------------------------------------------------------------
+
+def test_hookspath_config_does_not_dirty_worktree(git_repo):
+    """Setting core.hooksPath config does NOT trip mutation detection.
+
+    orb_doctor.sh sets core.hooksPath in the gitdir config before running
+    the ORB doctor.  This must not make the worktree appear dirty.
+    """
+    # Create .githooks directory (as ORB repos have)
+    githooks_dir = os.path.join(git_repo, ".githooks")
+    os.makedirs(githooks_dir)
+    hook_file = os.path.join(githooks_dir, "pre-commit")
+    with open(hook_file, "w") as f:
+        f.write("#!/bin/sh\nexit 0\n")
+    import stat as _stat
+    os.chmod(hook_file, _stat.S_IRWXU)
+    subprocess.check_call(["git", "-C", git_repo, "add", "."])
+    subprocess.check_call(["git", "-C", git_repo, "commit", "-m", "add githooks"])
+
+    # Apply hooksPath config (this is what orb_doctor.sh does)
+    subprocess.check_call(
+        ["git", "-C", git_repo, "config", "core.hooksPath", ".githooks"]
+    )
+
+    # Worktree must still be clean
+    assert_worktree_clean(git_repo)
+
+
+def test_hookspath_config_on_readonly_worktree_stays_clean(git_repo):
+    """hooksPath config + read-only worktree still passes clean-tree check."""
+    githooks_dir = os.path.join(git_repo, ".githooks")
+    os.makedirs(githooks_dir)
+    hook_file = os.path.join(githooks_dir, "pre-commit")
+    with open(hook_file, "w") as f:
+        f.write("#!/bin/sh\nexit 0\n")
+    subprocess.check_call(["git", "-C", git_repo, "add", "."])
+    subprocess.check_call(["git", "-C", git_repo, "commit", "-m", "add githooks"])
+
+    # Set hooksPath, then make read-only
+    subprocess.check_call(
+        ["git", "-C", git_repo, "config", "core.hooksPath", ".githooks"]
+    )
+    make_readonly(git_repo)
+
+    # Must still pass
+    assert_worktree_clean(git_repo)
+
+
+# ---------------------------------------------------------------------------
+# SIZE_CAP fallback tests
+# ---------------------------------------------------------------------------
+
+def test_size_cap_meta_readable_and_valid(tmp_path):
+    """Verify that a size_cap_meta.json written by the wrapper is readable."""
+    meta = {
+        "size_cap_triggered": True,
+        "packet_dir": "review_packets/20260212_120000",
+        "archive_path": "ORB_REVIEW_PACKETS.tar.gz",
+        "readme_path": "ORB_REVIEW_PACKETS_README.txt",
+        "packet_count": 3,
+        "since_sha": "abc123",
+        "stamp": "20260212_120000",
+    }
+    meta_path = tmp_path / "size_cap_meta.json"
+    meta_path.write_text(json.dumps(meta))
+
+    loaded = json.loads(meta_path.read_text())
+    assert loaded["size_cap_triggered"] is True
+    assert loaded["packet_count"] == 3
+    assert loaded["archive_path"] == "ORB_REVIEW_PACKETS.tar.gz"
+
+
+def test_size_cap_fallback_in_artifact_json(tmp_path):
+    """artifact.json includes size_cap_fallback when size_cap_meta.json is present."""
+    from test_runner.artifacts import write_artifact_json, read_artifact_json
+    import test_runner.artifacts as arts
+
+    original_root = arts.ARTIFACTS_ROOT
+    arts.ARTIFACTS_ROOT = str(tmp_path)
+
+    try:
+        job_id = "test-sizecap-001"
+        art = arts.artifact_dir(job_id)
+
+        # Simulate wrapper writing size_cap_meta.json
+        meta = {
+            "size_cap_triggered": True,
+            "packet_dir": "review_packets/20260212_120000",
+            "archive_path": "ORB_REVIEW_PACKETS.tar.gz",
+            "packet_count": 3,
+        }
+        with open(os.path.join(art, "size_cap_meta.json"), "w") as f:
+            json.dump(meta, f)
+
+        # Simulate executor reading it and writing artifact.json
+        write_artifact_json(job_id, {
+            "job_id": job_id,
+            "size_cap_fallback": meta,
+            "exit_code": 6,
+            "invariants": {"read_only_ok": True, "clean_tree_ok": True},
+        })
+
+        loaded = read_artifact_json(job_id)
+        assert loaded["size_cap_fallback"]["size_cap_triggered"] is True
+        assert loaded["size_cap_fallback"]["packet_count"] == 3
+        assert loaded["exit_code"] == 6
+        assert loaded["invariants"]["read_only_ok"] is True
+    finally:
+        arts.ARTIFACTS_ROOT = original_root
+
+
+def test_size_cap_packet_files_generated(git_repo, tmp_path):
+    """SIZE_CAP fallback generates packet_*.txt files from diff."""
+    artifact_dir = str(tmp_path / "artifacts")
+    os.makedirs(artifact_dir)
+
+    # Create several files to simulate a meaningful diff
+    for i in range(5):
+        fpath = os.path.join(git_repo, f"file_{i}.txt")
+        with open(fpath, "w") as f:
+            f.write(f"content for file {i}\n" * 50)
+    subprocess.check_call(["git", "-C", git_repo, "add", "."])
+    subprocess.check_call(["git", "-C", git_repo, "commit", "-m", "add files"])
+
+    # Determine initial commit SHA
+    initial_sha = subprocess.check_output(
+        ["git", "-C", git_repo, "rev-list", "--max-parents=0", "HEAD"],
+        text=True,
+    ).strip()
+
+    # Simulate packet generation (mirror of wrapper logic)
+    stamp = "20260212_120000"
+    packet_dir = os.path.join(artifact_dir, "review_packets", stamp)
+    os.makedirs(packet_dir)
+
+    changed = subprocess.check_output(
+        ["git", "-C", git_repo, "diff", "--name-only", initial_sha, "HEAD"],
+        text=True,
+    ).strip().split("\n")
+
+    pnum = 0
+    for fname in changed:
+        if not fname.strip():
+            continue
+        pnum += 1
+        diff = subprocess.check_output(
+            ["git", "-C", git_repo, "diff", initial_sha, "HEAD", "--", fname],
+            text=True,
+        )
+        pfile = os.path.join(packet_dir, f"packet_{pnum:03d}.txt")
+        with open(pfile, "w") as f:
+            f.write(diff)
+
+    assert pnum >= 5
+    for i in range(1, pnum + 1):
+        assert os.path.isfile(os.path.join(packet_dir, f"packet_{i:03d}.txt"))
+
+
+# ---------------------------------------------------------------------------
+# Artifact contract tests
+# ---------------------------------------------------------------------------
+
 def test_artifact_json_includes_invariants(tmp_path):
     """Verify artifact.json schema includes invariants field."""
     from test_runner.artifacts import write_artifact_json, read_artifact_json

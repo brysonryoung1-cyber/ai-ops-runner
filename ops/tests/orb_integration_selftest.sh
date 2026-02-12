@@ -119,7 +119,54 @@ except ValueError:
     print('  [PASS] unknown repo correctly rejected')
 " || fail "Repo allowlist enforcement test failed"
 
-# --- 6. Run pytest for ORB-related tests ---
+# --- 6. orb_doctor.sh contains hooksPath hardening ---
+echo ""
+echo "--- Doctor hooksPath Hardening ---"
+if grep -q 'core\.hooksPath' "$ROOT_DIR/services/test_runner/orb_wrappers/orb_doctor.sh"; then
+  pass "orb_doctor.sh sets core.hooksPath"
+else
+  fail "orb_doctor.sh does NOT set core.hooksPath"
+fi
+
+# --- 7. orb_review_bundle.sh contains SIZE_CAP packet generation ---
+echo ""
+echo "--- Review Bundle SIZE_CAP Packets ---"
+if grep -q 'size_cap_meta\.json' "$ROOT_DIR/services/test_runner/orb_wrappers/orb_review_bundle.sh"; then
+  pass "orb_review_bundle.sh writes size_cap_meta.json"
+else
+  fail "orb_review_bundle.sh does NOT write size_cap_meta.json"
+fi
+if grep -q 'ORB_REVIEW_PACKETS\.tar\.gz' "$ROOT_DIR/services/test_runner/orb_wrappers/orb_review_bundle.sh"; then
+  pass "orb_review_bundle.sh creates ORB_REVIEW_PACKETS.tar.gz"
+else
+  fail "orb_review_bundle.sh does NOT create ORB_REVIEW_PACKETS.tar.gz"
+fi
+if grep -q 'ORB_REVIEW_PACKETS_README\.txt' "$ROOT_DIR/services/test_runner/orb_wrappers/orb_review_bundle.sh"; then
+  pass "orb_review_bundle.sh writes ORB_REVIEW_PACKETS_README.txt"
+else
+  fail "orb_review_bundle.sh does NOT write ORB_REVIEW_PACKETS_README.txt"
+fi
+if grep -q 'review_packets/' "$ROOT_DIR/services/test_runner/orb_wrappers/orb_review_bundle.sh"; then
+  pass "orb_review_bundle.sh creates review_packets/ directory"
+else
+  fail "orb_review_bundle.sh does NOT create review_packets/ directory"
+fi
+
+# --- 8. executor.py reads size_cap_meta.json ---
+echo ""
+echo "--- Executor SIZE_CAP Integration ---"
+if grep -q 'size_cap_meta\.json' "$ROOT_DIR/services/test_runner/test_runner/executor.py"; then
+  pass "executor.py reads size_cap_meta.json"
+else
+  fail "executor.py does NOT read size_cap_meta.json"
+fi
+if grep -q 'size_cap_fallback' "$ROOT_DIR/services/test_runner/test_runner/executor.py"; then
+  pass "executor.py includes size_cap_fallback in artifact.json"
+else
+  fail "executor.py does NOT include size_cap_fallback in artifact.json"
+fi
+
+# --- 9. Run pytest for ORB-related tests ---
 echo ""
 echo "--- Pytest (ORB tests) ---"
 if command -v pytest &>/dev/null || python3 -m pytest --version &>/dev/null 2>&1; then

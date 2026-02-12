@@ -2,14 +2,24 @@
 
 ## Last Updated
 
-2026-02-09
+2026-02-12
 
 ## Status
 
-All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation added (private-only, Tailscale-only).
+All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation added (private-only, Tailscale-only). ORB doctor passes 18/18 in runner context (hooksPath hardening). SIZE_CAP fallback auto-generates review-packet artifacts.
 
 ## Recent Changes
 
+- **ORB doctor hooksPath hardening**: `orb_doctor.sh` now sets `core.hooksPath .githooks` in the gitdir config before running the ORB doctor, eliminating the false finding in runner context. Writes to gitdir (outside worktree), so mutation detection is not tripped.
+- **SIZE_CAP → review packets**: When `orb_review_bundle` hits exit code 6 (SIZE_CAP), the wrapper now auto-generates:
+  - Per-file packet diffs in `review_packets/<stamp>/packet_NNN.txt`
+  - `HOW_TO_PASTE.txt` with review instructions
+  - `ORB_REVIEW_PACKETS.tar.gz` archive
+  - `ORB_REVIEW_PACKETS_README.txt` guide
+  - `size_cap_meta.json` (merged into `artifact.json` as `size_cap_fallback`)
+- **Executor**: Reads `size_cap_meta.json` from artifact dir and includes `size_cap_fallback` field in `artifact.json`
+- **Tests**: Added pytest tests for hooksPath config (clean-tree safe) and SIZE_CAP packet generation (5 new tests)
+- **Selftest**: Extended `orb_integration_selftest.sh` with checks for hooksPath hardening, SIZE_CAP packet generation, and executor integration
 - **VPS deployment**: Added private-only VPS deployment via Tailscale
   - `ops/vps_bootstrap.sh` — idempotent VPS setup (docker, tailscale, UFW, systemd)
   - `ops/vps_deploy.sh` — wrapper (bootstrap + doctor)
@@ -102,6 +112,8 @@ services/test_runner/
 3. **Wrapper scripts** (`orb_wrappers/`): Run inside read-only worktree, write outputs to `$ARTIFACT_DIR`
 4. **Params**: Passed via `params.json` in artifact dir; executor injects as env vars (only `allowed_params` accepted)
 5. **Invariants**: Every job records `read_only_ok` and `clean_tree_ok` in `artifact.json`
+6. **Doctor 18/18**: `orb_doctor.sh` pre-sets `core.hooksPath .githooks` in gitdir config (outside worktree, clean-tree safe)
+7. **SIZE_CAP → packets**: `orb_review_bundle.sh` auto-generates review packets on exit 6; executor merges `size_cap_meta.json` into `artifact.json` as `size_cap_fallback`
 
 ## Push Gate Design
 

@@ -141,6 +141,20 @@ def execute_job(job: JobRecord) -> JobRecord:
 
         # 8. Collect outputs and write artifact.json
         outputs = _list_outputs(art_dir)
+
+        # 8a. Check for size_cap_meta.json (written by wrappers on SIZE_CAP)
+        size_cap_fallback = None
+        size_cap_path = os.path.join(art_dir, "size_cap_meta.json")
+        if os.path.isfile(size_cap_path):
+            try:
+                with open(size_cap_path) as f:
+                    size_cap_fallback = _json.load(f)
+            except Exception:
+                log.warning(
+                    "Failed to read size_cap_meta.json for job %s",
+                    job.job_id,
+                )
+
         write_artifact_json(job.job_id, {
             "job_id": job.job_id,
             "repo_name": job.repo_name,
@@ -163,6 +177,7 @@ def execute_job(job: JobRecord) -> JobRecord:
             "params": params,
             "outputs": outputs,
             "invariants": invariants,
+            "size_cap_fallback": size_cap_fallback,
         })
 
         # 9. Cleanup worktree

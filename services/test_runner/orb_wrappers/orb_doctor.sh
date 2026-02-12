@@ -10,6 +10,22 @@ echo "==> orb_doctor"
 echo "    cwd=$(pwd)"
 echo "    artifact_dir=$ARTIFACT_DIR"
 
+# ---------------------------------------------------------------------------
+# Pre-flight: set core.hooksPath so the doctor does not report a false finding.
+#
+# In the runner's ephemeral worktree the .githooks directory exists (tracked),
+# but core.hooksPath was never set because the worktree was created from a
+# bare mirror clone.  Setting it here writes to the gitdir config (located
+# outside the worktree under /repos/), so:
+#   • no tracked files are changed
+#   • git status --porcelain remains clean
+#   • mutation detection is NOT tripped
+# ---------------------------------------------------------------------------
+if [ -d .githooks ]; then
+  git config core.hooksPath .githooks 2>/dev/null || true
+  echo "    core.hooksPath -> .githooks (set in gitdir config)"
+fi
+
 if [ -f ./ops/doctor_repo.sh ]; then
   echo "==> Running ./ops/doctor_repo.sh"
   bash ./ops/doctor_repo.sh > "$OUT" 2>&1 || {
