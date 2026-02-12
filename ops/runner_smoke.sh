@@ -116,7 +116,7 @@ fi
 # --- ORB integration smoke (auto-resolves HEAD, skips if network unavailable) ---
 echo ""
 echo "==> ORB integration smoke test..."
-ORB_INT_URL="${ORB_REMOTE_URL:-https://github.com/brysonryoung1-cyber/algo-nt8-orb.git}"
+ORB_INT_URL="${ORB_REMOTE_URL:-git@github.com:brysonryoung1-cyber/algo-nt8-orb.git}"
 ORB_INT_SHA=""
 if ORB_INT_SHA=$(git ls-remote "$ORB_INT_URL" HEAD 2>/dev/null | cut -f1) && [ -n "$ORB_INT_SHA" ]; then
   echo "    ORB HEAD: $ORB_INT_SHA"

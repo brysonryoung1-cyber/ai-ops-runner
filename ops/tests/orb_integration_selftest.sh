@@ -106,7 +106,7 @@ from test_runner.repo_allowlist import validate_repo_url
 
 # Should succeed
 try:
-    r = validate_repo_url('https://github.com/brysonryoung1-cyber/algo-nt8-orb.git')
+    r = validate_repo_url('git@github.com:brysonryoung1-cyber/algo-nt8-orb.git')
     print('  [PASS] algo-nt8-orb accepted')
 except Exception as e:
     print(f'  [FAIL] algo-nt8-orb rejected: {e}')

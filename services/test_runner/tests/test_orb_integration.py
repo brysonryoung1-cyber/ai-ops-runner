@@ -183,7 +183,7 @@ def test_artifact_json_includes_invariants(tmp_path):
         data = {
             "job_id": "test-orb-123",
             "repo_name": "algo-nt8-orb",
-            "remote_url": "https://github.com/brysonryoung1-cyber/algo-nt8-orb.git",
+            "remote_url": "git@github.com:brysonryoung1-cyber/algo-nt8-orb.git",
             "sha": "abc123",
             "job_type": "orb_review_bundle",
             "argv": ["bash", "/app/orb_wrappers/orb_review_bundle.sh"],

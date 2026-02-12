@@ -21,7 +21,7 @@ def repo_allowlist_file(tmp_path):
     data = {
         "repos": {
             "algo-nt8-orb": {
-                "url": "https://github.com/brysonryoung1-cyber/algo-nt8-orb.git",
+                "url": "git@github.com:brysonryoung1-cyber/algo-nt8-orb.git",
                 "allowed_branches": ["main", "master"],
                 "default_branch": "main",
             }
@@ -43,14 +43,14 @@ def test_allowed_repo_fields(repo_allowlist_file):
     orb = repos["algo-nt8-orb"]
     assert isinstance(orb, AllowedRepo)
     assert orb.name == "algo-nt8-orb"
-    assert orb.url == "https://github.com/brysonryoung1-cyber/algo-nt8-orb.git"
+    assert orb.url == "git@github.com:brysonryoung1-cyber/algo-nt8-orb.git"
     assert orb.allowed_branches == ("main", "master")
     assert orb.default_branch == "main"
 
 
 def test_validate_allowed_repo_exact_url(repo_allowlist_file):
     repo = validate_repo_url(
-        "https://github.com/brysonryoung1-cyber/algo-nt8-orb.git",
+        "git@github.com:brysonryoung1-cyber/algo-nt8-orb.git",
         repo_allowlist_file,
     )
     assert repo.name == "algo-nt8-orb"
@@ -58,7 +58,7 @@ def test_validate_allowed_repo_exact_url(repo_allowlist_file):
 
 def test_validate_allowed_repo_without_git_suffix(repo_allowlist_file):
     repo = validate_repo_url(
-        "https://github.com/brysonryoung1-cyber/algo-nt8-orb",
+        "git@github.com:brysonryoung1-cyber/algo-nt8-orb",
         repo_allowlist_file,
     )
     assert repo.name == "algo-nt8-orb"
@@ -66,7 +66,7 @@ def test_validate_allowed_repo_without_git_suffix(repo_allowlist_file):
 
 def test_validate_allowed_repo_trailing_slash(repo_allowlist_file):
     repo = validate_repo_url(
-        "https://github.com/brysonryoung1-cyber/algo-nt8-orb.git/",
+        "git@github.com:brysonryoung1-cyber/algo-nt8-orb.git/",
         repo_allowlist_file,
     )
     assert repo.name == "algo-nt8-orb"
@@ -74,7 +74,7 @@ def test_validate_allowed_repo_trailing_slash(repo_allowlist_file):
 
 def test_validate_case_insensitive(repo_allowlist_file):
     repo = validate_repo_url(
-        "https://github.com/BrysonRYoung1-Cyber/Algo-NT8-ORB.git",
+        "git@github.com:BrysonRYoung1-Cyber/Algo-NT8-ORB.git",
         repo_allowlist_file,
     )
     assert repo.name == "algo-nt8-orb"

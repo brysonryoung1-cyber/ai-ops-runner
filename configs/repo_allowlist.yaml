@@ -12,7 +12,7 @@
 
 repos:
   algo-nt8-orb:
-    url: "https://github.com/brysonryoung1-cyber/algo-nt8-orb.git"
+    url: "git@github.com:brysonryoung1-cyber/algo-nt8-orb.git"
     allowed_branches:
       - main
       - master

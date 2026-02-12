@@ -5,7 +5,7 @@
 set -euo pipefail
 
 API_BASE="${API_BASE:-http://localhost:8000}"
-ORB_REMOTE_URL="${ORB_REMOTE_URL:-https://github.com/brysonryoung1-cyber/algo-nt8-orb.git}"
+ORB_REMOTE_URL="${ORB_REMOTE_URL:-git@github.com:brysonryoung1-cyber/algo-nt8-orb.git}"
 ORB_SHA="${1:-HEAD}"
 SINCE_SHA="${2:-}"
 

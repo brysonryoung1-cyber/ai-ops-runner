@@ -1,8 +1,8 @@
 FROM python:3.12-slim AS base
 
-# Install git (needed for mirror operations)
+# Install git + openssh-client (needed for mirror operations via SSH deploy keys)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git curl && \
+    apt-get install -y --no-install-recommends git curl openssh-client && \
     rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
