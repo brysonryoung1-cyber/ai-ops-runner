@@ -26,8 +26,8 @@ fi
 
 # Check for review_bundle.sh
 if [ -f ./ops/review_bundle.sh ]; then
-  echo "==> Running ./ops/review_bundle.sh --since $SINCE_SHA --output $OUT"
-  bash ./ops/review_bundle.sh --since "$SINCE_SHA" --output "$OUT" || {
+  echo "==> Running ./ops/review_bundle.sh --since $SINCE_SHA (stdout -> $OUT)"
+  bash ./ops/review_bundle.sh --since "$SINCE_SHA" > "$OUT" || {
     RC=$?
     echo "==> review_bundle.sh exited with code $RC"
     # Exit code 6 means size cap exceeded — still a valid result
