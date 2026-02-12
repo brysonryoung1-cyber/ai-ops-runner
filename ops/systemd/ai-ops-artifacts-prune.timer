@@ -1,0 +1,10 @@
+[Unit]
+Description=ai-ops-runner artifact pruning timer (daily)
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 UTC
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

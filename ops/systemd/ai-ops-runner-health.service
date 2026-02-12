@@ -1,0 +1,23 @@
+[Unit]
+Description=ai-ops-runner health check (restart on failure)
+After=ai-ops-runner.service
+Requires=ai-ops-runner.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai-ops-runner
+ExecStart=/bin/bash -c '\
+  if curl -sf http://127.0.0.1:8000/healthz >/dev/null 2>&1; then \
+    echo "ai-ops-runner healthy"; \
+  else \
+    echo "ai-ops-runner UNHEALTHY — restarting stack..."; \
+    /usr/bin/docker compose up -d --build; \
+    sleep 15; \
+    if curl -sf http://127.0.0.1:8000/healthz >/dev/null 2>&1; then \
+      echo "Stack recovered after restart"; \
+    else \
+      echo "Stack STILL unhealthy after restart" >&2; \
+      exit 1; \
+    fi; \
+  fi'
+TimeoutStartSec=120

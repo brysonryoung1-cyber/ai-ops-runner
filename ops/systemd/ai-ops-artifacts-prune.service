@@ -1,0 +1,20 @@
+[Unit]
+Description=ai-ops-runner artifact pruning (>14 days)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai-ops-runner
+ExecStart=/bin/bash -c '\
+  set -euo pipefail; \
+  ARTIFACTS_DIR="/opt/ai-ops-runner/artifacts"; \
+  if [ ! -d "$ARTIFACTS_DIR" ]; then \
+    echo "Artifacts dir not found: $ARTIFACTS_DIR"; \
+    exit 0; \
+  fi; \
+  BEFORE=$(du -sh "$ARTIFACTS_DIR" 2>/dev/null | cut -f1); \
+  # Delete artifact subdirectories older than 14 days \
+  # (only top-level job dirs, not the root) \
+  find "$ARTIFACTS_DIR" -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf {} + 2>/dev/null || true; \
+  AFTER=$(du -sh "$ARTIFACTS_DIR" 2>/dev/null | cut -f1); \
+  echo "Artifact prune complete: ${BEFORE} -> ${AFTER}"'
+TimeoutStartSec=120

@@ -1,0 +1,52 @@
+[Unit]
+Description=ai-ops-runner daily ORB review_bundle + doctor
+After=ai-ops-runner.service
+Requires=ai-ops-runner.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai-ops-runner
+Environment=API_BASE=http://127.0.0.1:8000
+Environment=ORB_REMOTE_URL=git@github.com:brysonryoung1-cyber/algo-nt8-orb.git
+ExecStart=/bin/bash -c '\
+  set -euo pipefail; \
+  TIMESTAMP=$(date -u +%%Y%%m%%dT%%H%%M%%SZ); \
+  PROOF_DIR="/opt/ai-ops-runner/artifacts/daily_orb_${TIMESTAMP}"; \
+  mkdir -p "$PROOF_DIR"; \
+  \
+  # Resolve HEAD \
+  ORB_SHA=$(git ls-remote "$ORB_REMOTE_URL" HEAD | cut -f1); \
+  if [ -z "$ORB_SHA" ]; then \
+    echo "ERROR: Cannot resolve ORB HEAD" >&2; \
+    exit 1; \
+  fi; \
+  echo "ORB HEAD: $ORB_SHA" | tee "$PROOF_DIR/summary.txt"; \
+  \
+  # Submit review_bundle \
+  RB_RESP=$(curl -sf -X POST "$API_BASE/jobs" \
+    -H "Content-Type: application/json" \
+    -d "{\"job_type\":\"orb_review_bundle\",\"repo_name\":\"algo-nt8-orb\",\"remote_url\":\"$ORB_REMOTE_URL\",\"sha\":\"$ORB_SHA\"}"); \
+  RB_JID=$(echo "$RB_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)[\"job_id\"])"); \
+  echo "review_bundle job_id: $RB_JID" | tee -a "$PROOF_DIR/summary.txt"; \
+  \
+  # Submit doctor \
+  DOC_RESP=$(curl -sf -X POST "$API_BASE/jobs" \
+    -H "Content-Type: application/json" \
+    -d "{\"job_type\":\"orb_doctor\",\"repo_name\":\"algo-nt8-orb\",\"remote_url\":\"$ORB_REMOTE_URL\",\"sha\":\"$ORB_SHA\"}"); \
+  DOC_JID=$(echo "$DOC_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)[\"job_id\"])"); \
+  echo "doctor job_id: $DOC_JID" | tee -a "$PROOF_DIR/summary.txt"; \
+  \
+  # Wait for both (up to 10 min) \
+  for JID in "$RB_JID" "$DOC_JID"; do \
+    for i in $(seq 1 120); do \
+      STATUS=$(curl -s "$API_BASE/jobs/$JID" | python3 -c "import sys,json; print(json.load(sys.stdin)[\"status\"])"); \
+      case "$STATUS" in \
+        success|failure|error|timeout) break ;; \
+        *) sleep 5 ;; \
+      esac; \
+    done; \
+    echo "job $JID: $STATUS" | tee -a "$PROOF_DIR/summary.txt"; \
+  done; \
+  \
+  echo "Daily ORB jobs complete. Proof: $PROOF_DIR" | tee -a "$PROOF_DIR/summary.txt"'
+TimeoutStartSec=1500

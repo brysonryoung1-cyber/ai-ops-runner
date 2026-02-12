@@ -27,8 +27,8 @@ echo "    sha=$ORB_SHA"
 echo "    logs_day=${LOGS_DAY:-<none>}"
 echo "    run_id=${RUN_ID:-<none>}"
 
-# Build params
-PARAMS_JSON="{}"
+# Build params — omit field entirely when no params given (cleaner API contract)
+PARAMS_FIELD=""
 if [ -n "$LOGS_DAY" ] || [ -n "$RUN_ID" ]; then
   PARAMS_JSON="{"
   SEP=""
@@ -40,6 +40,7 @@ if [ -n "$LOGS_DAY" ] || [ -n "$RUN_ID" ]; then
     PARAMS_JSON="${PARAMS_JSON}${SEP}\"run_id\": \"$RUN_ID\""
   fi
   PARAMS_JSON="${PARAMS_JSON}}"
+  PARAMS_FIELD=", \"params\": $PARAMS_JSON"
 fi
 
 RESPONSE=$(curl -sf -X POST "$API_BASE/jobs" \
@@ -48,8 +49,7 @@ RESPONSE=$(curl -sf -X POST "$API_BASE/jobs" \
     \"job_type\": \"orb_score_run\",
     \"repo_name\": \"algo-nt8-orb\",
     \"remote_url\": \"$ORB_REMOTE_URL\",
-    \"sha\": \"$ORB_SHA\",
-    \"params\": $PARAMS_JSON
+    \"sha\": \"$ORB_SHA\"$PARAMS_FIELD
   }")
 
 JOB_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")

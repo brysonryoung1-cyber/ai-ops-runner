@@ -13,7 +13,12 @@ from .allowlist import resolve_job
 from .db import enqueue_job, get_pg, get_redis, insert_job, get_job
 from .models import JobRecord, JobRequest, JobStatus
 from .artifacts import artifact_dir, ARTIFACTS_ROOT
-from .repo_allowlist import validate_repo_url
+from .repo_allowlist import (
+    AllowlistConfigError,
+    RepoNameMismatchError,
+    RepoNotAllowedError,
+    validate_repo,
+)
 from .util import iso, new_job_id, now_utc
 
 app = FastAPI(title="ai-ops-runner", version="0.1.0")
@@ -68,20 +73,25 @@ def healthz():
 
 @app.post("/jobs", response_model=SubmitJobResponse, status_code=201)
 def submit_job(req: SubmitJobRequest):
-    # Validate against job allowlist
+    # --- Validate job type against job allowlist ---
     try:
         allowed = resolve_job(req.job_type)
-    except ValueError as e:
+    except (ValueError, FileNotFoundError, OSError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Validate repo against repo allowlist if required
+    # --- Validate repo against repo allowlist (with name consistency) ---
     if allowed.requires_repo_allowlist:
         try:
-            validate_repo_url(req.remote_url)
-        except ValueError as e:
+            validate_repo(
+                remote_url=req.remote_url,
+                repo_name=req.repo_name,
+            )
+        except AllowlistConfigError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except (RepoNotAllowedError, RepoNameMismatchError, ValueError) as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-    # Validate params against allowed_params
+    # --- Validate params against allowed_params ---
     if req.params:
         invalid_params = set(req.params.keys()) - allowed.allowed_params
         if invalid_params:

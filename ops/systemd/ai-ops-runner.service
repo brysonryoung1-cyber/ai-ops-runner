@@ -1,0 +1,17 @@
+[Unit]
+Description=ai-ops-runner Docker Compose stack
+After=network-online.target docker.service tailscaled.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/ai-ops-runner
+ExecStart=/usr/bin/docker compose up -d --build
+ExecStop=/usr/bin/docker compose down
+ExecReload=/usr/bin/docker compose up -d --build
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
