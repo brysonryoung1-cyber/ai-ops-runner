@@ -29,7 +29,7 @@ done
 # --- Check ops scripts ---
 echo ""
 echo "--- Ops Scripts ---"
-for f in ops/review_bundle.sh ops/review_auto.sh ops/review_finish.sh ops/ship_auto.sh ops/autoheal_codex.sh ops/doctor_repo.sh ops/INSTALL_HOOKS.sh ops/runner_smoke.sh ops/runner_submit_orb_review.sh ops/runner_submit_orb_doctor.sh ops/runner_submit_orb_score.sh ops/vps_bootstrap.sh ops/vps_deploy.sh ops/vps_doctor.sh ops/vps_self_update.sh; do
+for f in ops/openai_key.py ops/ensure_openai_key.sh ops/review_bundle.sh ops/review_auto.sh ops/review_finish.sh ops/ship_auto.sh ops/autoheal_codex.sh ops/doctor_repo.sh ops/INSTALL_HOOKS.sh ops/runner_smoke.sh ops/runner_submit_orb_review.sh ops/runner_submit_orb_doctor.sh ops/runner_submit_orb_score.sh ops/vps_bootstrap.sh ops/vps_deploy.sh ops/vps_doctor.sh ops/vps_self_update.sh; do
   if [ -f "$ROOT_DIR/$f" ]; then
     if [ -x "$ROOT_DIR/$f" ]; then
       check_pass "$f exists and executable"

@@ -149,6 +149,41 @@ See `docs/DEPLOY_VPS.md` for full details.
 | `TAILSCALE_AUTHKEY` | (optional) | Tailscale auth key (first-time only) |
 | `REPO_BRANCH` | `main` | Branch to deploy |
 
+## One-Time OpenAI Key Bootstrap
+
+The review and autoheal workflows require an OpenAI API key (used by Codex CLI). The key is loaded automatically — **no manual `export` needed after initial setup**.
+
+**macOS (Cursor local):**
+
+```bash
+# First run of any Codex workflow will prompt securely (input hidden).
+# The key is stored in macOS Keychain (service: ai-ops-runner-openai).
+# All subsequent runs load it automatically.
+./ops/ship_auto.sh        # Will prompt once if key not in Keychain
+```
+
+**Linux (aiops-1 / VPS):**
+
+```bash
+sudo mkdir -p /etc/ai-ops-runner/secrets
+sudo sh -c 'cat > /etc/ai-ops-runner/secrets/openai_api_key'   # paste key, Ctrl-D
+sudo chmod 600 /etc/ai-ops-runner/secrets/openai_api_key
+sudo chown $(whoami):$(id -gn) /etc/ai-ops-runner/secrets/openai_api_key
+```
+
+> **Never paste your API key into chat.** Only enter it directly on the machine when prompted or via the file method above.
+
+**Resolution order:** env var → macOS Keychain → Linux secrets file → interactive prompt (macOS only).
+
+If the key cannot be found, the pipeline stops with a clear message (fail-closed).
+
+## First-Time Setup
+
+```bash
+./ops/INSTALL_HOOKS.sh    # Install pre-push + post-commit hooks
+./ops/doctor_repo.sh      # Verify everything is healthy
+```
+
 ## Selftests
 
 ```bash
@@ -158,19 +193,14 @@ bash ops/tests/review_finish_selftest.sh
 bash ops/tests/ship_auto_selftest.sh
 bash ops/tests/pre_push_gate_selftest.sh
 bash ops/tests/orb_integration_selftest.sh
-```
-
-## First-Time Setup
-
-```bash
-./ops/INSTALL_HOOKS.sh    # Install pre-push + post-commit hooks
-./ops/doctor_repo.sh      # Verify everything is healthy
+bash ops/tests/openai_key_selftest.sh
 ```
 
 ## Environment Variables
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
+| `OPENAI_API_KEY` | (auto-loaded) | OpenAI API key — auto-loaded from Keychain/file if not set |
 | `SHIP_MAX_ATTEMPTS` | `3` | Max autoheal attempts in ship_auto |
 | `SHIP_SKIP_PYTEST` | `0` | Skip pytest in ship_auto test phase |
 | `SHIP_SKIP_SELFTESTS` | `0` | Skip ops selftests in ship_auto |

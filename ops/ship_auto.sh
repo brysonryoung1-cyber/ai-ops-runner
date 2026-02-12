@@ -25,6 +25,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# --- ensure OpenAI API key (not needed for CODEX_SKIP simulated mode) ---
+if [ "${CODEX_SKIP:-0}" != "1" ]; then
+  # shellcheck source=ensure_openai_key.sh
+  source "$SCRIPT_DIR/ensure_openai_key.sh"
+fi
+
 echo "=== ship_auto.sh ==="
 echo "  Max attempts: $MAX_ATTEMPTS"
 echo "  No-push:      $NO_PUSH"

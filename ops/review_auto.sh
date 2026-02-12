@@ -28,6 +28,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# --- ensure OpenAI API key (not needed for CODEX_SKIP simulated mode) ---
+if [ "${CODEX_SKIP:-0}" != "1" ]; then
+  # shellcheck source=ensure_openai_key.sh
+  source "$SCRIPT_DIR/ensure_openai_key.sh"
+fi
+
 # --- preflight: clean repo ---
 if [ -n "$(git status --porcelain)" ]; then
   echo "ERROR: Working tree is dirty. Commit or stash changes first." >&2

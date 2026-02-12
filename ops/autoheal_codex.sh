@@ -7,6 +7,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
+# --- ensure OpenAI API key ---
+# shellcheck source=ensure_openai_key.sh
+source "$SCRIPT_DIR/ensure_openai_key.sh"
+
 # --- allowlist of modifiable paths ---
 ALLOWED_PATHS=("ops/" "docs/" "services/" "configs/" ".gitignore" "docker-compose.yml" "README.md")
 

@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-2026-02-12
+2026-02-13
 
 ## Status
 
@@ -10,6 +10,15 @@ All systems operational. Docker smoke test passing. Full ops/review/ship framewo
 
 ## Recent Changes
 
+- **Secure OpenAI key loading** — Zero-recurring-step secret management for Codex CLI:
+  - `ops/openai_key.py` — Cross-platform key loader (env → Keychain → Linux file → prompt)
+  - `ops/ensure_openai_key.sh` — Shell wrapper (source before Codex calls)
+  - macOS: auto-prompt + store in Keychain (service: `ai-ops-runner-openai`)
+  - Linux: read from `/etc/ai-ops-runner/secrets/openai_api_key` (chmod 600)
+  - Fail-closed: pipeline stops with clear message if key unavailable
+  - Updated `review_auto.sh`, `autoheal_codex.sh`, `ship_auto.sh` to source the helper
+  - `CODEX_SKIP=1` mode bypasses key loading (no Codex needed for simulated verdicts)
+  - Selftests: `ops/tests/openai_key_selftest.sh` + `ops/tests/test_openai_key.py` (22 tests)
 - **ORB Wrapper Hardening** (see dedicated section below)
 - **SIZE_CAP → review packets**: When `orb_review_bundle` hits exit code 6 (SIZE_CAP), the wrapper now auto-generates:
   - Per-file packet diffs in `review_packets/<stamp>/packet_NNN.txt`
@@ -48,6 +57,8 @@ All systems operational. Docker smoke test passing. Full ops/review/ship framewo
 
 ```
 ops/
+├── openai_key.py             # Secure cross-platform OpenAI key loader (env/Keychain/file)
+├── ensure_openai_key.sh      # Shell wrapper — source before Codex calls
 ├── review_bundle.sh          # Generate bounded diff bundle (exit 6 = size cap → packet mode)
 ├── review_auto.sh            # One-command Codex review (writes meta provenance, npx fallback)
 ├── review_finish.sh          # Advance baseline + commit isolation (refuses simulated)
@@ -72,7 +83,9 @@ ops/
     ├── review_auto_selftest.sh
     ├── review_finish_selftest.sh
     ├── ship_auto_selftest.sh
-    └── orb_integration_selftest.sh
+    ├── orb_integration_selftest.sh
+    ├── openai_key_selftest.sh
+    └── test_openai_key.py
 
 configs/
 ├── job_allowlist.yaml        # Allowlisted job types (incl. ORB jobs)
@@ -137,6 +150,22 @@ FORCE_SIZE_CAP=1 ARTIFACT_DIR=/tmp/test SINCE_SHA=$(git rev-list --max-parents=0
 ls /tmp/test/  # → ORB_REVIEW_PACKETS.tar.gz, README_REVIEW_PACKETS.txt, ...
 ```
 
+## Secure OpenAI Key Management
+
+All Codex-powered workflows (`review_auto.sh`, `autoheal_codex.sh`, `ship_auto.sh`) source `ensure_openai_key.sh` which calls `openai_key.py` to resolve the key.
+
+**Resolution order (fail-fast):**
+1. `OPENAI_API_KEY` env var — if already set, use immediately.
+2. macOS Keychain — service `ai-ops-runner-openai`, account `openai_api_key`.
+3. Linux file — `/etc/ai-ops-runner/secrets/openai_api_key` (chmod 600).
+4. macOS interactive prompt — uses `getpass` (no echo), stores in Keychain.
+
+**Invariants:**
+- Key never committed to git, never echoed to terminal, never in stderr.
+- `CODEX_SKIP=1` (simulated mode) bypasses key loading entirely.
+- Fail-closed: if key unavailable, pipeline stops with human-readable instructions.
+- One-time bootstrap only: after initial setup, all reruns succeed without manual export.
+
 ## VPS Deployment Design
 
 1. **Private-only**: No public ports. API on `127.0.0.1:8000` only, exposed to tailnet via `tailscale serve`.
@@ -144,7 +173,7 @@ ls /tmp/test/  # → ORB_REVIEW_PACKETS.tar.gz, README_REVIEW_PACKETS.txt, ...
 3. **Review-gated updates**: `vps_self_update.sh` checks `LAST_REVIEWED_SHA == origin/main HEAD`; fail-closed.
 4. **Systemd timers**: Update every 15 min, smoke test daily 06:00 UTC.
 5. **Rollback**: If docker compose fails after update, automatic rollback to previous HEAD.
-6. **Secrets**: Never in repo. Auth keys live on VPS in `/etc/ai-ops-runner/env` (chmod 600).
+6. **Secrets**: Never in repo. Auth keys live on VPS in `/etc/ai-ops-runner/secrets/` (chmod 600).
 
 ## ORB Integration Design
 
@@ -175,6 +204,7 @@ The pre-push hook is the last line of defense. It has:
 6. **MUTATION_DETECTED** — if worktree is dirty post-job, job fails with changed file list
 7. **Private-only networking** — no public ports, Tailscale-only access, UFW deny incoming
 8. **Review-gated VPS updates** — fail-closed if code hasn't been APPROVED by ship_auto
+9. **Secure key management** — keys never in git; auto-loaded from Keychain (macOS) or /etc secrets (Linux); fail-closed
 
 ## Canonical Command
 
