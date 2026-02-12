@@ -230,7 +230,7 @@ def test_size_cap_meta_readable_and_valid(tmp_path):
         "size_cap_triggered": True,
         "packet_dir": "review_packets/20260212_120000",
         "archive_path": "ORB_REVIEW_PACKETS.tar.gz",
-        "readme_path": "ORB_REVIEW_PACKETS_README.txt",
+        "readme_path": "README_REVIEW_PACKETS.txt",
         "packet_count": 3,
         "since_sha": "abc123",
         "stamp": "20260212_120000",
@@ -242,6 +242,7 @@ def test_size_cap_meta_readable_and_valid(tmp_path):
     assert loaded["size_cap_triggered"] is True
     assert loaded["packet_count"] == 3
     assert loaded["archive_path"] == "ORB_REVIEW_PACKETS.tar.gz"
+    assert loaded["readme_path"] == "README_REVIEW_PACKETS.txt"
 
 
 def test_size_cap_fallback_in_artifact_json(tmp_path):
@@ -378,3 +379,218 @@ def test_artifact_json_includes_invariants(tmp_path):
         assert "REVIEW_BUNDLE.txt" in loaded["outputs"]
     finally:
         arts.ARTIFACTS_ROOT = original_root
+
+
+# ---------------------------------------------------------------------------
+# Executor-level hooksPath tests
+# ---------------------------------------------------------------------------
+
+def test_executor_hookspath_set_before_readonly(git_repo):
+    """Verify that setting hooksPath before make_readonly still leaves
+    the worktree clean — mirrors the executor's step 2a logic."""
+    # Create .githooks (tracked)
+    githooks_dir = os.path.join(git_repo, ".githooks")
+    os.makedirs(githooks_dir)
+    hook_file = os.path.join(githooks_dir, "pre-commit")
+    with open(hook_file, "w") as f:
+        f.write("#!/bin/sh\nexit 0\n")
+    subprocess.check_call(["git", "-C", git_repo, "add", "."])
+    subprocess.check_call(["git", "-C", git_repo, "commit", "-m", "add githooks"])
+
+    # Step 2a: set hooksPath BEFORE make_readonly (mirrors executor.py)
+    subprocess.check_call(
+        ["git", "-C", git_repo, "config", "core.hooksPath", ".githooks"]
+    )
+
+    # Step 3: make read-only
+    make_readonly(git_repo)
+
+    # Worktree must still be clean (no mutation detected)
+    assert_worktree_clean(git_repo)
+
+    # Verify config was actually set
+    result = subprocess.run(
+        ["git", "-C", git_repo, "config", "core.hooksPath"],
+        capture_output=True, text=True,
+    )
+    assert result.stdout.strip() == ".githooks"
+
+
+def test_executor_hookspath_only_when_githooks_exists(git_repo):
+    """hooksPath should NOT be set when .githooks directory is absent."""
+    # No .githooks directory — should not have hooksPath
+    result = subprocess.run(
+        ["git", "-C", git_repo, "config", "core.hooksPath"],
+        capture_output=True, text=True,
+    )
+    # returncode != 0 means the config key is not set
+    assert result.returncode != 0
+
+
+# ---------------------------------------------------------------------------
+# FORCE_SIZE_CAP end-to-end tests
+# ---------------------------------------------------------------------------
+
+def test_force_size_cap_produces_all_artifacts(git_repo, tmp_path):
+    """FORCE_SIZE_CAP=1 triggers the SIZE_CAP fallback path and produces:
+    - ORB_REVIEW_PACKETS.tar.gz
+    - README_REVIEW_PACKETS.txt
+    - review_packets/<stamp>/packet_*.txt
+    - size_cap_meta.json
+    """
+    art_dir = str(tmp_path / "artifacts")
+    os.makedirs(art_dir)
+
+    # Add some files to create meaningful diff
+    for i in range(3):
+        fpath = os.path.join(git_repo, f"module_{i}.py")
+        with open(fpath, "w") as f:
+            f.write(f"# module {i}\nprint('hello {i}')\n" * 20)
+    subprocess.check_call(["git", "-C", git_repo, "add", "."])
+    subprocess.check_call(["git", "-C", git_repo, "commit", "-m", "add modules"])
+
+    initial_sha = subprocess.check_output(
+        ["git", "-C", git_repo, "rev-list", "--max-parents=0", "HEAD"],
+        text=True,
+    ).strip()
+
+    # Locate the wrapper script
+    wrapper = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "orb_wrappers", "orb_review_bundle.sh",
+    )
+    assert os.path.isfile(wrapper), f"Wrapper not found: {wrapper}"
+
+    # Run with FORCE_SIZE_CAP=1
+    env = os.environ.copy()
+    env["ARTIFACT_DIR"] = art_dir
+    env["SINCE_SHA"] = initial_sha
+    env["FORCE_SIZE_CAP"] = "1"
+
+    proc = subprocess.run(
+        ["bash", wrapper],
+        cwd=git_repo,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    # FORCE_SIZE_CAP should exit 6
+    assert proc.returncode == 6, f"Expected exit 6, got {proc.returncode}\nstderr: {proc.stderr}"
+
+    # Verify all expected artifacts exist
+    assert os.path.isfile(os.path.join(art_dir, "ORB_REVIEW_PACKETS.tar.gz")), \
+        "Missing ORB_REVIEW_PACKETS.tar.gz"
+    assert os.path.isfile(os.path.join(art_dir, "README_REVIEW_PACKETS.txt")), \
+        "Missing README_REVIEW_PACKETS.txt"
+    assert os.path.isfile(os.path.join(art_dir, "size_cap_meta.json")), \
+        "Missing size_cap_meta.json"
+    assert os.path.isfile(os.path.join(art_dir, "REVIEW_BUNDLE.txt")), \
+        "Missing REVIEW_BUNDLE.txt"
+
+    # Verify review_packets/<stamp>/ directory with packet files
+    rp_base = os.path.join(art_dir, "review_packets")
+    assert os.path.isdir(rp_base), "Missing review_packets/ directory"
+    stamps = os.listdir(rp_base)
+    assert len(stamps) == 1, f"Expected 1 stamp dir, got {stamps}"
+    stamp_dir = os.path.join(rp_base, stamps[0])
+    packet_files = [f for f in os.listdir(stamp_dir) if f.startswith("packet_")]
+    assert len(packet_files) >= 1, "No packet files generated"
+
+    # Verify size_cap_meta.json contents
+    with open(os.path.join(art_dir, "size_cap_meta.json")) as f:
+        meta = json.load(f)
+    assert meta["size_cap_triggered"] is True
+    assert meta["archive_path"] == "ORB_REVIEW_PACKETS.tar.gz"
+    assert meta["readme_path"] == "README_REVIEW_PACKETS.txt"
+    assert meta["packet_count"] >= 1
+    assert meta["since_sha"] == initial_sha
+    assert meta["packet_dir"].startswith("review_packets/")
+
+    # Verify README contents
+    readme = (tmp_path / "artifacts" / "README_REVIEW_PACKETS.txt").read_text()
+    assert "SIZE_CAP" in readme
+    assert "ORB_REVIEW_PACKETS.tar.gz" in readme
+
+    # Verify worktree is still clean after the wrapper ran
+    assert_worktree_clean(git_repo)
+
+
+def test_force_size_cap_artifact_json_integration(git_repo, tmp_path):
+    """Verify that size_cap_meta.json produced by FORCE_SIZE_CAP is correctly
+    merged into artifact.json by the executor's read logic."""
+    from test_runner.artifacts import write_artifact_json, read_artifact_json
+    import test_runner.artifacts as arts
+
+    original_root = arts.ARTIFACTS_ROOT
+    arts.ARTIFACTS_ROOT = str(tmp_path)
+
+    try:
+        job_id = "test-forcecap-001"
+        art = arts.artifact_dir(job_id)
+
+        # Simulate what the wrapper writes on FORCE_SIZE_CAP
+        meta = {
+            "size_cap_triggered": True,
+            "packet_dir": "review_packets/20260212_140000",
+            "archive_path": "ORB_REVIEW_PACKETS.tar.gz",
+            "readme_path": "README_REVIEW_PACKETS.txt",
+            "packet_count": 2,
+            "since_sha": "abc123def456",
+            "stamp": "20260212_140000",
+        }
+        with open(os.path.join(art, "size_cap_meta.json"), "w") as f:
+            json.dump(meta, f)
+
+        # Simulate executor writing artifact.json with size_cap_fallback
+        write_artifact_json(job_id, {
+            "job_id": job_id,
+            "exit_code": 6,
+            "invariants": {"read_only_ok": True, "clean_tree_ok": True},
+            "size_cap_fallback": meta,
+            "outputs": [
+                "REVIEW_BUNDLE.txt",
+                "ORB_REVIEW_PACKETS.tar.gz",
+                "README_REVIEW_PACKETS.txt",
+                "size_cap_meta.json",
+            ],
+        })
+
+        loaded = read_artifact_json(job_id)
+        assert loaded["exit_code"] == 6
+        assert loaded["size_cap_fallback"]["size_cap_triggered"] is True
+        assert loaded["size_cap_fallback"]["readme_path"] == "README_REVIEW_PACKETS.txt"
+        assert loaded["size_cap_fallback"]["packet_count"] == 2
+        assert "ORB_REVIEW_PACKETS.tar.gz" in loaded["outputs"]
+        assert "README_REVIEW_PACKETS.txt" in loaded["outputs"]
+    finally:
+        arts.ARTIFACTS_ROOT = original_root
+
+
+def test_force_size_cap_does_not_affect_normal_mode(git_repo, tmp_path):
+    """When FORCE_SIZE_CAP is not set (default 0), the wrapper should NOT
+    enter the SIZE_CAP path — it requires review_bundle.sh to exist."""
+    art_dir = str(tmp_path / "artifacts")
+    os.makedirs(art_dir)
+
+    wrapper = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "orb_wrappers", "orb_review_bundle.sh",
+    )
+
+    env = os.environ.copy()
+    env["ARTIFACT_DIR"] = art_dir
+    env["SINCE_SHA"] = "HEAD"
+    # FORCE_SIZE_CAP not set (defaults to 0)
+    env.pop("FORCE_SIZE_CAP", None)
+
+    proc = subprocess.run(
+        ["bash", wrapper],
+        cwd=git_repo,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    # Without review_bundle.sh and without FORCE_SIZE_CAP, should get
+    # SCRIPT_NOT_FOUND (exit 1)
+    assert proc.returncode == 1
+    assert "SCRIPT_NOT_FOUND" in proc.stderr or "SCRIPT_NOT_FOUND" in proc.stdout

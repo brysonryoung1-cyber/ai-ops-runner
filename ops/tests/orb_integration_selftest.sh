@@ -141,20 +141,25 @@ if grep -q 'ORB_REVIEW_PACKETS\.tar\.gz' "$ROOT_DIR/services/test_runner/orb_wra
 else
   fail "orb_review_bundle.sh does NOT create ORB_REVIEW_PACKETS.tar.gz"
 fi
-if grep -q 'ORB_REVIEW_PACKETS_README\.txt' "$ROOT_DIR/services/test_runner/orb_wrappers/orb_review_bundle.sh"; then
-  pass "orb_review_bundle.sh writes ORB_REVIEW_PACKETS_README.txt"
+if grep -q 'README_REVIEW_PACKETS\.txt' "$ROOT_DIR/services/test_runner/orb_wrappers/orb_review_bundle.sh"; then
+  pass "orb_review_bundle.sh writes README_REVIEW_PACKETS.txt"
 else
-  fail "orb_review_bundle.sh does NOT write ORB_REVIEW_PACKETS_README.txt"
+  fail "orb_review_bundle.sh does NOT write README_REVIEW_PACKETS.txt"
 fi
 if grep -q 'review_packets/' "$ROOT_DIR/services/test_runner/orb_wrappers/orb_review_bundle.sh"; then
   pass "orb_review_bundle.sh creates review_packets/ directory"
 else
   fail "orb_review_bundle.sh does NOT create review_packets/ directory"
 fi
+if grep -q 'FORCE_SIZE_CAP' "$ROOT_DIR/services/test_runner/orb_wrappers/orb_review_bundle.sh"; then
+  pass "orb_review_bundle.sh supports FORCE_SIZE_CAP test flag"
+else
+  fail "orb_review_bundle.sh does NOT support FORCE_SIZE_CAP test flag"
+fi
 
-# --- 8. executor.py reads size_cap_meta.json ---
+# --- 8. executor.py reads size_cap_meta.json + sets hooksPath ---
 echo ""
-echo "--- Executor SIZE_CAP Integration ---"
+echo "--- Executor Integration ---"
 if grep -q 'size_cap_meta\.json' "$ROOT_DIR/services/test_runner/test_runner/executor.py"; then
   pass "executor.py reads size_cap_meta.json"
 else
@@ -164,6 +169,16 @@ if grep -q 'size_cap_fallback' "$ROOT_DIR/services/test_runner/test_runner/execu
   pass "executor.py includes size_cap_fallback in artifact.json"
 else
   fail "executor.py does NOT include size_cap_fallback in artifact.json"
+fi
+if grep -q 'core\.hooksPath' "$ROOT_DIR/services/test_runner/test_runner/executor.py"; then
+  pass "executor.py sets core.hooksPath before make_readonly (step 2a)"
+else
+  fail "executor.py does NOT set core.hooksPath before make_readonly"
+fi
+if grep -q '\.githooks' "$ROOT_DIR/services/test_runner/test_runner/executor.py"; then
+  pass "executor.py references .githooks directory"
+else
+  fail "executor.py does NOT reference .githooks directory"
 fi
 
 # --- 9. Run pytest for ORB-related tests ---

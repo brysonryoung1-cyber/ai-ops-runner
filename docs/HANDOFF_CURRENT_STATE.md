@@ -10,16 +10,16 @@ All systems operational. Docker smoke test passing. Full ops/review/ship framewo
 
 ## Recent Changes
 
-- **ORB doctor hooksPath hardening**: `orb_doctor.sh` now sets `core.hooksPath .githooks` in the gitdir config before running the ORB doctor, eliminating the false finding in runner context. Writes to gitdir (outside worktree), so mutation detection is not tripped.
+- **ORB Wrapper Hardening** (see dedicated section below)
 - **SIZE_CAP → review packets**: When `orb_review_bundle` hits exit code 6 (SIZE_CAP), the wrapper now auto-generates:
   - Per-file packet diffs in `review_packets/<stamp>/packet_NNN.txt`
   - `HOW_TO_PASTE.txt` with review instructions
   - `ORB_REVIEW_PACKETS.tar.gz` archive
-  - `ORB_REVIEW_PACKETS_README.txt` guide
+  - `README_REVIEW_PACKETS.txt` guide
   - `size_cap_meta.json` (merged into `artifact.json` as `size_cap_fallback`)
 - **Executor**: Reads `size_cap_meta.json` from artifact dir and includes `size_cap_fallback` field in `artifact.json`
-- **Tests**: Added pytest tests for hooksPath config (clean-tree safe) and SIZE_CAP packet generation (5 new tests)
-- **Selftest**: Extended `orb_integration_selftest.sh` with checks for hooksPath hardening, SIZE_CAP packet generation, and executor integration
+- **Tests**: Added pytest tests for hooksPath config (clean-tree safe) and SIZE_CAP packet generation (8 new tests, including FORCE_SIZE_CAP end-to-end)
+- **Selftest**: Extended `orb_integration_selftest.sh` with checks for hooksPath hardening, SIZE_CAP packet generation, FORCE_SIZE_CAP, and executor integration
 - **VPS deployment**: Added private-only VPS deployment via Tailscale
   - `ops/vps_bootstrap.sh` — idempotent VPS setup (docker, tailscale, UFW, systemd)
   - `ops/vps_deploy.sh` — wrapper (bootstrap + doctor)
@@ -96,6 +96,47 @@ services/test_runner/
     └── (existing modules)
 ```
 
+## ORB Wrapper Hardening
+
+Two paper cuts have been eliminated to make ORB automation day-to-day useful:
+
+### A) hooksPath — orb_doctor 18/18
+
+**Problem**: ORB's `doctor_repo.sh` checks that `core.hooksPath` is set to `.githooks`. In the runner's ephemeral worktree (created from a bare mirror), this config was never set, causing a false finding (17/18).
+
+**Fix (two layers)**:
+1. **Executor** (`executor.py`, step 2a): After `create_worktree()` and **before** `make_readonly()`, the executor checks for `.githooks/` in the worktree and sets `git config core.hooksPath .githooks`. This applies to *all* job types.
+2. **Wrapper** (`orb_doctor.sh`): Belt-and-suspenders — the wrapper also sets `core.hooksPath` if `.githooks/` exists.
+
+**Why it's safe**: `git config` writes to the gitdir config (located under `/repos/` outside the worktree), so no tracked files are modified, `git status --porcelain` stays clean, and mutation detection is NOT tripped.
+
+**Verification**:
+```bash
+# In any runner job, after step 2a:
+git -C "$WORKTREE" config core.hooksPath   # → .githooks
+git -C "$WORKTREE" status --porcelain       # → (empty)
+```
+
+### B) SIZE_CAP → Review Packets (exit 6)
+
+**Problem**: When the review bundle exceeds the size cap, `orb_review_bundle` exits 6 and the user has to manually generate review packets using Codex.
+
+**Fix**: The wrapper now auto-generates review packets on exit 6:
+1. Attempts ORB's `review_codex.sh --no-codex` if available
+2. Falls back to built-in per-file diff splitting (~50 KB per packet)
+3. Produces: `review_packets/<stamp>/packet_NNN.txt`, `HOW_TO_PASTE.txt`, `ORB_REVIEW_PACKETS.tar.gz`, `README_REVIEW_PACKETS.txt`, `size_cap_meta.json`
+4. Executor merges `size_cap_meta.json` into `artifact.json` as `size_cap_fallback`
+
+**Test-only flag**: `FORCE_SIZE_CAP=1` env var deterministically triggers the exit-6 fallback path without depending on actual bundle size. This var is NOT in `allowed_params`, so the executor never injects it from API params.
+
+**Verification**:
+```bash
+# Deterministic test:
+FORCE_SIZE_CAP=1 ARTIFACT_DIR=/tmp/test SINCE_SHA=$(git rev-list --max-parents=0 HEAD) \
+  bash services/test_runner/orb_wrappers/orb_review_bundle.sh
+ls /tmp/test/  # → ORB_REVIEW_PACKETS.tar.gz, README_REVIEW_PACKETS.txt, ...
+```
+
 ## VPS Deployment Design
 
 1. **Private-only**: No public ports. API on `127.0.0.1:8000` only, exposed to tailnet via `tailscale serve`.
@@ -112,8 +153,8 @@ services/test_runner/
 3. **Wrapper scripts** (`orb_wrappers/`): Run inside read-only worktree, write outputs to `$ARTIFACT_DIR`
 4. **Params**: Passed via `params.json` in artifact dir; executor injects as env vars (only `allowed_params` accepted)
 5. **Invariants**: Every job records `read_only_ok` and `clean_tree_ok` in `artifact.json`
-6. **Doctor 18/18**: `orb_doctor.sh` pre-sets `core.hooksPath .githooks` in gitdir config (outside worktree, clean-tree safe)
-7. **SIZE_CAP → packets**: `orb_review_bundle.sh` auto-generates review packets on exit 6; executor merges `size_cap_meta.json` into `artifact.json` as `size_cap_fallback`
+6. **Doctor 18/18**: Executor sets `core.hooksPath .githooks` in gitdir config at step 2a (before make_readonly); `orb_doctor.sh` also sets it as belt-and-suspenders
+7. **SIZE_CAP → packets**: `orb_review_bundle.sh` auto-generates review packets on exit 6; executor merges `size_cap_meta.json` into `artifact.json` as `size_cap_fallback`; `FORCE_SIZE_CAP=1` available for deterministic testing
 
 ## Push Gate Design
 

@@ -2,9 +2,16 @@
 # orb_review_bundle.sh — Run ORB repo's review_bundle.sh in read-only worktree.
 # Called by executor with cwd = worktree.
 # Env vars (set by executor): ARTIFACT_DIR, SINCE_SHA (optional)
+#
+# Test-only env:
+#   FORCE_SIZE_CAP=1  — skip the actual bundle and simulate exit code 6
+#                       (deterministic testing of the SIZE_CAP fallback path).
+#                       This var is NOT in the job allowlist's allowed_params,
+#                       so the executor will never inject it from API params.
 set -euo pipefail
 
 SINCE_SHA="${SINCE_SHA:-}"
+FORCE_SIZE_CAP="${FORCE_SIZE_CAP:-0}"
 OUT="$ARTIFACT_DIR/REVIEW_BUNDLE.txt"
 
 echo "==> orb_review_bundle"
@@ -24,11 +31,19 @@ else
   echo "    since_sha=$SINCE_SHA (from params)"
 fi
 
-# Check for review_bundle.sh
-if [ -f ./ops/review_bundle.sh ]; then
-  echo "==> Running ./ops/review_bundle.sh --since $SINCE_SHA (stdout -> $OUT)"
-  bash ./ops/review_bundle.sh --since "$SINCE_SHA" > "$OUT" || {
-    RC=$?
+# Check for review_bundle.sh (or FORCE_SIZE_CAP test mode)
+if [ -f ./ops/review_bundle.sh ] || [ "$FORCE_SIZE_CAP" = "1" ]; then
+  RC=0
+  if [ "$FORCE_SIZE_CAP" = "1" ]; then
+    echo "==> FORCE_SIZE_CAP enabled (test mode) — simulating exit code 6"
+    echo "FORCE_SIZE_CAP: simulated SIZE_CAP_EXCEEDED" > "$OUT"
+    RC=6
+  else
+    echo "==> Running ./ops/review_bundle.sh --since $SINCE_SHA (stdout -> $OUT)"
+    bash ./ops/review_bundle.sh --since "$SINCE_SHA" > "$OUT" || RC=$?
+  fi
+
+  if [ "$RC" -ne 0 ]; then
     echo "==> review_bundle.sh exited with code $RC"
     # Exit code 6 means size cap exceeded — generate review packets artifact
     if [ "$RC" -eq 6 ]; then
@@ -129,7 +144,7 @@ HOWTO
 
       # -- README -----------------------------------------------------------
       NPACKETS="$(ls -1 "$PACKET_DIR"/packet_*.txt 2>/dev/null | wc -l | tr -d ' ')"
-      cat > "$ARTIFACT_DIR/ORB_REVIEW_PACKETS_README.txt" <<EOF
+      cat > "$ARTIFACT_DIR/README_REVIEW_PACKETS.txt" <<EOF
 ORB Review Packets — SIZE_CAP Fallback
 =======================================
 
@@ -158,7 +173,7 @@ EOF
   "size_cap_triggered": true,
   "packet_dir": "review_packets/$STAMP",
   "archive_path": "ORB_REVIEW_PACKETS.tar.gz",
-  "readme_path": "ORB_REVIEW_PACKETS_README.txt",
+  "readme_path": "README_REVIEW_PACKETS.txt",
   "packet_count": $NPACKETS,
   "since_sha": "$SINCE_SHA",
   "stamp": "$STAMP"
@@ -167,7 +182,7 @@ EOF
       echo "    size_cap_meta.json written ($NPACKETS packets)"
     fi
     exit $RC
-  }
+  fi
   echo "==> REVIEW_BUNDLE.txt written ($(wc -c < "$OUT" | tr -d ' ') bytes)"
 else
   echo "SCRIPT_NOT_FOUND: ./ops/review_bundle.sh not found in target repo" >&2

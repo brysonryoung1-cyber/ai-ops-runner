@@ -66,6 +66,22 @@ def execute_job(job: JobRecord) -> JobRecord:
         # 2. Create ephemeral worktree
         worktree_path = create_worktree(job.repo_name, job.sha, job.job_id)
 
+        # 2a. Pre-configure core.hooksPath if .githooks directory exists.
+        #     This writes to gitdir config (outside the worktree), so:
+        #       - no tracked files are modified
+        #       - git status --porcelain stays clean
+        #       - mutation detection is NOT tripped
+        #     Done here (before make_readonly) as belt-and-suspenders so
+        #     *all* job types (not just orb_doctor) see the correct config.
+        githooks_dir = os.path.join(worktree_path, ".githooks")
+        if os.path.isdir(githooks_dir):
+            subprocess.run(
+                ["git", "-C", worktree_path, "config",
+                 "core.hooksPath", ".githooks"],
+                capture_output=True,
+            )
+            log.info("Set core.hooksPath=.githooks for job %s", job.job_id)
+
         # 3. Make worktree read-only (preserve execute bits)
         make_readonly(worktree_path)
         invariants["read_only_ok"] = True
