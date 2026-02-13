@@ -221,12 +221,13 @@ else:
       echo "" >&2
       echo "  This will:" >&2
       echo "    1. Detect your Tailscale IPv4 address" >&2
-      echo "    2. Disable ssh.socket if active (systemd socket activation)" >&2
-      echo "    3. Write /etc/ssh/sshd_config.d/99-tailscale-only.conf" >&2
+      echo "    2. Disable ALL ssh socket-activation units (ssh.socket, sshd.socket, ssh@*)" >&2
+      echo "    3. Scan and comment out conflicting ListenAddress/AddressFamily directives" >&2
+      echo "    4. Write /etc/ssh/sshd_config.d/99-tailscale-only.conf" >&2
       echo "       (AddressFamily inet, ListenAddress <TAILSCALE_IP>)" >&2
-      echo "    4. Validate config with: sshd -t" >&2
-      echo "    5. Restart sshd: systemctl restart ssh" >&2
-      echo "    6. Verify sshd is no longer on 0.0.0.0 / :::" >&2
+      echo "    5. Validate with: sshd -t" >&2
+      echo "    6. Restart the detected sshd service (ssh.service or sshd.service)" >&2
+      echo "    7. Verify no public bindings remain; rollback on failure" >&2
       echo "" >&2
       echo "  After running the fix, re-run this doctor to confirm PASS." >&2
     fi

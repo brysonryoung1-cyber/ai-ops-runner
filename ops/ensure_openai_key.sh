@@ -31,25 +31,25 @@ if [ -n "${OPENAI_API_KEY:-}" ]; then
   return 0 2>/dev/null || exit 0
 fi
 
-# --- Call Python helper (key → stdout, messages → stderr) ---
-if ! _LOADED_KEY="$(python3 "$_ENSURE_KEY_DIR/openai_key.py")"; then
+# --- Call Python helper (--emit-env → "export OPENAI_API_KEY=..." to stdout) ---
+if ! _EMIT_OUTPUT="$(python3 "$_ENSURE_KEY_DIR/openai_key.py" --emit-env)"; then
   echo "FATAL: Could not obtain OPENAI_API_KEY. Pipeline stopped (fail-closed)." >&2
-  unset _LOADED_KEY
+  unset _EMIT_OUTPUT
   unset _ENSURE_KEY_DIR
   return 1 2>/dev/null || exit 1
 fi
 
-if [ -z "${_LOADED_KEY:-}" ]; then
-  echo "FATAL: openai_key.py returned empty key. Pipeline stopped (fail-closed)." >&2
-  unset _LOADED_KEY
+if [ -z "${_EMIT_OUTPUT:-}" ]; then
+  echo "FATAL: openai_key.py --emit-env returned empty output. Pipeline stopped (fail-closed)." >&2
+  unset _EMIT_OUTPUT
   unset _ENSURE_KEY_DIR
   return 1 2>/dev/null || exit 1
 fi
 
-export OPENAI_API_KEY="$_LOADED_KEY"
+eval "$_EMIT_OUTPUT"
 
 # Scrub the temp variable immediately
-unset _LOADED_KEY
+unset _EMIT_OUTPUT
 unset _ENSURE_KEY_DIR
 
 # --- Schedule key scrubbing on script exit (unless caller opts out) ---

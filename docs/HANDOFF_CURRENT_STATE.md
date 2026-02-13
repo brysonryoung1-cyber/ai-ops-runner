@@ -6,10 +6,27 @@
 
 ## Status
 
-All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation added (private-only, Tailscale-only). ORB doctor passes 18/18 in runner context (hooksPath hardening). SIZE_CAP fallback auto-generates review-packet artifacts (now exits 0 = success-with-warning). openclaw_doctor uses tailnet-aware port audit. Automated sshd remediation available. macOS Keychain storage uses stdin piping (no argv leak). Executor hooksPath logging hardened (check=True, explicit failure logging).
+All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation added (private-only, Tailscale-only). ORB doctor passes 18/18 in runner context (hooksPath hardening). SIZE_CAP fallback auto-generates review-packet artifacts (now exits 0 = success-with-warning). openclaw_doctor uses tailnet-aware port audit. Automated sshd remediation hardened: scans/comments conflicting ListenAddress, disables ALL socket-activation units (ssh.socket, sshd.socket, ssh@*), safe rollback on validation failure. OpenAI key management hardened: key NEVER printed to human-visible output, importable API (get/set/delete/status), CLI subcommands. Executor hooksPath logging hardened (check=True, explicit failure logging).
 
 ## Recent Changes
 
+- **SSH remediation + OpenAI key hardening** — Two major improvements:
+  - **sshd Tailscale-only fix hardened** — `openclaw_fix_ssh_tailscale_only.sh` now:
+    - Detects and disables/masks ALL socket-activation units: `ssh.socket`, `sshd.socket`, and templated `ssh@*.socket`.
+    - Detects whether the active daemon unit is `ssh.service` or `sshd.service` and restarts the correct one.
+    - Scans `/etc/ssh/sshd_config` and `/etc/ssh/sshd_config.d/*.conf` for conflicting `ListenAddress` and `AddressFamily` directives, comments them out with timestamped backups.
+    - Validates with `sshd -t`, `sshd -T`, and `ss -lntp`; fail-closed if any public bind remains.
+    - Safe rollback: on validation failure, restores backups and restarts service with original config.
+    - Selftest expanded to 41 assertions (was 17): conflicting ListenAddress, sshd.socket, ssh@.socket, rollback, AddressFamily inet6, sshd.service detection.
+  - **OpenAI key management hardened** — `ops/openai_key.py` now:
+    - NEVER prints the raw key to human-visible output. Default mode shows masked status (`sk-…abcd`).
+    - Importable public API: `get_openai_api_key()`, `set_openai_api_key(key)`, `delete_openai_api_key()`, `openai_key_status(masked=True)`.
+    - CLI subcommands: `set` (interactive prompt), `delete` (remove from all backends), `status` (masked output).
+    - `--emit-env` mode preserved for shell capture (refused on TTY, used by `ensure_openai_key.sh`).
+    - `ensure_openai_key.sh` updated to use `--emit-env` instead of raw stdout capture.
+    - 66 Python tests (was 31): mask function, public API, CLI subcommands, key-never-printed assertions.
+    - Shell selftest updated: 18 assertions covering `--emit-env`, `status`, default mode, ensure wrapper.
+  - **Doctor remediation guidance updated** — Matches the hardened fix script (mentions all socket units, conflicting directive scanning, rollback).
 - **openclaw one-shot green: ssh.socket + loopback fixes** — Two root causes fixed:
   - **ssh.socket** — `openclaw_fix_ssh_tailscale_only.sh` now detects and disables systemd socket activation (`ssh.socket`), which was binding `:22` on `0.0.0.0`/`[::]` and ignoring `sshd_config` `ListenAddress` directives. Socket is disabled, stopped, and masked to prevent re-activation on upgrades.
   - **127.0.0.0/8 loopback** — `openclaw_doctor.sh` Python analyzer now classifies the entire `127.0.0.0/8` range as loopback (not just `127.0.0.1`). This correctly treats `systemd-resolve` on `127.0.0.53`/`127.0.0.54` as private.
@@ -85,7 +102,7 @@ All systems operational. Docker smoke test passing. Full ops/review/ship framewo
 
 ```
 ops/
-├── openai_key.py             # Secure cross-platform OpenAI key loader (env/Keychain/file)
+├── openai_key.py             # Secure OpenAI key manager (get/set/delete/status; never prints raw key)
 ├── ensure_openai_key.sh      # Shell wrapper — source before Codex calls
 ├── review_bundle.sh          # Generate bounded diff bundle (exit 6 = size cap → packet mode)
 ├── review_auto.sh            # One-command Codex review (writes meta provenance, npx fallback)
@@ -216,20 +233,33 @@ cat /tmp/test/size_cap_meta.json | python3 -c "import sys,json; d=json.load(sys.
 
 ## Secure OpenAI Key Management
 
-All Codex-powered workflows (`review_auto.sh`, `autoheal_codex.sh`, `ship_auto.sh`) source `ensure_openai_key.sh` which calls `openai_key.py` to resolve the key.
+All Codex-powered workflows (`review_auto.sh`, `autoheal_codex.sh`, `ship_auto.sh`) source `ensure_openai_key.sh` which calls `openai_key.py --emit-env` to resolve the key.
+
+**Public API (importable):**
+- `get_openai_api_key()` — resolve key from all configured sources
+- `set_openai_api_key(key)` — store in keyring or Linux secrets file
+- `delete_openai_api_key()` — remove from all backends
+- `openai_key_status(masked=True)` — return `"sk-…abcd"` or `"not configured"`
+
+**CLI subcommands:**
+- `python3 ops/openai_key.py status` — show masked status (default)
+- `python3 ops/openai_key.py set` — interactive prompt + store
+- `python3 ops/openai_key.py delete` — remove from all backends
+- `python3 ops/openai_key.py --emit-env` — emit `export OPENAI_API_KEY=...` (pipe only, refused on TTY)
 
 **Resolution order (fail-fast):**
 1. `OPENAI_API_KEY` env var — if already set, use immediately.
-2. macOS Keychain — service `ai-ops-runner-openai`, account `openai_api_key` (read via `security find-generic-password`, **no secret in argv**).
+2. Python keyring — macOS Keychain / Linux SecretService (**no secret in argv**).
 3. Linux file — `/etc/ai-ops-runner/secrets/openai_api_key` (chmod 600).
-4. macOS interactive prompt — uses `getpass` (no echo), stores in Keychain via `security add-generic-password` with stdin piping (**no secret in argv**).
+4. macOS interactive prompt — uses `getpass` (no echo), stores in keyring.
 
 **Invariants:**
-- Key never committed to git, never echoed to terminal, never in stderr, **never in process argv**.
+- Key **NEVER** printed to human-visible output. `status` shows masked only. `--emit-env` guarded by TTY check.
+- Key never committed to git, never in stderr, **never in process argv**.
 - `CODEX_SKIP=1` (simulated mode) bypasses key loading entirely.
 - Fail-closed: if key unavailable, pipeline stops with human-readable instructions.
 - One-time bootstrap only: after initial setup, all reruns succeed without manual export.
-- No external Python dependencies required — uses macOS `security` CLI with stdin piping.
+- `ensure_openai_key.sh` uses `--emit-env` for safe shell capture (eval + scrub).
 
 ## VPS Deployment Design
 

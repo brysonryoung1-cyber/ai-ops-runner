@@ -2,12 +2,17 @@
 # openai_key_selftest.sh — Tests for the secure OpenAI key loading mechanism
 #
 # Tests:
-#   1. Key from env var succeeds (exit 0, correct output)
-#   2. Missing key everywhere → fail-closed (exit non-zero)
-#   3. Key is NEVER printed to stderr
+#   1. --emit-env with env var succeeds (exit 0, correct export output)
+#   2. Key is NEVER printed to stderr
+#   3. Missing key everywhere → fail-closed (exit non-zero) via --emit-env
 #   4. ensure_openai_key.sh exports the key when env var set
 #   5. ensure_openai_key.sh fails closed when key unavailable
-#   6. Python helper validates key format (rejects empty)
+#   6. Empty/whitespace env var treated as missing
+#   7. Status subcommand returns masked output
+#   8. Status output does NOT contain full key
+#   9. Default mode (no subcommand) shows masked status, never raw key
+#   10. review_auto.sh --help works without key
+#   11. CODEX_SKIP mode does NOT require key
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -33,11 +38,23 @@ assert_not_contains() {
   TESTS=$((TESTS + 1))
   local desc="$1" forbidden="$2" haystack="$3"
   if echo "$haystack" | grep -qF "$forbidden" 2>/dev/null; then
-    echo "  FAIL: $desc (stderr contains the secret key)" >&2
+    echo "  FAIL: $desc (output contains the secret key)" >&2
     FAIL=$((FAIL + 1))
   else
     echo "  PASS: $desc"
     PASS=$((PASS + 1))
+  fi
+}
+
+assert_contains() {
+  TESTS=$((TESTS + 1))
+  local desc="$1" needle="$2" haystack="$3"
+  if echo "$haystack" | grep -qF "$needle" 2>/dev/null; then
+    echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $desc (output does not contain '$needle')" >&2
+    FAIL=$((FAIL + 1))
   fi
 }
 
@@ -47,29 +64,28 @@ echo "=== openai_key_selftest.sh ==="
 FAKE_KEY="sk-selftest-FAKE-key-00000000000000000000000000"
 
 # Null backend prevents the test from finding a real key in macOS Keychain.
-# Without this, "missing key" tests pass in CI but fail on dev machines
-# where a real key has been stored via `python3 ops/openai_key.py`.
 NULL_BACKEND="keyring.backends.null.Keyring"
 
-# --- Test 1: Key from env var → stdout, exit 0 ---
+# --- Test 1: --emit-env with env var → correct export output, exit 0 ---
 RC=0
-STDOUT="$(OPENAI_API_KEY="$FAKE_KEY" python3 "$OPS_DIR/openai_key.py" 2>/dev/null)" || RC=$?
-assert_eq "env var key: exit 0" "0" "$RC"
-assert_eq "env var key: stdout matches" "$FAKE_KEY" "$STDOUT"
+STDOUT="$(OPENAI_API_KEY="$FAKE_KEY" python3 "$OPS_DIR/openai_key.py" --emit-env 2>/dev/null)" || RC=$?
+assert_eq "emit-env: exit 0" "0" "$RC"
+# shlex.quote only adds quotes if the string contains special chars;
+# our fake key is shell-safe so no quotes are added.
+assert_contains "emit-env: output starts with export" "export OPENAI_API_KEY=" "$STDOUT"
+assert_contains "emit-env: output contains key value" "$FAKE_KEY" "$STDOUT"
 
-# --- Test 2: Key from env var → NEVER in stderr ---
+# --- Test 2: --emit-env key → NEVER in stderr ---
 RC=0
-STDERR="$(OPENAI_API_KEY="$FAKE_KEY" python3 "$OPS_DIR/openai_key.py" 2>&1 >/dev/null)" || RC=$?
-assert_not_contains "env var key: not in stderr" "$FAKE_KEY" "$STDERR"
+STDERR="$(OPENAI_API_KEY="$FAKE_KEY" python3 "$OPS_DIR/openai_key.py" --emit-env 2>&1 >/dev/null)" || RC=$?
+assert_not_contains "emit-env: key not in stderr" "$FAKE_KEY" "$STDERR"
 
-# --- Test 3: No key anywhere → fail-closed (non-interactive, no TTY) ---
-# Unset env var, disable keyring, use /dev/null as stdin to prevent TTY prompt
+# --- Test 3: No key anywhere → fail-closed via --emit-env ---
 RC=0
-STDERR="$(env -u OPENAI_API_KEY PYTHON_KEYRING_BACKEND="$NULL_BACKEND" python3 "$OPS_DIR/openai_key.py" </dev/null 2>&1 >/dev/null)" || RC=$?
-assert_eq "missing key: non-zero exit" "1" "$RC"
+STDERR="$(env -u OPENAI_API_KEY PYTHON_KEYRING_BACKEND="$NULL_BACKEND" python3 "$OPS_DIR/openai_key.py" --emit-env </dev/null 2>&1 >/dev/null)" || RC=$?
+assert_eq "missing key --emit-env: non-zero exit" "1" "$RC"
 
 # --- Test 4: Missing key stderr does NOT contain any actual key ---
-# (Ensure error messages are safe to display)
 assert_not_contains "missing key: no secret in stderr" "$FAKE_KEY" "$STDERR"
 
 # --- Test 5: ensure_openai_key.sh exports key from env var ---
@@ -88,24 +104,36 @@ env -u OPENAI_API_KEY PYTHON_KEYRING_BACKEND="$NULL_BACKEND" bash -c '
 ' </dev/null >/dev/null 2>&1 || RC=$?
 assert_eq "ensure_openai_key.sh: fail-closed without key" "1" "$RC"
 
-# --- Test 7: openai_key.py with empty OPENAI_API_KEY treats as missing ---
+# --- Test 7: Empty OPENAI_API_KEY treated as missing ---
 RC=0
-OPENAI_API_KEY="" PYTHON_KEYRING_BACKEND="$NULL_BACKEND" python3 "$OPS_DIR/openai_key.py" </dev/null >/dev/null 2>&1 || RC=$?
+OPENAI_API_KEY="" PYTHON_KEYRING_BACKEND="$NULL_BACKEND" python3 "$OPS_DIR/openai_key.py" --emit-env </dev/null >/dev/null 2>&1 || RC=$?
 assert_eq "empty env var: treated as missing (non-zero)" "1" "$RC"
 
-# --- Test 8: openai_key.py with whitespace-only key treats as missing ---
+# --- Test 8: Whitespace-only key treated as missing ---
 RC=0
-OPENAI_API_KEY="   " PYTHON_KEYRING_BACKEND="$NULL_BACKEND" python3 "$OPS_DIR/openai_key.py" </dev/null >/dev/null 2>&1 || RC=$?
+OPENAI_API_KEY="   " PYTHON_KEYRING_BACKEND="$NULL_BACKEND" python3 "$OPS_DIR/openai_key.py" --emit-env </dev/null >/dev/null 2>&1 || RC=$?
 assert_eq "whitespace-only env var: treated as missing" "1" "$RC"
 
-# --- Test 9: review_auto.sh --help still works (no key required) ---
+# --- Test 9: Status subcommand shows masked output ---
+RC=0
+STDOUT="$(OPENAI_API_KEY="$FAKE_KEY" python3 "$OPS_DIR/openai_key.py" status 2>/dev/null)" || RC=$?
+assert_eq "status: exit 0" "0" "$RC"
+assert_contains "status: shows 'OpenAI API key:'" "OpenAI API key:" "$STDOUT"
+assert_not_contains "status: no raw key in output" "$FAKE_KEY" "$STDOUT"
+
+# --- Test 10: Default mode (no subcommand) → status, never raw key ---
+RC=0
+STDOUT="$(OPENAI_API_KEY="$FAKE_KEY" python3 "$OPS_DIR/openai_key.py" 2>/dev/null)" || RC=$?
+assert_eq "default mode: exit 0" "0" "$RC"
+assert_not_contains "default mode: no raw key in stdout" "$FAKE_KEY" "$STDOUT"
+assert_contains "default mode: shows masked" "…" "$STDOUT"
+
+# --- Test 11: review_auto.sh --help still works (no key required) ---
 RC=0
 env -u OPENAI_API_KEY "$OPS_DIR/review_auto.sh" --help >/dev/null 2>&1 || RC=$?
 assert_eq "review_auto.sh --help works without key" "0" "$RC"
 
-# --- Test 10: CODEX_SKIP mode does NOT require key ---
-# (CODEX_SKIP review runs without Codex, so no key needed)
-# Only test if tree is clean
+# --- Test 12: CODEX_SKIP mode does NOT require key ---
 if [ -z "$(git -C "$(cd "$OPS_DIR/.." && pwd)" status --porcelain)" ]; then
   RC=0
   env -u OPENAI_API_KEY CODEX_SKIP=1 "$OPS_DIR/review_auto.sh" --no-push >/dev/null 2>&1 || RC=$?

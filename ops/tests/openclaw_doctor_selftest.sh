@@ -395,6 +395,21 @@ if grep -q 'ssh\.socket' "$DOCTOR"; then
 else
   fail "openclaw_doctor.sh missing ssh.socket reference in remediation"
 fi
+if grep -q 'sshd\.socket' "$DOCTOR"; then
+  pass "openclaw_doctor.sh references sshd.socket in remediation"
+else
+  fail "openclaw_doctor.sh missing sshd.socket reference in remediation"
+fi
+if grep -q 'ssh@' "$DOCTOR"; then
+  pass "openclaw_doctor.sh references ssh@* in remediation"
+else
+  fail "openclaw_doctor.sh missing ssh@* reference in remediation"
+fi
+if grep -q 'rollback' "$DOCTOR"; then
+  pass "openclaw_doctor.sh mentions rollback in remediation"
+else
+  fail "openclaw_doctor.sh missing rollback mention in remediation"
+fi
 if grep -q 'SSHD_PUBLIC' "$DOCTOR"; then
   pass "openclaw_doctor.sh detects SSHD_PUBLIC"
 else
