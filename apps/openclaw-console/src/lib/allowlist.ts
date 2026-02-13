@@ -37,7 +37,7 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     description:
       "Sync repo, rebuild Docker stack, apply SSH fix, and verify on aiops-1",
     remoteCommand:
-      "cd /opt/ai-ops-runner && ./ops/openclaw_apply_remote.sh || true",
+      "cd /opt/ai-ops-runner && ./ops/openclaw_apply_remote.sh",
     timeoutSec: 120,
   },
   guard: {
