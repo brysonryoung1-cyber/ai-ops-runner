@@ -10,8 +10,17 @@ import { NextRequest, NextResponse } from "next/server";
  * for first-time setup). CSRF/origin validation is still enforced
  * in the route handlers as a second layer.
  *
+ * Session TTL: The token itself is the session. Rotate it periodically
+ * via `python3 ops/openclaw_console_token.py rotate`. The TTL is
+ * enforced by short-lived tokens rather than server-side sessions,
+ * keeping the server stateless.
+ *
  * Security events are logged as single-line entries (no secrets).
  */
+
+/** Maximum request body size for API routes (1MB) */
+const MAX_BODY_SIZE = 1024 * 1024;
+
 export function middleware(req: NextRequest) {
   const token = process.env.OPENCLAW_CONSOLE_TOKEN;
 
@@ -25,9 +34,10 @@ export function middleware(req: NextRequest) {
   if (provided !== token) {
     const path = req.nextUrl.pathname;
     const tokenStatus = provided ? "invalid" : "missing";
+    const ip = req.headers.get("x-forwarded-for") || "unknown";
     // Single-line security event — no secrets logged
     console.error(
-      `[SECURITY] Unauthorized API access: path=${path} token=${tokenStatus}`
+      `[SECURITY] Unauthorized API access: path=${path} token=${tokenStatus} ip=${ip}`
     );
 
     return NextResponse.json(
@@ -37,6 +47,15 @@ export function middleware(req: NextRequest) {
           "Unauthorized: missing or invalid X-OpenClaw-Token header.",
       },
       { status: 401 }
+    );
+  }
+
+  // Check Content-Length to prevent oversized payloads
+  const contentLength = req.headers.get("content-length");
+  if (contentLength && parseInt(contentLength, 10) > MAX_BODY_SIZE) {
+    return NextResponse.json(
+      { ok: false, error: "Request body too large." },
+      { status: 413 }
     );
   }
 

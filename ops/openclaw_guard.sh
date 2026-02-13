@@ -69,12 +69,22 @@ fi
 echo "$DOCTOR_OUTPUT"
 
 if [ "$DOCTOR_RC" -eq 0 ]; then
-  log "RESULT: PASS (doctor 4/4)"
+  log "RESULT: PASS (doctor)"
   log_section ""
   exit 0
 fi
 
 log "RESULT: FAIL (doctor rc=$DOCTOR_RC)"
+
+# --- Send notification on first failure (rate-limited) ---
+if [ "$OPENCLAW_GUARD_TEST_MODE" != "1" ] && [ -x "$SCRIPT_DIR/openclaw_notify.sh" ]; then
+  FAIL_REASON="$(echo "$DOCTOR_OUTPUT" | grep 'FAIL:' | head -3 | tr '\n' '; ')"
+  "$SCRIPT_DIR/openclaw_notify.sh" \
+    --priority high \
+    --title "OpenClaw Guard" \
+    --rate-key "guard_doctor_fail" \
+    "[$(hostname)] Doctor FAIL: ${FAIL_REASON:-unknown}" 2>/dev/null || true
+fi
 
 # ---------------------------------------------------------------------------
 # Step 2: Determine if safe remediation is possible
@@ -130,6 +140,14 @@ log_section "$FIX_OUTPUT"
 
 if [ "$FIX_RC" -ne 0 ]; then
   log "REMEDIATION FAILED: openclaw_fix_ssh_tailscale_only.sh exited $FIX_RC"
+  # Notify on remediation failure
+  if [ "$OPENCLAW_GUARD_TEST_MODE" != "1" ] && [ -x "$SCRIPT_DIR/openclaw_notify.sh" ]; then
+    "$SCRIPT_DIR/openclaw_notify.sh" \
+      --priority emergency \
+      --title "OpenClaw Guard" \
+      --rate-key "guard_remediation_fail" \
+      "[$(hostname)] Remediation FAILED (rc=$FIX_RC). Manual intervention required." 2>/dev/null || true
+  fi
   log_section ""
   exit 1
 fi

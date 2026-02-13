@@ -249,11 +249,210 @@ else
   fail "Neither ss nor netstat available for port audit"
 fi
 
+# --- 5. Docker Published Ports Audit ---
+echo "--- Docker Published Ports ---"
+if command -v docker >/dev/null 2>&1; then
+  DOCKER_PORT_RESULT="$(docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | python3 -c "
+import sys, re
+
+violations = []
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    # Parse port mappings like '127.0.0.1:8000->8000/tcp' or '0.0.0.0:5432->5432/tcp'
+    binds = re.findall(r'([\d.]+):(\d+)->(\d+)/\w+', line)
+    name = line.split()[0] if line.split() else 'unknown'
+    for host_ip, host_port, container_port in binds:
+        parts = host_ip.split('.')
+        if len(parts) == 4:
+            try:
+                first_octet = int(parts[0])
+            except ValueError:
+                violations.append(f'{name}: {host_ip}:{host_port}')
+                continue
+            if first_octet == 127:
+                continue  # loopback OK
+            n = (int(parts[0]) << 24) | (int(parts[1]) << 16) | (int(parts[2]) << 8) | int(parts[3])
+            lo = (100 << 24) | (64 << 16)
+            hi = (100 << 24) | (127 << 16) | (255 << 8) | 255
+            if lo <= n <= hi:
+                continue  # tailnet OK
+        violations.append(f'{name}: {host_ip}:{host_port}')
+
+if violations:
+    print('VIOLATIONS')
+    for v in violations:
+        print(v)
+else:
+    print('OK')
+" 2>/dev/null || echo "PARSE_ERROR")"
+
+  if [ "$DOCKER_PORT_RESULT" = "OK" ]; then
+    pass "Docker published ports: all within allowed CIDRs"
+  elif echo "$DOCKER_PORT_RESULT" | head -1 | grep -q "VIOLATIONS"; then
+    fail "Docker containers with public port binds:"
+    echo "$DOCKER_PORT_RESULT" | grep -v '^VIOLATIONS$' | while IFS= read -r vline; do
+      [ -n "$vline" ] && echo "    $vline" >&2
+    done
+  elif [ "$DOCKER_PORT_RESULT" = "PARSE_ERROR" ]; then
+    fail "Docker port audit parse error"
+  else
+    pass "No Docker containers running (or no published ports)"
+  fi
+else
+  pass "Docker not installed (port audit N/A)"
+fi
+
+# --- 6. Disk Pressure + Log Growth ---
+echo "--- Disk & Log Health ---"
+DISK_WARN_PCT="${OPENCLAW_DOCTOR_DISK_WARN:-85}"
+DISK_FAIL_PCT="${OPENCLAW_DOCTOR_DISK_FAIL:-95}"
+LOG_SIZE_WARN_MB="${OPENCLAW_DOCTOR_LOG_WARN_MB:-500}"
+LOG_SIZE_FAIL_MB="${OPENCLAW_DOCTOR_LOG_FAIL_MB:-2000}"
+
+if command -v df >/dev/null 2>&1; then
+  ROOT_USE="$(df / 2>/dev/null | tail -1 | awk '{print $5}' | tr -d '%' || echo "0")"
+  if [ "$ROOT_USE" -ge "$DISK_FAIL_PCT" ] 2>/dev/null; then
+    fail "Disk usage CRITICAL: ${ROOT_USE}% (threshold: ${DISK_FAIL_PCT}%)"
+  elif [ "$ROOT_USE" -ge "$DISK_WARN_PCT" ] 2>/dev/null; then
+    echo "  WARN: Disk usage at ${ROOT_USE}% (warn threshold: ${DISK_WARN_PCT}%)"
+    pass "Disk usage WARNING but below critical (${ROOT_USE}%)"
+  else
+    pass "Disk usage OK (${ROOT_USE}%)"
+  fi
+else
+  pass "df not available (disk check skipped)"
+fi
+
+# Check log directory sizes
+if [ -d "$ROOT_DIR/logs" ]; then
+  LOG_SIZE_KB="$(du -sk "$ROOT_DIR/logs" 2>/dev/null | cut -f1 || echo "0")"
+  LOG_SIZE_MB=$((LOG_SIZE_KB / 1024))
+  if [ "$LOG_SIZE_MB" -ge "$LOG_SIZE_FAIL_MB" ] 2>/dev/null; then
+    fail "Log directory CRITICAL: ${LOG_SIZE_MB}MB (threshold: ${LOG_SIZE_FAIL_MB}MB)"
+  elif [ "$LOG_SIZE_MB" -ge "$LOG_SIZE_WARN_MB" ] 2>/dev/null; then
+    echo "  WARN: Log directory at ${LOG_SIZE_MB}MB (warn: ${LOG_SIZE_WARN_MB}MB)"
+    pass "Log directory WARNING but below critical (${LOG_SIZE_MB}MB)"
+  else
+    pass "Log directory OK (${LOG_SIZE_MB}MB)"
+  fi
+else
+  pass "No logs directory (log check N/A)"
+fi
+
+# --- 7. Key Health (presence + last success; no network by default) ---
+echo "--- Key Health ---"
+SMOKE_MODE="${OPENCLAW_DOCTOR_SMOKE:-0}"
+
+# OpenAI key presence
+OPENAI_STATUS=""
+if [ -f "$SCRIPT_DIR/openai_key.py" ]; then
+  OPENAI_STATUS="$(python3 "$SCRIPT_DIR/openai_key.py" status 2>/dev/null || echo "not available")"
+  if echo "$OPENAI_STATUS" | grep -q "sk-"; then
+    pass "OpenAI API key present ($(echo "$OPENAI_STATUS" | head -1))"
+
+    # Smoke mode: actually test the key (requires network)
+    if [ "$SMOKE_MODE" = "1" ]; then
+      echo "  [smoke] Testing OpenAI API connectivity..."
+      SMOKE_RC=0
+      python3 "$SCRIPT_DIR/openai_key.py" doctor 2>/dev/null || SMOKE_RC=$?
+      if [ "$SMOKE_RC" -eq 0 ]; then
+        pass "OpenAI API smoke test PASS"
+      else
+        fail "OpenAI API smoke test FAIL (rc=$SMOKE_RC)"
+      fi
+    fi
+  else
+    fail "OpenAI API key not configured"
+  fi
+else
+  fail "openai_key.py not found"
+fi
+
+# Pushover key presence (optional — warn only)
+PUSHOVER_APP=""
+if [ -n "${PUSHOVER_APP_TOKEN:-}" ]; then
+  PUSHOVER_APP="env"
+elif command -v security >/dev/null 2>&1; then
+  PUSHOVER_APP="$(security find-generic-password -a PUSHOVER_APP_TOKEN -s ai-ops-runner -w 2>/dev/null || true)"
+  [ -n "$PUSHOVER_APP" ] && PUSHOVER_APP="keychain"
+elif [ -f /etc/ai-ops-runner/secrets/pushover_app_token ]; then
+  PUSHOVER_APP="file"
+fi
+
+if [ -n "$PUSHOVER_APP" ]; then
+  pass "Pushover app token present (source: $PUSHOVER_APP)"
+else
+  echo "  WARN: Pushover app token not configured (notifications disabled)"
+  pass "Pushover token absent (optional; notifications disabled)"
+fi
+
+# --- 8. Console Bind Check ---
+echo "--- Console Bind Check ---"
+CONSOLE_PORT="${OPENCLAW_CONSOLE_PORT:-8787}"
+if command -v ss >/dev/null 2>&1; then
+  CONSOLE_BIND="$(ss -tlnp 2>/dev/null | grep ":${CONSOLE_PORT} " || true)"
+  if [ -z "$CONSOLE_BIND" ]; then
+    pass "Console not running (or port ${CONSOLE_PORT} not bound)"
+  elif echo "$CONSOLE_BIND" | grep -q "127.0.0.1:${CONSOLE_PORT}"; then
+    pass "Console bound to 127.0.0.1:${CONSOLE_PORT} (private-only)"
+  elif echo "$CONSOLE_BIND" | grep -qE "0\.0\.0\.0:${CONSOLE_PORT}|\[::\]:${CONSOLE_PORT}|\*:${CONSOLE_PORT}"; then
+    fail "Console bound to public address! Must be 127.0.0.1 only."
+  else
+    pass "Console bind appears private"
+  fi
+elif command -v netstat >/dev/null 2>&1; then
+  CONSOLE_BIND="$(netstat -an -p tcp 2>/dev/null | grep ":${CONSOLE_PORT} " | grep LISTEN || true)"
+  if [ -z "$CONSOLE_BIND" ]; then
+    pass "Console not running (or port ${CONSOLE_PORT} not bound)"
+  elif echo "$CONSOLE_BIND" | grep -q '127.0.0.1'; then
+    pass "Console bound to 127.0.0.1:${CONSOLE_PORT} (private-only)"
+  else
+    fail "Console may be bound to a public address — verify manually"
+  fi
+else
+  pass "Port check unavailable (console bind check skipped)"
+fi
+
+# --- JSON Output ---
+DOCTOR_TIMESTAMP="$(date -u +%Y%m%d_%H%M%S)"
+DOCTOR_JSON_DIR="$ROOT_DIR/artifacts/doctor/${DOCTOR_TIMESTAMP}"
+mkdir -p "$DOCTOR_JSON_DIR" 2>/dev/null || true
+
+python3 - "$DOCTOR_JSON_DIR/doctor.json" "$CHECKS" "$FAILURES" "$(hostname 2>/dev/null || echo unknown)" <<'PYEOF'
+import json, sys
+from datetime import datetime, timezone
+out_file = sys.argv[1]
+checks = int(sys.argv[2])
+failures = int(sys.argv[3])
+hostname = sys.argv[4]
+result = {
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "hostname": hostname,
+    "result": "PASS" if failures == 0 else "FAIL",
+    "checks_total": checks,
+    "checks_passed": checks - failures,
+    "checks_failed": failures
+}
+with open(out_file, "w") as f:
+    json.dump(result, f, indent=2)
+PYEOF
+
 # --- Summary ---
 echo ""
 echo "=== Doctor Summary: $((CHECKS - FAILURES))/$CHECKS passed ==="
+echo "  JSON: $DOCTOR_JSON_DIR/doctor.json"
 if [ "$FAILURES" -gt 0 ]; then
   echo "FAIL: $FAILURES check(s) failed. See above for details." >&2
+  # Send notification on failure (if available)
+  if [ -x "$SCRIPT_DIR/openclaw_notify.sh" ] && [ "${OPENCLAW_DOCTOR_NOTIFY:-0}" = "1" ]; then
+    "$SCRIPT_DIR/openclaw_notify.sh" \
+      --priority high \
+      --title "OpenClaw Doctor" \
+      --rate-key "doctor_fail" \
+      "[$(hostname 2>/dev/null || echo unknown)] $FAILURES check(s) failed — run ./ops/openclaw_doctor.sh for details" 2>/dev/null || true
+  fi
   exit 1
 fi
 echo "All checks passed."

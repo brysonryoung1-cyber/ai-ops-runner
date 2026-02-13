@@ -1,16 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
 import { executeAction, checkConnectivity } from "@/lib/ssh";
+import { acquireLock, releaseLock } from "@/lib/action-lock";
+import {
+  writeAuditEntry,
+  deriveActor,
+  hashParams,
+} from "@/lib/audit";
 
 /**
  * Compute allowed origins dynamically based on configured port.
  * Supports OPENCLAW_CONSOLE_PORT env var (default 8787).
+ * Also allows Tailscale HTTPS origins for VPS access via phone.
  */
 function getAllowedOrigins(): Set<string> {
   const port = process.env.OPENCLAW_CONSOLE_PORT || process.env.PORT || "8787";
-  return new Set([
+  const origins = new Set([
     `http://127.0.0.1:${port}`,
     `http://localhost:${port}`,
   ]);
+  // Allow Tailscale serve HTTPS origin if configured
+  const tsHostname = process.env.OPENCLAW_TAILSCALE_HOSTNAME;
+  if (tsHostname) {
+    origins.add(`https://${tsHostname}`);
+  }
+  return origins;
 }
 
 /**
@@ -57,6 +70,8 @@ function validateOrigin(req: NextRequest): NextResponse | null {
  *  1. Token auth (middleware — X-OpenClaw-Token header)
  *  2. Origin validation (CSRF — this handler)
  *  3. Command allowlist (ssh.ts / allowlist.ts)
+ *  4. Action lock (prevents overlapping execution)
+ *  5. Audit log (durable entry for every action)
  */
 export async function POST(req: NextRequest) {
   // CSRF: reject cross-origin or missing-origin requests
@@ -73,27 +88,66 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  try {
-    const actionName = body?.action;
+  const actionName = body?.action;
+  if (!actionName || typeof actionName !== "string") {
+    return NextResponse.json(
+      { ok: false, error: 'Missing or invalid "action" field.' },
+      { status: 400 }
+    );
+  }
 
-    if (!actionName || typeof actionName !== "string") {
-      return NextResponse.json(
-        { ok: false, error: 'Missing or invalid "action" field.' },
-        { status: 400 }
-      );
-    }
-
-    // executeAction validates the allowlist internally (fail-closed)
-    const result = await executeAction(actionName);
-    return NextResponse.json(result, { status: result.ok ? 200 : 502 });
-  } catch (err) {
+  // Action lock — prevent overlapping execution
+  if (!acquireLock(actionName)) {
     return NextResponse.json(
       {
         ok: false,
-        error: `Internal error: ${err instanceof Error ? err.message : String(err)}`,
+        error: `Action "${actionName}" is already running. Wait for it to complete.`,
       },
+      { status: 409 }
+    );
+  }
+
+  const actor = deriveActor(req.headers.get("x-openclaw-token"));
+  const params = { action: actionName };
+  const startTime = Date.now();
+
+  try {
+    // executeAction validates the allowlist internally (fail-closed)
+    const result = await executeAction(actionName);
+
+    // Write audit entry
+    writeAuditEntry({
+      timestamp: new Date().toISOString(),
+      actor,
+      action_name: actionName,
+      params_hash: hashParams(params),
+      exit_code: result.exitCode,
+      duration_ms: result.durationMs,
+      error: result.error,
+    });
+
+    return NextResponse.json(result, { status: result.ok ? 200 : 502 });
+  } catch (err) {
+    const duration_ms = Date.now() - startTime;
+    const errorMsg = err instanceof Error ? err.message : String(err);
+
+    // Audit the failure
+    writeAuditEntry({
+      timestamp: new Date().toISOString(),
+      actor,
+      action_name: actionName,
+      params_hash: hashParams(params),
+      exit_code: null,
+      duration_ms,
+      error: errorMsg,
+    });
+
+    return NextResponse.json(
+      { ok: false, error: `Internal error: ${errorMsg}` },
       { status: 500 }
     );
+  } finally {
+    releaseLock(actionName);
   }
 }
 
