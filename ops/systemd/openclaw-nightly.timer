@@ -1,0 +1,10 @@
+[Unit]
+Description=OpenClaw nightly timer (02:00 local server time)
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

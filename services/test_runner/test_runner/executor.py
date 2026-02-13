@@ -85,11 +85,12 @@ def execute_job(job: JobRecord) -> JobRecord:
                 )
                 log.info("Set core.hooksPath=.githooks for job %s", job.job_id)
             except subprocess.CalledProcessError as exc:
-                log.warning(
-                    "Failed to set core.hooksPath for job %s: %s",
+                log.error(
+                    "Failed to set core.hooksPath for job %s (fail-closed): %s",
                     job.job_id,
                     exc.stderr.strip() if exc.stderr else str(exc),
                 )
+                raise  # Fail-closed: job setup steps must succeed
 
         # 3. Make worktree read-only (preserve execute bits)
         make_readonly(worktree_path)

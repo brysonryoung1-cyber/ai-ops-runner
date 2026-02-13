@@ -1,0 +1,4 @@
+# Host-side ops dependencies (not for the Docker container).
+# Install once on macOS / Linux dev machines and the VPS:
+#   pip install -r requirements-ops.txt
+keyring>=25.0.0

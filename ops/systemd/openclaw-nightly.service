@@ -1,0 +1,12 @@
+[Unit]
+Description=OpenClaw nightly ORB analysis driver
+After=ai-ops-runner.service
+Requires=ai-ops-runner.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai-ops-runner
+Environment=API_BASE=http://127.0.0.1:8000
+Environment=ORB_REMOTE_URL=git@github.com:brysonryoung1-cyber/algo-nt8-orb.git
+ExecStart=/bin/bash /opt/ai-ops-runner/ops/openclaw_nightly.sh
+TimeoutStartSec=1500

@@ -1,0 +1,46 @@
+---
+# OpenClaw V1 — Project Registry
+#
+# Each project defines which lanes are active and what repos/platforms to target.
+# Projects here are referenced by openclaw_nightly.sh to determine which jobs
+# to submit each night.
+
+projects:
+  # --- Active: ORB analysis (read-only) ---
+  algo-nt8-orb:
+    description: "NinjaTrader 8 algorithmic trading ORB strategy"
+    lanes:
+      - orb
+    repo:
+      url: "git@github.com:brysonryoung1-cyber/algo-nt8-orb.git"
+      default_branch: main
+    jobs:
+      - orb_doctor
+      - orb_review_bundle
+    schedule: nightly
+
+  # --- Placeholder: Content lane (V2) ---
+  soraworld:
+    description: "SoraWorld content generation and publishing"
+    lanes:
+      - content
+    platform:
+      type: youtube
+      account: soraworld
+      # Publishing is NOT implemented in V1.
+      # This placeholder defines the project for future content pipeline.
+    jobs: []
+    schedule: nightly
+    enabled: false
+
+  ai-asmr:
+    description: "AI-ASMR content generation and publishing"
+    lanes:
+      - content
+    platform:
+      type: youtube
+      account: ai-asmr
+      # Publishing is NOT implemented in V1.
+    jobs: []
+    schedule: nightly
+    enabled: false

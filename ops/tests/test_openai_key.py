@@ -4,17 +4,17 @@ Tests verify:
   - Key from env var works
   - Key never appears in stderr
   - Fail-closed when key missing on all platforms
-  - macOS Keychain lookup/store (mocked subprocess)
-  - Store uses stdin piping — secret NEVER in subprocess argv (argv-leak guard)
+  - keyring-based key retrieval/storage (mocked keyring)
+  - Key is NEVER passed via subprocess argv (no subprocess for keyring ops)
   - Linux secrets file (mocked)
-  - Interactive prompt stores to Keychain (mocked)
+  - Interactive prompt stores to keyring (mocked)
+  - --emit-env mode (output guard)
 """
 
 import importlib.util
 import os
 import subprocess
 import sys
-import textwrap
 from pathlib import Path
 from unittest import mock
 
@@ -37,6 +37,7 @@ FAKE_KEY = "sk-test-FAKE-000000000000000000000000000000000000"
 # Env-var path
 # ===========================================================================
 
+
 class TestEnvVar:
     def test_returns_key_from_env(self):
         with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_KEY}):
@@ -56,128 +57,99 @@ class TestEnvVar:
 
 
 # ===========================================================================
-# macOS Keychain (mocked subprocess)
+# keyring (mocked — never calls real Keychain / SecretService)
 # ===========================================================================
 
-class TestKeychainLookup:
-    def test_found_in_keychain(self):
-        fake_result = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout=f"  {FAKE_KEY}  \n", stderr=""
-        )
-        with mock.patch("subprocess.run", return_value=fake_result) as m:
-            result = openai_key.get_from_keychain()
-            assert result == FAKE_KEY
-            m.assert_called_once()
 
-    def test_not_found_in_keychain(self):
-        fake_result = subprocess.CompletedProcess(
-            args=[], returncode=44, stdout="", stderr="not found"
-        )
-        with mock.patch("subprocess.run", return_value=fake_result):
-            assert openai_key.get_from_keychain() is None
+class TestKeyringLookup:
+    def test_found_in_keyring(self):
+        with mock.patch.object(openai_key, "_HAS_KEYRING", True):
+            with mock.patch.object(openai_key, "keyring") as mock_kr:
+                mock_kr.get_password.return_value = f"  {FAKE_KEY}  \n"
+                result = openai_key.get_from_keyring()
+                assert result == FAKE_KEY
+                mock_kr.get_password.assert_called_once_with(
+                    openai_key.SERVICE_NAME, openai_key.ACCOUNT_NAME
+                )
 
-    def test_keychain_timeout(self):
-        with mock.patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="", timeout=10)):
-            assert openai_key.get_from_keychain() is None
+    def test_not_found_in_keyring(self):
+        with mock.patch.object(openai_key, "_HAS_KEYRING", True):
+            with mock.patch.object(openai_key, "keyring") as mock_kr:
+                mock_kr.get_password.return_value = None
+                assert openai_key.get_from_keyring() is None
 
-    def test_keychain_not_available(self):
-        with mock.patch("subprocess.run", side_effect=FileNotFoundError):
-            assert openai_key.get_from_keychain() is None
+    def test_keyring_exception(self):
+        with mock.patch.object(openai_key, "_HAS_KEYRING", True):
+            with mock.patch.object(openai_key, "keyring") as mock_kr:
+                mock_kr.get_password.side_effect = Exception("backend error")
+                assert openai_key.get_from_keyring() is None
+
+    def test_keyring_not_available(self):
+        with mock.patch.object(openai_key, "_HAS_KEYRING", False):
+            assert openai_key.get_from_keyring() is None
 
 
-class TestKeychainStore:
+class TestKeyringStore:
     def test_store_succeeds(self):
-        fake_ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-        with mock.patch("subprocess.run", return_value=fake_ok):
-            assert openai_key.store_in_keychain(FAKE_KEY) is True
+        with mock.patch.object(openai_key, "_HAS_KEYRING", True):
+            with mock.patch.object(openai_key, "keyring") as mock_kr:
+                assert openai_key.store_in_keyring(FAKE_KEY) is True
+                mock_kr.set_password.assert_called_once_with(
+                    openai_key.SERVICE_NAME, openai_key.ACCOUNT_NAME, FAKE_KEY
+                )
 
     def test_store_fails(self):
-        fake_err = subprocess.CompletedProcess(
-            args=[], returncode=1, stdout="", stderr="error"
-        )
-        with mock.patch("subprocess.run", return_value=fake_err):
-            assert openai_key.store_in_keychain(FAKE_KEY) is False
+        with mock.patch.object(openai_key, "_HAS_KEYRING", True):
+            with mock.patch.object(openai_key, "keyring") as mock_kr:
+                mock_kr.set_password.side_effect = Exception("write error")
+                assert openai_key.store_in_keyring(FAKE_KEY) is False
 
-    def test_store_passes_secret_via_stdin_not_argv(self):
-        """The secret must be piped via stdin (input=), NEVER in argv."""
-        calls = []
-
-        def capture_run(cmd, **kwargs):
-            calls.append((list(cmd), kwargs))
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
-
-        with mock.patch("subprocess.run", side_effect=capture_run):
-            openai_key.store_in_keychain(FAKE_KEY)
-
-        # Find the add-generic-password call
-        add_calls = [
-            (cmd, kw) for cmd, kw in calls
-            if "add-generic-password" in cmd
-        ]
-        assert len(add_calls) == 1, f"Expected 1 add call, got {len(add_calls)}"
-        cmd, kwargs = add_calls[0]
-
-        # Secret must NOT appear anywhere in argv
-        for arg in cmd:
-            assert FAKE_KEY not in arg, (
-                f"Secret leaked into subprocess argv: {cmd}"
-            )
-
-        # Secret must be passed via input= (stdin)
-        assert "input" in kwargs, "Secret not passed via stdin"
-        assert FAKE_KEY in kwargs["input"], "Secret not found in stdin input"
+    def test_store_without_keyring(self):
+        with mock.patch.object(openai_key, "_HAS_KEYRING", False):
+            assert openai_key.store_in_keyring(FAKE_KEY) is False
 
 
 # ===========================================================================
-# Argv-leak guard: secret must NEVER appear in subprocess arguments
+# No-subprocess guard: keyring ops must NEVER spawn subprocesses
 # ===========================================================================
 
-class TestNoArgvLeak:
-    """Ensure keychain operations never pass the secret via subprocess argv."""
 
-    def test_get_keychain_argv_never_contains_secret(self):
-        """get_from_keychain never puts the secret in args (it reads from stdout)."""
-        fake_result = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout=FAKE_KEY, stderr=""
-        )
-        with mock.patch("subprocess.run", return_value=fake_result) as m:
-            openai_key.get_from_keychain()
-            for call in m.call_args_list:
-                argv = call[0][0] if call[0] else []
-                for arg in argv:
-                    assert FAKE_KEY not in str(arg), (
-                        f"Secret found in get_from_keychain argv: {argv}"
-                    )
+class TestNoSubprocessForKeyring:
+    """Ensure keyring operations never use subprocess (no argv leak possible)."""
 
-    def test_store_keychain_argv_never_contains_secret(self):
-        """store_in_keychain passes the secret via stdin, not argv."""
-        fake_ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-        with mock.patch("subprocess.run", return_value=fake_ok) as m:
-            openai_key.store_in_keychain(FAKE_KEY)
-            for call in m.call_args_list:
-                argv = call[0][0] if call[0] else []
-                for arg in argv:
-                    assert FAKE_KEY not in str(arg), (
-                        f"Secret found in store_in_keychain argv: {argv}"
-                    )
+    def test_get_keyring_no_subprocess(self):
+        with mock.patch.object(openai_key, "_HAS_KEYRING", True):
+            with mock.patch.object(openai_key, "keyring") as mock_kr:
+                mock_kr.get_password.return_value = FAKE_KEY
+                with mock.patch("subprocess.run") as mock_run:
+                    openai_key.get_from_keyring()
+                    mock_run.assert_not_called()
+
+    def test_store_keyring_no_subprocess(self):
+        with mock.patch.object(openai_key, "_HAS_KEYRING", True):
+            with mock.patch.object(openai_key, "keyring") as mock_kr:
+                with mock.patch("subprocess.run") as mock_run:
+                    openai_key.store_in_keyring(FAKE_KEY)
+                    mock_run.assert_not_called()
 
     def test_e2e_no_subprocess_argv_contains_secret(self):
-        """End-to-end: run main() on macOS and verify no subprocess call
-        ever receives the secret in argv."""
-        fake_ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-
+        """End-to-end: resolve_key on macOS, verify no subprocess leaks."""
         with mock.patch.dict(os.environ, {}, clear=True):
             with mock.patch("platform.system", return_value="Darwin"):
                 with mock.patch.object(
-                    openai_key, "get_from_keychain", return_value=None
+                    openai_key, "get_from_keyring", return_value=None
                 ):
                     with mock.patch.object(
                         openai_key, "prompt_and_store", return_value=FAKE_KEY
                     ):
-                        with mock.patch("subprocess.run", return_value=fake_ok) as m:
+                        with mock.patch("subprocess.run") as mock_run:
                             openai_key.main()
-                            for call in m.call_args_list:
-                                argv = call[0][0] if call[0] else call[1].get("args", [])
+                            for call in mock_run.call_args_list:
+                                argv = (
+                                    call[0][0]
+                                    if call[0]
+                                    else call[1].get("args", [])
+                                )
                                 for arg in argv:
                                     assert FAKE_KEY not in str(arg), (
                                         f"Secret found in subprocess argv: {argv}"
@@ -187,6 +159,7 @@ class TestNoArgvLeak:
 # ===========================================================================
 # Linux secrets file (mocked)
 # ===========================================================================
+
 
 class TestLinuxFile:
     def test_reads_key_from_file(self, tmp_path):
@@ -219,6 +192,7 @@ class TestLinuxFile:
 # main() integration (mocked platform)
 # ===========================================================================
 
+
 class TestMainEnvPath:
     """main() should return 0 and print key when env var is set."""
 
@@ -235,37 +209,37 @@ class TestMainEnvPath:
 
 
 class TestMainDarwin:
-    """main() on macOS with mocked Keychain."""
+    """main() on macOS with mocked keyring."""
 
-    def test_keychain_hit(self, capsys):
+    def test_keyring_hit(self, capsys):
         with mock.patch.dict(os.environ, {}, clear=True):
             with mock.patch("platform.system", return_value="Darwin"):
                 with mock.patch.object(openai_key, "get_from_env", return_value=None):
                     with mock.patch.object(
-                        openai_key, "get_from_keychain", return_value=FAKE_KEY
+                        openai_key, "get_from_keyring", return_value=FAKE_KEY
                     ):
                         rc = openai_key.main()
         assert rc == 0
         assert capsys.readouterr().out.strip() == FAKE_KEY
 
-    def test_keychain_miss_no_tty_fails(self, capsys):
+    def test_keyring_miss_no_tty_fails(self, capsys):
         with mock.patch.dict(os.environ, {}, clear=True):
             with mock.patch("platform.system", return_value="Darwin"):
                 with mock.patch.object(openai_key, "get_from_env", return_value=None):
                     with mock.patch.object(
-                        openai_key, "get_from_keychain", return_value=None
+                        openai_key, "get_from_keyring", return_value=None
                     ):
                         with mock.patch("sys.stdin") as mock_stdin:
                             mock_stdin.isatty.return_value = False
                             rc = openai_key.main()
         assert rc == 1
 
-    def test_keychain_miss_prompt_stores(self, capsys):
+    def test_keyring_miss_prompt_stores(self, capsys):
         with mock.patch.dict(os.environ, {}, clear=True):
             with mock.patch("platform.system", return_value="Darwin"):
                 with mock.patch.object(openai_key, "get_from_env", return_value=None):
                     with mock.patch.object(
-                        openai_key, "get_from_keychain", return_value=None
+                        openai_key, "get_from_keyring", return_value=None
                     ):
                         with mock.patch.object(
                             openai_key, "prompt_and_store", return_value=FAKE_KEY
@@ -276,16 +250,33 @@ class TestMainDarwin:
 
 
 class TestMainLinux:
-    """main() on Linux with mocked secrets file."""
+    """main() on Linux with mocked secrets file + keyring."""
+
+    def test_keyring_hit_linux(self, capsys):
+        """keyring is checked before the file on Linux too."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch("platform.system", return_value="Linux"):
+                with mock.patch.object(openai_key, "get_from_env", return_value=None):
+                    with mock.patch.object(
+                        openai_key, "get_from_keyring", return_value=FAKE_KEY
+                    ):
+                        rc = openai_key.main()
+        assert rc == 0
+        assert capsys.readouterr().out.strip() == FAKE_KEY
 
     def test_file_hit(self, capsys):
         with mock.patch.dict(os.environ, {}, clear=True):
             with mock.patch("platform.system", return_value="Linux"):
                 with mock.patch.object(openai_key, "get_from_env", return_value=None):
                     with mock.patch.object(
-                        openai_key, "get_from_linux_file", return_value=FAKE_KEY
+                        openai_key, "get_from_keyring", return_value=None
                     ):
-                        rc = openai_key.main()
+                        with mock.patch.object(
+                            openai_key,
+                            "get_from_linux_file",
+                            return_value=FAKE_KEY,
+                        ):
+                            rc = openai_key.main()
         assert rc == 0
         assert capsys.readouterr().out.strip() == FAKE_KEY
 
@@ -294,9 +285,12 @@ class TestMainLinux:
             with mock.patch("platform.system", return_value="Linux"):
                 with mock.patch.object(openai_key, "get_from_env", return_value=None):
                     with mock.patch.object(
-                        openai_key, "get_from_linux_file", return_value=None
+                        openai_key, "get_from_keyring", return_value=None
                     ):
-                        rc = openai_key.main()
+                        with mock.patch.object(
+                            openai_key, "get_from_linux_file", return_value=None
+                        ):
+                            rc = openai_key.main()
         assert rc == 1
         captured = capsys.readouterr()
         # Must NOT print the key to stdout on failure
@@ -309,9 +303,12 @@ class TestMainLinux:
             with mock.patch("platform.system", return_value="Linux"):
                 with mock.patch.object(openai_key, "get_from_env", return_value=None):
                     with mock.patch.object(
-                        openai_key, "get_from_linux_file", return_value=None
+                        openai_key, "get_from_keyring", return_value=None
                     ):
-                        openai_key.main()
+                        with mock.patch.object(
+                            openai_key, "get_from_linux_file", return_value=None
+                        ):
+                            openai_key.main()
         assert FAKE_KEY not in capsys.readouterr().err
 
 
@@ -326,8 +323,33 @@ class TestMainUnsupportedPlatform:
 
 
 # ===========================================================================
+# --emit-env mode
+# ===========================================================================
+
+
+class TestEmitEnv:
+    """Test --emit-env output guard."""
+
+    def test_emit_env_tty_refused(self, capsys):
+        """--emit-env is refused when stdout is a TTY."""
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_KEY}):
+            with mock.patch.object(sys.stdout, "isatty", return_value=True):
+                rc = openai_key.main(["--emit-env"])
+        assert rc == 1
+
+    def test_emit_env_non_tty_ok(self, capsys):
+        """--emit-env outputs export statement when stdout is not a TTY."""
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_KEY}):
+            with mock.patch.object(sys.stdout, "isatty", return_value=False):
+                rc = openai_key.main(["--emit-env"])
+        assert rc == 0
+        assert capsys.readouterr().out.strip() == f"export OPENAI_API_KEY={FAKE_KEY}"
+
+
+# ===========================================================================
 # End-to-end: subprocess invocation (no mocks)
 # ===========================================================================
+
 
 class TestSubprocessInvocation:
     """Run openai_key.py as a subprocess — closest to real usage."""
@@ -359,3 +381,16 @@ class TestSubprocessInvocation:
         assert result.stdout.strip() == ""
         # stderr must have diagnostic info
         assert len(result.stderr) > 0
+
+    def test_emit_env_e2e(self):
+        """--emit-env outputs 'export OPENAI_API_KEY=...' when captured."""
+        result = subprocess.run(
+            [sys.executable, str(KEY_SCRIPT), "--emit-env"],
+            env={**os.environ, "OPENAI_API_KEY": FAKE_KEY},
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0
+        assert result.stdout.strip() == f"export OPENAI_API_KEY={FAKE_KEY}"
+        assert FAKE_KEY not in result.stderr

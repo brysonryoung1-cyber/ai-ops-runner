@@ -1,0 +1,81 @@
+---
+# OpenClaw V1 — Global Policies
+#
+# Hard rules that apply to ALL tenants and projects.
+# Tenant-level policies can only be MORE restrictive, never less.
+
+# --- Network security ---
+network:
+  # No services may bind to 0.0.0.0 or [::] (public interfaces).
+  # openclaw_doctor.sh enforces this with ss -tlnp.
+  no_public_ports: true
+
+  # All remote access must be via Tailscale.
+  tailscale_only: true
+
+  # No inbound webhooks — all triggers are timer-based or manual.
+  no_inbound_webhooks: true
+
+# --- Lane policies ---
+lanes:
+  infra:
+    enabled: true
+    # Infrastructure checks run hourly via openclaw-doctor.timer.
+
+  orb:
+    enabled: true
+    # ORB analysis lane: read-only jobs against allowlisted repos.
+    # Rate limit: max 10 jobs per project per day.
+    max_jobs_per_project_per_day: 10
+
+  content:
+    enabled: false
+    # Content lane is disabled until V2.
+    # When enabled, publishing requires human approval.
+    require_approval_for_publish: true
+    # Rate limit: max 5 content items per project per day.
+    max_items_per_project_per_day: 5
+
+  browser:
+    enabled: false
+    # Browser lane is disabled until V3.
+    # When enabled, each task requires explicit approval.
+    require_approval_per_task: true
+    # Rate limit: max 20 browser actions per project per day.
+    max_actions_per_project_per_day: 20
+    # Session recording is mandatory.
+    record_sessions: true
+
+# --- Secrets policy ---
+secrets:
+  # Secret files must be mode 600.
+  required_file_mode: "0600"
+
+  # Per-tenant secrets directory pattern.
+  # Each tenant's secrets are isolated at this path.
+  tenant_secrets_path: "/etc/ai-ops-runner/tenants/{tenant_id}/secrets"
+
+  # API keys must never appear in:
+  #   - Process arguments (ps-visible)
+  #   - Log output
+  #   - Shell history
+  #   - Git commits
+  key_leak_prevention: strict
+
+# --- Rate limits (global ceiling) ---
+rate_limits:
+  # Max total jobs across all tenants per hour.
+  global_max_jobs_per_hour: 50
+
+  # Max total API calls to external services per hour.
+  global_max_api_calls_per_hour: 200
+
+# --- Allowlists ---
+allowlists:
+  # Only these job types can be submitted via the runner API.
+  # Defined in configs/job_allowlist.yaml (source of truth).
+  job_types_source: "configs/job_allowlist.yaml"
+
+  # Only these repos can be targeted by ORB lane jobs.
+  # Defined in configs/repo_allowlist.yaml (source of truth).
+  repo_source: "configs/repo_allowlist.yaml"

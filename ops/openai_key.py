@@ -2,26 +2,48 @@
 """Securely load OPENAI_API_KEY from platform-appropriate sources.
 
 Resolution order:
-  1. Environment variable (already set) — exit immediately.
-  2. macOS Keychain (service: ai-ops-runner-openai).
+  1. Environment variable (already set) -- exit immediately.
+  2. Python keyring (macOS Keychain backend / Linux SecretService).
   3. Linux secrets file (/etc/ai-ops-runner/secrets/openai_api_key).
-  4. macOS-only: interactive prompt via getpass → store in Keychain.
+  4. Interactive prompt via getpass -> store in keyring (macOS only, TTY required).
 
-On success: prints the key to stdout (for shell capture via $()).
-On failure: prints diagnostics to stderr and exits non-zero (fail-closed).
+Modes:
+  Default:    prints key to stdout for shell capture via $().
+  --emit-env: prints "export OPENAI_API_KEY=..." (only when stdout is NOT a TTY).
 
-NEVER prints the key to stderr. All human-readable messages go to stderr.
+Security guarantees:
+  - The key NEVER appears in subprocess arguments, /proc, ps output, or logs.
+  - All keyring operations use the Python keyring library (no security CLI calls).
+  - All human-readable messages go to stderr. The key is NEVER written to stderr.
+  - Fail-closed: exits non-zero if key cannot be obtained.
 """
 
+import argparse
 import getpass
 import os
 import platform
-import subprocess
+import queue as _queue
 import sys
+import threading as _threading
 
 SERVICE_NAME = "ai-ops-runner-openai"
 ACCOUNT_NAME = "openai_api_key"
 LINUX_SECRET_PATH = "/etc/ai-ops-runner/secrets/openai_api_key"
+_KEYRING_TIMEOUT = 5  # seconds — prevents hang on locked Keychain dialogs
+
+# ---------------------------------------------------------------------------
+# Keyring import — required for macOS, optional for Linux headless servers
+# ---------------------------------------------------------------------------
+try:
+    import keyring as _keyring_mod
+
+    _HAS_KEYRING = True
+except ImportError:
+    _keyring_mod = None  # type: ignore[assignment]
+    _HAS_KEYRING = False
+
+# Expose as module-level attribute so tests can mock it with patch.object
+keyring = _keyring_mod
 
 
 def _err(msg: str) -> None:
@@ -36,91 +58,89 @@ def _info(msg: str) -> None:
 # Source 1: Environment variable
 # ---------------------------------------------------------------------------
 
+
 def get_from_env() -> "str | None":
     key = os.environ.get("OPENAI_API_KEY", "").strip()
     return key if key else None
 
 
 # ---------------------------------------------------------------------------
-# Source 2: macOS Keychain
+# Source 2: Python keyring (macOS Keychain / Linux SecretService)
 # ---------------------------------------------------------------------------
 
-def get_from_keychain() -> "str | None":
-    """Retrieve from macOS Keychain via `security find-generic-password`.
 
-    The secret is NOT passed as an argv argument — it is returned in
-    stdout.  Safe from credential-leak via /proc or `ps`.
-    Returns None if not found.
+def _run_with_timeout(fn, *args, timeout=_KEYRING_TIMEOUT):
+    """Run *fn* in a daemon thread with a timeout.
+
+    Uses a daemon thread so the Python process can exit even if the
+    underlying call is blocked (e.g., macOS Keychain dialog).
     """
+    q: _queue.Queue = _queue.Queue()
+
+    def _worker() -> None:
+        try:
+            q.put(("ok", fn(*args)))
+        except Exception as exc:
+            q.put(("err", exc))
+
+    t = _threading.Thread(target=_worker, daemon=True)
+    t.start()
     try:
-        result = subprocess.run(
-            [
-                "security", "find-generic-password",
-                "-s", SERVICE_NAME,
-                "-a", ACCOUNT_NAME,
-                "-w",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0:
-            key = result.stdout.strip()
-            return key if key else None
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        status, value = q.get(timeout=timeout)
+    except _queue.Empty:
+        raise TimeoutError(f"Operation timed out after {timeout}s")
+    if status == "err":
+        raise value  # type: ignore[misc]
+    return value
+
+
+def get_from_keyring() -> "str | None":
+    """Retrieve from system keyring.
+
+    On macOS this uses the Keychain backend.  On Linux it uses
+    SecretService (gnome-keyring / KWallet) when available.
+
+    No subprocess calls — the secret NEVER appears in argv or /proc.
+    A timeout guard (daemon thread) prevents hangs when the Keychain
+    is locked and a system dialog would block the process.
+    Returns None if not found, keyring unavailable, or any error/timeout.
+    """
+    if not _HAS_KEYRING:
+        return None
+    try:
+        key = _run_with_timeout(keyring.get_password, SERVICE_NAME, ACCOUNT_NAME)
+        if key:
+            return key.strip()
+    except Exception:
         pass
     return None
 
 
-def store_in_keychain(key: str) -> bool:
-    """Store key in macOS Keychain — secret piped via stdin, never in argv.
+def store_in_keyring(key: str) -> bool:
+    """Store key in system keyring.
 
-    Uses `security add-generic-password … -w` (no trailing value) which
-    reads the password from stdin instead of from the command line.
-    This prevents the secret from appearing in process arguments
-    (visible via `ps` or /proc/*/cmdline).
+    Uses the Python keyring library — secret NEVER appears in
+    process arguments, /proc, or ``ps`` output.
+    A timeout guard (daemon thread) prevents hangs on locked Keychain dialogs.
     """
-    # Remove existing entry (ignore errors if absent)
+    if not _HAS_KEYRING:
+        _err("keyring library not available. Install: pip install keyring")
+        return False
     try:
-        subprocess.run(
-            [
-                "security", "delete-generic-password",
-                "-s", SERVICE_NAME,
-                "-a", ACCOUNT_NAME,
-            ],
-            capture_output=True,
-            timeout=10,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        pass
-
-    try:
-        # -w at end (no value) → reads password from stdin.
-        # Sent twice because security prompts for confirmation.
-        result = subprocess.run(
-            [
-                "security", "add-generic-password",
-                "-s", SERVICE_NAME,
-                "-a", ACCOUNT_NAME,
-                "-w",
-            ],
-            input=f"{key}\n{key}\n",
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            _err(f"Keychain add-generic-password failed: {result.stderr.strip()}")
-            return False
+        _run_with_timeout(keyring.set_password, SERVICE_NAME, ACCOUNT_NAME, key)
         return True
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-        _err(f"Keychain storage failed: {exc}")
+    except TimeoutError:
+        _err("keyring storage timed out (Keychain locked?)")
+        return False
+    except Exception as exc:
+        _err(f"keyring storage failed: {exc}")
         return False
 
 
 # ---------------------------------------------------------------------------
 # Source 3: Linux secrets file
 # ---------------------------------------------------------------------------
+
 
 def get_from_linux_file() -> "str | None":
     """Read from /etc/ai-ops-runner/secrets/openai_api_key."""
@@ -145,8 +165,9 @@ def get_from_linux_file() -> "str | None":
 # Interactive prompt (macOS only, TTY required)
 # ---------------------------------------------------------------------------
 
+
 def prompt_and_store() -> "str | None":
-    """Prompt user via getpass, validate, store in Keychain."""
+    """Prompt user via getpass, validate, store in keyring."""
     if not sys.stdin.isatty():
         _err("OPENAI_API_KEY not set and no TTY available for prompting.")
         _err("Run once interactively, or set OPENAI_API_KEY in your environment.")
@@ -155,7 +176,7 @@ def prompt_and_store() -> "str | None":
     _info("")
     _info("╔══════════════════════════════════════════════════════════╗")
     _info("║  One-time OpenAI API key setup                          ║")
-    _info("║  The key will be stored in macOS Keychain.              ║")
+    _info("║  The key will be stored in the system keyring.          ║")
     _info("║  You will not be asked again on this machine.           ║")
     _info("╚══════════════════════════════════════════════════════════╝")
     _info("")
@@ -176,51 +197,53 @@ def prompt_and_store() -> "str | None":
         _err("Key does not look like a valid OpenAI API key (expected sk-… prefix).")
         return None
 
-    if store_in_keychain(key):
-        _info(f"Key stored in macOS Keychain (service: {SERVICE_NAME}).")
+    if store_in_keyring(key):
+        _info(f"Key stored in system keyring (service: {SERVICE_NAME}).")
         _info("Future runs will load it automatically — no manual export needed.")
     else:
-        _info("WARNING: Key NOT stored in Keychain. It will work for this session only.")
+        _info("WARNING: Key NOT stored in keyring. It will work for this session only.")
 
     return key
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Key resolution (single function for all platforms)
 # ---------------------------------------------------------------------------
 
-def main() -> int:
+
+def resolve_key() -> "str | None":
+    """Resolve key from all sources in priority order.  Returns key or None."""
     # 1. Environment variable — instant path
     key = get_from_env()
     if key:
-        print(key)
-        return 0
+        return key
 
     system = platform.system()
 
     if system == "Darwin":
-        # 2. macOS Keychain
-        key = get_from_keychain()
+        # 2. keyring (macOS Keychain)
+        key = get_from_keyring()
         if key:
-            print(key)
-            return 0
+            return key
 
-        # 3. Interactive prompt → Keychain store
+        # 3. Interactive prompt -> keyring store
         key = prompt_and_store()
         if key:
-            print(key)
-            return 0
+            return key
 
-        # Fail-closed
         _err("Could not obtain OpenAI API key.")
-        return 1
+        return None
 
     elif system == "Linux":
-        # 2. Linux secrets file
+        # 2. keyring (if SecretService available on desktop Linux)
+        key = get_from_keyring()
+        if key:
+            return key
+
+        # 3. Linux secrets file
         key = get_from_linux_file()
         if key:
-            print(key)
-            return 0
+            return key
 
         # Fail-closed with setup instructions
         _err("OPENAI_API_KEY not found.")
@@ -238,13 +261,61 @@ def main() -> int:
         )
         _err("")
         _err("Never paste your API key into chat. Only enter it directly on the machine.")
-        return 1
+        return None
 
     else:
         _err(f"Unsupported platform: {system}")
         _err("Set OPENAI_API_KEY environment variable manually.")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    """Entry point.
+
+    Parameters
+    ----------
+    argv : list[str] | None
+        Command-line arguments.  ``None`` → default (no flags).
+        When invoked via ``__main__``, ``sys.argv[1:]`` is passed explicitly.
+    """
+    parser = argparse.ArgumentParser(
+        description="Securely load OPENAI_API_KEY",
+    )
+    parser.add_argument(
+        "--emit-env",
+        action="store_true",
+        help=(
+            "Print 'export OPENAI_API_KEY=...' to stdout. "
+            "Refused when stdout is a TTY (safety guard)."
+        ),
+    )
+    args = parser.parse_args([] if argv is None else argv)
+
+    key = resolve_key()
+    if not key:
         return 1
+
+    if args.emit_env:
+        # --emit-env: only safe when stdout is piped (not visible in terminal)
+        if sys.stdout.isatty():
+            _err(
+                "--emit-env refused: stdout is a TTY. "
+                'Use: eval "$(python3 openai_key.py --emit-env)"'
+            )
+            return 1
+        print(f"export OPENAI_API_KEY={key}")
+    else:
+        # Default mode: print key for shell capture via $()
+        # (stdout is a pipe when captured — key is not visible to humans)
+        print(key)
+
+    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))
