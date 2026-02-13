@@ -8,17 +8,19 @@
 #   1. Determines the Tailscale IPv4 address.
 #   2. Disables/masks ALL plausible socket-activation units:
 #      ssh.socket, sshd.socket, and any templated ssh@*.socket.
+#      Runs daemon-reload and verifies sockets are dead.
 #   3. Detects whether the active daemon unit is ssh.service or sshd.service.
-#   4. Scans /etc/ssh/sshd_config and /etc/ssh/sshd_config.d/*.conf for
+#   4. Ensures sshd_config has Include directive for sshd_config.d/.
+#      Scans /etc/ssh/sshd_config and /etc/ssh/sshd_config.d/*.conf for
 #      conflicting ListenAddress / AddressFamily directives and comments them
 #      out (with timestamped backup).
 #   5. Writes /etc/ssh/sshd_config.d/99-tailscale-only.conf:
 #        AddressFamily inet
 #        ListenAddress <TAILSCALE_IP>
-#   6. Validates with: sshd -t + sshd -T + ss -lntp
+#   6. Validates with: sshd -t + sshd -T (effective config must match).
 #   7. If validation fails, restores backups and restarts service (safe rollback).
 #   8. Restarts the detected sshd service unit.
-#   9. Post-restart verification — fail-closed if any public bind remains.
+#   9. Post-restart verification with ss — fail-closed if any public bind remains.
 #
 # Test mode: set OPENCLAW_TEST_ROOT to a temp dir to run without root
 #            (stubs systemctl/tailscale/sshd/ss in PATH).
@@ -74,9 +76,14 @@ echo ""
 echo "--- Step 2: Disable socket-activation units ---"
 # When any ssh*.socket is active, systemd binds :22 on 0.0.0.0/[::] directly
 # and ignores sshd_config ListenAddress directives entirely.
+#
+# NOTE: We cache the unit list to avoid a SIGPIPE + pipefail interaction.
+# With `set -o pipefail`, piping directly to `grep -q` can return non-zero
+# if the writing process (systemctl) is killed by SIGPIPE before exit.
+_UNIT_LIST="$(systemctl list-unit-files 2>/dev/null || true)"
 SOCKET_DISABLED=0
 for unit_name in ssh.socket sshd.socket; do
-  if systemctl list-unit-files 2>/dev/null | grep -q "^${unit_name}"; then
+  if echo "$_UNIT_LIST" | grep -q "^${unit_name}"; then
     echo "  $unit_name found — disabling + masking"
     systemctl disable --now "$unit_name" 2>/dev/null || true
     systemctl stop "$unit_name" 2>/dev/null || true
@@ -85,7 +92,7 @@ for unit_name in ssh.socket sshd.socket; do
   fi
 done
 # Templated ssh@*.socket instances (e.g. ssh@22-100.100.50.1:22.socket)
-for unit_name in $(systemctl list-unit-files 2>/dev/null | grep -oE 'ssh@[^[:space:]]*\.socket' || true); do
+for unit_name in $(echo "$_UNIT_LIST" | grep -oE 'ssh@[^[:space:]]*\.socket' || true); do
   if [ -n "$unit_name" ]; then
     echo "  $unit_name (templated) found — disabling + masking"
     systemctl disable --now "$unit_name" 2>/dev/null || true
@@ -94,14 +101,26 @@ for unit_name in $(systemctl list-unit-files 2>/dev/null | grep -oE 'ssh@[^[:spa
     SOCKET_DISABLED=1
   fi
 done
-if [ "$SOCKET_DISABLED" -eq 0 ]; then
+if [ "$SOCKET_DISABLED" -eq 1 ]; then
+  # Reload systemd to pick up mask changes — without this, systemd may use
+  # cached socket state and the mask won't take effect before service restart.
+  echo "  Reloading systemd daemon..."
+  systemctl daemon-reload 2>/dev/null || true
+  # Verify socket units are actually dead after masking
+  for unit_name in ssh.socket sshd.socket; do
+    if systemctl is-active --quiet "$unit_name" 2>/dev/null; then
+      echo "  WARNING: $unit_name still active after mask — force-stopping" >&2
+      systemctl kill "$unit_name" 2>/dev/null || true
+    fi
+  done
+else
   echo "  No ssh*.socket units found — no action needed"
 fi
 
 # --- 2b. Detect and enable the active sshd service unit ---
 SSHD_UNIT=""
 for candidate in ssh.service sshd.service; do
-  if systemctl list-unit-files 2>/dev/null | grep -q "${candidate}"; then
+  if echo "$_UNIT_LIST" | grep -q "${candidate}"; then
     SSHD_UNIT="$candidate"
     break
   fi
@@ -148,6 +167,26 @@ rollback_and_exit() {
 # --- 3. Eliminate conflicting ListenAddress / AddressFamily directives ---
 echo ""
 echo "--- Step 3: Scan and fix conflicting ListenAddress / AddressFamily ---"
+BACKED_UP_ANY=false
+
+# 3a. Ensure sshd_config includes drop-in directory (critical: without this,
+#     the 99-tailscale-only.conf drop-in file is completely ignored by sshd).
+if [ -f "$SSHD_CONF_ROOT/sshd_config" ]; then
+  if ! grep -qiE '^\s*Include\s+/etc/ssh/sshd_config\.d/\*' "$SSHD_CONF_ROOT/sshd_config"; then
+    echo "  Include directive for sshd_config.d/ missing — adding"
+    mkdir -p "$BACKUP_DIR"
+    cp "$SSHD_CONF_ROOT/sshd_config" "$BACKUP_DIR/sshd_config"
+    _tmp_conf="$(mktemp)"
+    printf '# Added by openclaw — required for drop-in config to take effect\nInclude /etc/ssh/sshd_config.d/*.conf\n' > "$_tmp_conf"
+    cat "$SSHD_CONF_ROOT/sshd_config" >> "$_tmp_conf"
+    mv "$_tmp_conf" "$SSHD_CONF_ROOT/sshd_config"
+    chmod 644 "$SSHD_CONF_ROOT/sshd_config"
+  else
+    echo "  Include directive present in sshd_config"
+  fi
+fi
+
+# 3b. Build list of config files to scan for conflicts
 SCAN_FILES=""
 if [ -f "$SSHD_CONF_ROOT/sshd_config" ]; then
   SCAN_FILES="$SSHD_CONF_ROOT/sshd_config"
@@ -161,8 +200,6 @@ if [ -d "$SSHD_CONF_DIR" ]; then
     SCAN_FILES="$SCAN_FILES $_f"
   done
 fi
-
-BACKED_UP_ANY=false
 for conf_file in $SCAN_FILES; do
   [ -f "$conf_file" ] || continue
   # Check for conflicting directives
@@ -187,9 +224,11 @@ for conf_file in $SCAN_FILES; do
   done < "$conf_file"
 
   if [ "$HAS_CONFLICT" = "true" ]; then
-    # Create backup directory and save original
+    # Create backup directory and save original (skip if Include check already backed it up)
     mkdir -p "$BACKUP_DIR"
-    cp "$conf_file" "$BACKUP_DIR/$(basename "$conf_file")"
+    if [ ! -f "$BACKUP_DIR/$(basename "$conf_file")" ]; then
+      cp "$conf_file" "$BACKUP_DIR/$(basename "$conf_file")"
+    fi
     BACKED_UP_ANY=true
     echo "  Backed up: $conf_file"
     # Comment out conflicting directives (portable — no sed -i)
@@ -261,6 +300,28 @@ echo "$EFFECTIVE" | while IFS= read -r _line; do
   [ -n "$_line" ] && echo "    $_line"
 done
 
+# Validate effective ListenAddress — must contain ONLY TS_IP
+EFFECTIVE_LISTEN="$(echo "$EFFECTIVE" | grep -iE '^listenaddress\s' | awk '{print $2}' || true)"
+BAD_LISTEN=""
+while IFS= read -r _addr; do
+  [ -z "$_addr" ] && continue
+  # Strip port suffix if present (e.g., 100.100.50.1:22 → 100.100.50.1)
+  _addr_no_port="${_addr%:*}"
+  if [ "$_addr_no_port" != "$TS_IP" ]; then
+    BAD_LISTEN="${BAD_LISTEN} ${_addr}"
+  fi
+done <<< "$EFFECTIVE_LISTEN"
+if [ -n "$BAD_LISTEN" ]; then
+  echo "  Effective config has unexpected ListenAddress:$BAD_LISTEN" >&2
+  rollback_and_exit "Effective config has unexpected ListenAddress (expected only $TS_IP)"
+fi
+# Validate effective AddressFamily — must be inet
+EFFECTIVE_AF="$(echo "$EFFECTIVE" | grep -iE '^addressfamily\s' | awk '{print $2}' || true)"
+if [ -n "$EFFECTIVE_AF" ] && [ "$EFFECTIVE_AF" != "inet" ]; then
+  rollback_and_exit "Effective AddressFamily is '$EFFECTIVE_AF' (expected 'inet')"
+fi
+echo "  Effective config validated: ListenAddress=$TS_IP AddressFamily=inet"
+
 # --- 6. Restart sshd ---
 echo ""
 echo "--- Step 6: Restart sshd ($SSHD_UNIT) ---"
@@ -273,7 +334,7 @@ echo "  $SSHD_UNIT restarted"
 echo ""
 echo "--- Step 7: Verify ---"
 # Give sshd a moment to bind
-sleep 1
+sleep 2
 
 if command -v ss >/dev/null 2>&1; then
   SSH_BINDS="$(ss -lntp 2>/dev/null | grep ':22 ' || true)"

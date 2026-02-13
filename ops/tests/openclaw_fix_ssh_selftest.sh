@@ -89,6 +89,9 @@ case "\$1" in
     # Record the action
     echo "\$*" >> "\$STATE_FILE"
     ;;
+  daemon-reload)
+    echo "daemon-reload" >> "\$STATE_FILE"
+    ;;
   restart)
     echo "\$*" >> "\$STATE_FILE"
     ;;
@@ -96,7 +99,11 @@ case "\$1" in
     echo "active"
     ;;
   is-active)
-    echo "active"
+    # Socket units are dead after masking in test mode
+    exit 1
+    ;;
+  kill)
+    echo "kill \$*" >> "\$STATE_FILE"
     ;;
 esac
 exit 0
@@ -636,6 +643,194 @@ if [ -f "$SYSTEMCTL_STATE" ] && grep -q 'restart sshd.service' "$SYSTEMCTL_STATE
 else
   fail "sshd.service not restarted"
 fi
+
+# ---------------------------------------------------------------------------
+# Test 16: daemon-reload called after socket masking
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 16: daemon-reload after socket masking ---"
+rm -rf "$TEST_ROOT/etc"
+rm -f "$SYSTEMCTL_STATE"
+create_systemctl_stub "yes" "no" "no"
+
+OUTPUT="$(PATH="$STUB_BIN:$PATH" OPENCLAW_TEST_ROOT="$TEST_ROOT" \
+  bash "$FIX_SCRIPT" 2>&1)" || true
+
+if [ -f "$SYSTEMCTL_STATE" ]; then
+  if grep -q 'daemon-reload' "$SYSTEMCTL_STATE"; then
+    pass "daemon-reload called after socket masking"
+  else
+    fail "daemon-reload NOT called after socket masking"
+  fi
+  # Verify daemon-reload comes after mask
+  MASK_LINE="$(grep -n 'mask ssh.socket' "$SYSTEMCTL_STATE" | head -1 | cut -d: -f1)"
+  RELOAD_LINE="$(grep -n 'daemon-reload' "$SYSTEMCTL_STATE" | head -1 | cut -d: -f1)"
+  if [ -n "$MASK_LINE" ] && [ -n "$RELOAD_LINE" ] && [ "$RELOAD_LINE" -gt "$MASK_LINE" ]; then
+    pass "daemon-reload occurs after mask (correct order)"
+  else
+    fail "daemon-reload should come after mask"
+  fi
+else
+  fail "No systemctl commands recorded"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 17: Include directive added when missing in sshd_config
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 17: Include directive added when missing ---"
+rm -rf "$TEST_ROOT/etc"
+rm -f "$SYSTEMCTL_STATE"
+create_systemctl_stub "no" "no" "no"
+mkdir -p "$TEST_ROOT/etc/ssh/sshd_config.d"
+# Create sshd_config WITHOUT Include directive
+cat > "$TEST_ROOT/etc/ssh/sshd_config" << 'CONFEOF'
+# Minimal sshd config (no Include)
+Port 22
+PermitRootLogin yes
+CONFEOF
+
+OUTPUT="$(PATH="$STUB_BIN:$PATH" OPENCLAW_TEST_ROOT="$TEST_ROOT" \
+  bash "$FIX_SCRIPT" 2>&1)" || true
+
+if grep -qiE '^\s*Include\s+/etc/ssh/sshd_config\.d/\*' "$TEST_ROOT/etc/ssh/sshd_config"; then
+  pass "Include directive added to sshd_config"
+else
+  fail "Include directive NOT added to sshd_config"
+fi
+# Verify original content is preserved after the Include
+if grep -q '^Port 22' "$TEST_ROOT/etc/ssh/sshd_config"; then
+  pass "Original config content preserved after Include addition"
+else
+  fail "Original config content lost after Include addition"
+fi
+# Verify backup was created
+if ls "$TEST_ROOT/etc/ssh/.backups"/*/sshd_config >/dev/null 2>&1; then
+  pass "Pre-Include backup of sshd_config created"
+else
+  fail "Pre-Include backup not found"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 18: Include directive already present → no duplication
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 18: Include directive already present → no change ---"
+rm -rf "$TEST_ROOT/etc"
+rm -f "$SYSTEMCTL_STATE"
+create_systemctl_stub "no" "no" "no"
+mkdir -p "$TEST_ROOT/etc/ssh/sshd_config.d"
+# Create sshd_config WITH Include directive (like Ubuntu default)
+cat > "$TEST_ROOT/etc/ssh/sshd_config" << 'CONFEOF'
+Include /etc/ssh/sshd_config.d/*.conf
+Port 22
+PermitRootLogin yes
+CONFEOF
+
+OUTPUT="$(PATH="$STUB_BIN:$PATH" OPENCLAW_TEST_ROOT="$TEST_ROOT" \
+  bash "$FIX_SCRIPT" 2>&1)" || true
+
+# Count Include directives — should still be exactly 1
+INCLUDE_COUNT="$(grep -ciE '^\s*Include\s+/etc/ssh/sshd_config\.d/\*' "$TEST_ROOT/etc/ssh/sshd_config")"
+if [ "$INCLUDE_COUNT" -eq 1 ]; then
+  pass "Include directive not duplicated (still 1)"
+else
+  fail "Include directive duplicated (count: $INCLUDE_COUNT)"
+fi
+if echo "$OUTPUT" | grep -q "Include directive present in sshd_config"; then
+  pass "Script reports Include already present"
+else
+  fail "Missing 'Include directive present' message"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 19: Effective config validation — bad sshd -T → rollback
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 19: Bad effective config (sshd -T) → rollback ---"
+# sshd -t passes but -T shows public address
+cat > "$STUB_BIN/sshd" << 'STUBEOF'
+#!/bin/sh
+if [ "${1:-}" = "-t" ]; then
+  exit 0
+elif [ "${1:-}" = "-T" ]; then
+  echo "addressfamily any"
+  echo "listenaddress 0.0.0.0"
+  echo "port 22"
+  exit 0
+fi
+STUBEOF
+chmod +x "$STUB_BIN/sshd"
+
+rm -rf "$TEST_ROOT/etc"
+rm -f "$SYSTEMCTL_STATE"
+create_systemctl_stub "no" "no" "no"
+
+RC=0
+OUTPUT="$(PATH="$STUB_BIN:$PATH" OPENCLAW_TEST_ROOT="$TEST_ROOT" \
+  bash "$FIX_SCRIPT" 2>&1)" || RC=$?
+
+if [ "$RC" -ne 0 ]; then
+  pass "Script exits non-zero when sshd -T shows public address"
+else
+  fail "Script should exit non-zero when effective config has public address"
+fi
+if echo "$OUTPUT" | grep -q "unexpected ListenAddress"; then
+  pass "Error mentions unexpected ListenAddress"
+else
+  fail "Missing 'unexpected ListenAddress' message"
+fi
+if [ ! -f "$TEST_ROOT/etc/ssh/sshd_config.d/99-tailscale-only.conf" ]; then
+  pass "Drop-in removed during rollback (effective config validation)"
+else
+  fail "Drop-in should be removed during rollback"
+fi
+
+# Restore good sshd stub
+cat > "$STUB_BIN/sshd" << 'STUBEOF'
+#!/bin/sh
+if [ "${1:-}" = "-t" ]; then
+  exit 0
+elif [ "${1:-}" = "-T" ]; then
+  echo "addressfamily inet"
+  echo "listenaddress 100.100.50.1"
+  echo "port 22"
+  exit 0
+fi
+STUBEOF
+chmod +x "$STUB_BIN/sshd"
+
+# ---------------------------------------------------------------------------
+# Test 20: IPv6 [::]:22 public bind → script fails
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 20: IPv6 [::]:22 public bind → fails ---"
+cat > "$STUB_BIN/ss" << 'STUBEOF'
+#!/bin/sh
+echo 'LISTEN  0  128  [::]:22  [::]:*  users:(("sshd",pid=999,fd=4))'
+STUBEOF
+chmod +x "$STUB_BIN/ss"
+
+rm -rf "$TEST_ROOT/etc"
+rm -f "$SYSTEMCTL_STATE"
+create_systemctl_stub "no" "no" "no"
+
+RC=0
+OUTPUT="$(PATH="$STUB_BIN:$PATH" OPENCLAW_TEST_ROOT="$TEST_ROOT" \
+  bash "$FIX_SCRIPT" 2>&1)" || RC=$?
+
+if [ "$RC" -ne 0 ]; then
+  pass "Script exits non-zero with [::]:22 public bind"
+else
+  fail "Script should exit non-zero with [::]:22 public bind"
+fi
+
+# Restore healthy ss stub
+cat > "$STUB_BIN/ss" << 'STUBEOF'
+#!/bin/sh
+echo 'LISTEN  0  128  100.100.50.1:22  0.0.0.0:*  users:(("sshd",pid=999,fd=3))'
+STUBEOF
+chmod +x "$STUB_BIN/ss"
 
 # ---------------------------------------------------------------------------
 # Summary

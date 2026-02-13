@@ -375,6 +375,56 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Test 21: sshd on BOTH 0.0.0.0 AND [::] simultaneously → both violations
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 21: sshd on 0.0.0.0 AND [::] → both violations ---"
+MOCK_SS="LISTEN  0  128  0.0.0.0:22  0.0.0.0:*  users:((\"sshd\",pid=123,fd=3))
+LISTEN  0  128  [::]:22  [::]:*  users:((\"sshd\",pid=123,fd=4))"
+RESULT="$(run_analyzer "$MOCK_SS")"
+if echo "$RESULT" | grep -q "VIOLATIONS" && echo "$RESULT" | grep -q "SSHD_PUBLIC"; then
+  VCOUNT="$(echo "$RESULT" | grep -c ' on ')"
+  if [ "$VCOUNT" -eq 2 ]; then
+    pass "Both 0.0.0.0:22 and [::]:22 detected as violations"
+  else
+    fail "Expected 2 violations, got $VCOUNT: $RESULT"
+  fi
+else
+  fail "Dual-stack public sshd not detected: $RESULT"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 22: sshd on loopback (127.0.0.1:22) → PASS
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 22: sshd on 127.0.0.1:22 → PASS ---"
+RESULT="$(run_analyzer 'LISTEN  0  128  127.0.0.1:22  0.0.0.0:*  users:(("sshd",pid=123,fd=3))')"
+if [ "$RESULT" = "OK" ]; then
+  pass "sshd on 127.0.0.1:22 treated as loopback (OK)"
+else
+  fail "sshd on 127.0.0.1 should be OK, got: $RESULT"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 23: sshd on tailnet AND 0.0.0.0 → only 0.0.0.0 violation
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 23: sshd on tailnet + 0.0.0.0 → only 0.0.0.0 violation ---"
+MOCK_SS="LISTEN  0  128  100.100.50.1:22  0.0.0.0:*  users:((\"sshd\",pid=123,fd=3))
+LISTEN  0  128  0.0.0.0:22  0.0.0.0:*  users:((\"sshd\",pid=123,fd=4))"
+RESULT="$(run_analyzer "$MOCK_SS")"
+if echo "$RESULT" | grep -q "VIOLATIONS" && echo "$RESULT" | grep -q "SSHD_PUBLIC"; then
+  VCOUNT="$(echo "$RESULT" | grep -c ' on ')"
+  if [ "$VCOUNT" -eq 1 ]; then
+    pass "Only 0.0.0.0:22 violation (tailnet 100.100.50.1 OK)"
+  else
+    fail "Expected 1 violation, got $VCOUNT: $RESULT"
+  fi
+else
+  fail "Mixed tailnet+public sshd: $RESULT"
+fi
+
+# ---------------------------------------------------------------------------
 # Verify openclaw_doctor.sh contains the tailnet-aware code
 # ---------------------------------------------------------------------------
 echo ""

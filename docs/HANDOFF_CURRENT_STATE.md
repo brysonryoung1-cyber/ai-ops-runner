@@ -6,10 +6,25 @@
 
 ## Status
 
-All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation added (private-only, Tailscale-only). ORB doctor passes 18/18 in runner context (hooksPath hardening). SIZE_CAP fallback auto-generates review-packet artifacts (now exits 0 = success-with-warning). openclaw_doctor uses tailnet-aware port audit. Automated sshd remediation hardened: scans/comments conflicting ListenAddress, disables ALL socket-activation units (ssh.socket, sshd.socket, ssh@*), safe rollback on validation failure. OpenAI key management hardened: key NEVER printed to human-visible output, importable API (get/set/delete/status), CLI subcommands. Executor hooksPath logging hardened (check=True, explicit failure logging).
+All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation added (private-only, Tailscale-only). ORB doctor passes 18/18 in runner context (hooksPath hardening). SIZE_CAP fallback auto-generates review-packet artifacts (now exits 0 = success-with-warning). openclaw_doctor uses tailnet-aware port audit. Automated sshd remediation deterministic on Ubuntu: daemon-reload after socket mask, Include directive enforcement, effective config validation via sshd -T, socket death verification. OpenAI key management hardened: key NEVER printed to human-visible output, importable API (get/set/delete/status), CLI subcommands. Executor hooksPath logging hardened (check=True, explicit failure logging).
 
 ## Recent Changes
 
+- **SSH remediation deterministic on Ubuntu** — Three root causes of sshd still binding `0.0.0.0:22` / `[::]:22` after fix have been eliminated:
+  - **systemd daemon-reload** — After masking socket units (`ssh.socket`, `sshd.socket`), `systemctl daemon-reload` is now called to force systemd to pick up the mask immediately. Without this, systemd used cached state and the socket mask didn't take effect before service restart. Socket death is verified; force-killed if still active.
+  - **Include directive enforcement** — Script now verifies that `sshd_config` contains `Include /etc/ssh/sshd_config.d/*.conf`. If missing, it prepends one (with backup). Without this, the `99-tailscale-only.conf` drop-in was completely ignored by sshd.
+  - **Effective config validation** — After writing the drop-in and before restart, the script validates `sshd -T` effective output to confirm `listenaddress` contains ONLY the Tailscale IP and `addressfamily` is `inet`. Rolls back if unexpected values detected.
+  - **Backup guard** — Conflict scan no longer overwrites the Include-check backup, ensuring rollback always restores the truly original `sshd_config`.
+  - **Increased post-restart settle time** — Sleep increased from 1s to 2s for reliability on slower VPS instances.
+  - **Selftest expanded** — 5 new tests (16–20): daemon-reload ordering, Include directive add/preserve, effective config validation rollback, IPv6 `[::]:22` detection.
+  - **Doctor selftest expanded** — 3 new tests (21–23): dual-stack public sshd, sshd-on-loopback pass, mixed tailnet+public.
+  - **VPS verify commands** (run on aiops-1 after pull):
+    ```bash
+    cd /opt/ai-ops-runner && git pull --ff-only
+    sudo ./ops/openclaw_fix_ssh_tailscale_only.sh
+    ./ops/openclaw_doctor.sh
+    ss -lntp | grep ':22 '
+    ```
 - **SSH remediation + OpenAI key hardening** — Two major improvements:
   - **sshd Tailscale-only fix hardened** — `openclaw_fix_ssh_tailscale_only.sh` now:
     - Detects and disables/masks ALL socket-activation units: `ssh.socket`, `sshd.socket`, and templated `ssh@*.socket`.
