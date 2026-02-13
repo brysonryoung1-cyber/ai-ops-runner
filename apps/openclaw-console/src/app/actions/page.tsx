@@ -85,6 +85,7 @@ export default function ActionsPage() {
             description={a.description}
             variant={a.variant}
             loading={loading === a.action}
+            disabled={loading !== null && loading !== a.action}
             onClick={() => handleExec(a.action)}
           />
         ))}
