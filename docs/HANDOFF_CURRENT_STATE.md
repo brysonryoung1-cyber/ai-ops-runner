@@ -10,6 +10,14 @@ All systems operational. Docker smoke test passing. Full ops/review/ship framewo
 
 ## Recent Changes
 
+- **Review gate OpenAI Keychain hardening** — Non-interactive, deterministic key loading:
+  - **Canonical Keychain convention**: service=`ai-ops-runner`, account=`OPENAI_API_KEY` (migrates legacy entries automatically)
+  - **New public API**: `load_openai_api_key() -> str`, `load_openai_api_key_masked() -> str`, `assert_openai_api_key_valid() -> None`
+  - **Package import**: `from ops.openai_key import load_openai_api_key` (added `ops/__init__.py`)
+  - **CLI enhanced**: `python3 ops/openai_key.py doctor` runs OpenAI API smoke test; `status` shows source (env/keychain)
+  - **Non-interactive resolve**: resolution chain (env → Keychain → Linux file) NEVER prompts interactively; `set` subcommand handles key entry
+  - **Review gate audit**: `review_auto.sh` prints masked key fingerprint after loading
+  - No manual key pasting required if Keychain is set; use `python3 ops/openai_key.py doctor` to validate.
 - **OpenClaw Console** — Private, macOS-style web UI for managing OpenClaw on aiops-1:
   - **`apps/openclaw-console/`** — Next.js app (TypeScript + Tailwind CSS) bound to `127.0.0.1:8787` only
   - **Sidebar nav + 4 pages**: Overview (doctor/ports/timer/docker status), Logs (guard journal), Artifacts (job dirs), Actions (run doctor/apply/guard/ports)
@@ -301,33 +309,45 @@ cat /tmp/test/size_cap_meta.json | python3 -c "import sys,json; d=json.load(sys.
 
 ## Secure OpenAI Key Management
 
-All Codex-powered workflows (`review_auto.sh`, `autoheal_codex.sh`, `ship_auto.sh`) source `ensure_openai_key.sh` which calls `openai_key.py --emit-env` to resolve the key.
+All Codex-powered workflows (`review_auto.sh`, `autoheal_codex.sh`, `ship_auto.sh`) source `ensure_openai_key.sh` which calls `openai_key.py --emit-env` to resolve the key. No manual key pasting required if Keychain is set; use `python3 ops/openai_key.py doctor` to validate.
 
-**Public API (importable):**
-- `get_openai_api_key()` — resolve key from all configured sources
-- `set_openai_api_key(key)` — store in keyring or Linux secrets file
-- `delete_openai_api_key()` — remove from all backends
-- `openai_key_status(masked=True)` — return `"sk-…abcd"` or `"not configured"`
+**Canonical Keychain convention:**
+- service: `ai-ops-runner`
+- account: `OPENAI_API_KEY`
+- Legacy entries (service `ai-ops-runner-openai`) are auto-migrated on first access.
+
+**Public API (importable — `from ops.openai_key import load_openai_api_key`):**
+- `load_openai_api_key()` → `str` — resolve key; raises `RuntimeError` if missing
+- `load_openai_api_key_masked()` → `str` — shows `"sk-…abcd"` (prefix + last 4)
+- `assert_openai_api_key_valid()` → `None` — minimal OpenAI API smoke call; raises on failure
+- `get_openai_api_key()` → `str | None` — resolve from all sources (legacy compat)
+- `set_openai_api_key(key)` → `bool` — store in keyring or Linux secrets file
+- `delete_openai_api_key()` → `bool` — remove from all backends
+- `openai_key_status(masked=True)` → `str` — return `"sk-…abcd"` or `"not configured"`
+- `openai_key_source()` → `str` — return `"env"`, `"keychain"`, `"linux-file"`, or `"none"`
 
 **CLI subcommands:**
-- `python3 ops/openai_key.py status` — show masked status (default)
-- `python3 ops/openai_key.py set` — interactive prompt + store
+- `python3 ops/openai_key.py status` — show source (env/keychain) + masked key
+- `python3 ops/openai_key.py doctor` — run OpenAI API smoke test, exit nonzero on failure
+- `python3 ops/openai_key.py set` — read key from stdin (no echo on TTY, pipe-safe) + store to Keychain
 - `python3 ops/openai_key.py delete` — remove from all backends
 - `python3 ops/openai_key.py --emit-env` — emit `export OPENAI_API_KEY=...` (pipe only, refused on TTY)
 
-**Resolution order (fail-fast):**
+**Resolution order (deterministic, non-interactive):**
 1. `OPENAI_API_KEY` env var — if already set, use immediately.
 2. Python keyring — macOS Keychain / Linux SecretService (**no secret in argv**).
 3. Linux file — `/etc/ai-ops-runner/secrets/openai_api_key` (chmod 600).
-4. macOS interactive prompt — uses `getpass` (no echo), stores in keyring.
+— Never prompts interactively. Use `set` subcommand to store a key. —
 
 **Invariants:**
 - Key **NEVER** printed to human-visible output. `status` shows masked only. `--emit-env` guarded by TTY check.
 - Key never committed to git, never in stderr, **never in process argv**.
 - `CODEX_SKIP=1` (simulated mode) bypasses key loading entirely.
 - Fail-closed: if key unavailable, pipeline stops with human-readable instructions.
+- Non-interactive: resolve chain never prompts; errors include HTTP status/body (masked).
 - One-time bootstrap only: after initial setup, all reruns succeed without manual export.
 - `ensure_openai_key.sh` uses `--emit-env` for safe shell capture (eval + scrub).
+- Review gate prints masked key fingerprint for audit trail after loading.
 
 ## VPS Deployment Design
 

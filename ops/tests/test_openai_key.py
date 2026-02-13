@@ -19,6 +19,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -137,30 +138,26 @@ class TestNoSubprocessForKeyring:
                     mock_run.assert_not_called()
 
     def test_e2e_no_subprocess_argv_contains_secret(self):
-        """End-to-end: --emit-env on macOS, verify no subprocess leaks."""
+        """End-to-end: --emit-env via keyring, verify no subprocess leaks."""
         with mock.patch.dict(os.environ, {}, clear=True):
-            with mock.patch("platform.system", return_value="Darwin"):
-                with mock.patch.object(
-                    openai_key, "get_from_keyring", return_value=None
-                ):
+            with mock.patch.object(
+                openai_key, "get_from_keyring", return_value=FAKE_KEY
+            ):
+                with mock.patch("subprocess.run") as mock_run:
                     with mock.patch.object(
-                        openai_key, "prompt_and_store", return_value=FAKE_KEY
+                        sys.stdout, "isatty", return_value=False
                     ):
-                        with mock.patch("subprocess.run") as mock_run:
-                            with mock.patch.object(
-                                sys.stdout, "isatty", return_value=False
-                            ):
-                                openai_key.main(["--emit-env"])
-                            for call in mock_run.call_args_list:
-                                argv = (
-                                    call[0][0]
-                                    if call[0]
-                                    else call[1].get("args", [])
-                                )
-                                for arg in argv:
-                                    assert FAKE_KEY not in str(arg), (
-                                        f"Secret found in subprocess argv: {argv}"
-                                    )
+                        openai_key.main(["--emit-env"])
+                    for call in mock_run.call_args_list:
+                        argv = (
+                            call[0][0]
+                            if call[0]
+                            else call[1].get("args", [])
+                        )
+                        for arg in argv:
+                            assert FAKE_KEY not in str(arg), (
+                                f"Secret found in subprocess argv: {argv}"
+                            )
 
 
 # ===========================================================================
@@ -251,7 +248,8 @@ class TestPublicAPI:
                 ):
                     result = openai_key.delete_openai_api_key()
                     assert result is True
-                    mock_kr.delete_password.assert_called_once()
+                    # Called twice: canonical + legacy names
+                    assert mock_kr.delete_password.call_count == 2
 
     def test_openai_key_status_configured(self):
         with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_KEY}):
@@ -356,26 +354,24 @@ class TestMainEmitEnvDarwin:
                                 rc = openai_key.main(["--emit-env"])
         assert rc == 1
 
-    def test_emit_env_prompt_stores(self, capsys):
-        import shlex
-
+    def test_emit_env_no_key_fails_without_prompt(self, capsys):
+        """--emit-env fails (non-interactive) when env+keyring both miss."""
         with mock.patch.dict(os.environ, {}, clear=True):
-            with mock.patch("platform.system", return_value="Darwin"):
-                with mock.patch.object(openai_key, "get_from_env", return_value=None):
+            with mock.patch.object(openai_key, "get_from_env", return_value=None):
+                with mock.patch.object(
+                    openai_key, "get_from_keyring", return_value=None
+                ):
                     with mock.patch.object(
-                        openai_key, "get_from_keyring", return_value=None
+                        openai_key, "get_from_linux_file", return_value=None
                     ):
                         with mock.patch.object(
-                            openai_key, "prompt_and_store", return_value=FAKE_KEY
+                            sys.stdout, "isatty", return_value=False
                         ):
-                            with mock.patch.object(
-                                sys.stdout, "isatty", return_value=False
-                            ):
-                                rc = openai_key.main(["--emit-env"])
-        assert rc == 0
-        assert capsys.readouterr().out.strip() == (
-            f"export OPENAI_API_KEY={shlex.quote(FAKE_KEY)}"
-        )
+                            rc = openai_key.main(["--emit-env"])
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert captured.out.strip() == ""
+        assert "not found" in captured.err.lower()
 
 
 class TestMainEmitEnvLinux:
@@ -460,17 +456,24 @@ class TestMainEmitEnvLinux:
         assert FAKE_KEY not in capsys.readouterr().err
 
 
-class TestMainUnsupportedPlatform:
-    def test_unsupported_platform_fails(self, capsys):
+class TestMainNoKeyAnywhere:
+    def test_no_key_anywhere_fails_closed(self, capsys):
+        """--emit-env fails when no key found on any platform."""
         with mock.patch.dict(os.environ, {}, clear=True):
-            with mock.patch("platform.system", return_value="FreeBSD"):
-                with mock.patch.object(openai_key, "get_from_env", return_value=None):
+            with mock.patch.object(openai_key, "get_from_env", return_value=None):
+                with mock.patch.object(
+                    openai_key, "get_from_keyring", return_value=None
+                ):
                     with mock.patch.object(
-                        sys.stdout, "isatty", return_value=False
+                        openai_key, "get_from_linux_file", return_value=None
                     ):
-                        rc = openai_key.main(["--emit-env"])
+                        with mock.patch.object(
+                            sys.stdout, "isatty", return_value=False
+                        ):
+                            rc = openai_key.main(["--emit-env"])
         assert rc == 1
-        assert "Unsupported platform" in capsys.readouterr().err
+        err = capsys.readouterr().err
+        assert "not found" in err.lower()
 
 
 # ===========================================================================
@@ -525,26 +528,30 @@ class TestCLISet:
     """Test 'set' subcommand."""
 
     def test_set_with_valid_key(self, capsys):
-        with mock.patch("getpass.getpass", return_value=FAKE_KEY):
-            with mock.patch.object(openai_key, "_HAS_KEYRING", True):
-                with mock.patch.object(openai_key, "keyring") as mock_kr:
-                    rc = openai_key.main(["set"])
+        with mock.patch.object(sys.stdin, "isatty", return_value=True):
+            with mock.patch("getpass.getpass", return_value=FAKE_KEY):
+                with mock.patch.object(openai_key, "_HAS_KEYRING", True):
+                    with mock.patch.object(openai_key, "keyring") as mock_kr:
+                        rc = openai_key.main(["set"])
         assert rc == 0
         mock_kr.set_password.assert_called()
 
     def test_set_with_empty_key_fails(self, capsys):
-        with mock.patch("getpass.getpass", return_value=""):
-            rc = openai_key.main(["set"])
+        with mock.patch.object(sys.stdin, "isatty", return_value=True):
+            with mock.patch("getpass.getpass", return_value=""):
+                rc = openai_key.main(["set"])
         assert rc == 1
 
     def test_set_with_bad_prefix_fails(self, capsys):
-        with mock.patch("getpass.getpass", return_value="bad-prefix-key"):
-            rc = openai_key.main(["set"])
+        with mock.patch.object(sys.stdin, "isatty", return_value=True):
+            with mock.patch("getpass.getpass", return_value="bad-prefix-key"):
+                rc = openai_key.main(["set"])
         assert rc == 1
 
     def test_set_eof_exits(self, capsys):
-        with mock.patch("getpass.getpass", side_effect=EOFError):
-            rc = openai_key.main(["set"])
+        with mock.patch.object(sys.stdin, "isatty", return_value=True):
+            with mock.patch("getpass.getpass", side_effect=EOFError):
+                rc = openai_key.main(["set"])
         assert rc == 1
 
 
@@ -567,6 +574,143 @@ class TestCLIDelete:
             ):
                 rc = openai_key.main(["delete"])
         assert rc == 0  # idempotent — no key is not an error
+
+
+# ===========================================================================
+# New canonical API: load_openai_api_key, load_openai_api_key_masked,
+#                    assert_openai_api_key_valid, openai_key_source
+# ===========================================================================
+
+
+class TestLoadOpenaiApiKey:
+    def test_returns_key_from_env(self):
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_KEY}):
+            assert openai_key.load_openai_api_key() == FAKE_KEY
+
+    def test_raises_when_missing(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(openai_key, "get_from_keyring", return_value=None):
+                with mock.patch.object(
+                    openai_key, "get_from_linux_file", return_value=None
+                ):
+                    with pytest.raises(RuntimeError, match="not found"):
+                        openai_key.load_openai_api_key()
+
+
+class TestLoadOpenaiApiKeyMasked:
+    def test_returns_masked(self):
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_KEY}):
+            result = openai_key.load_openai_api_key_masked()
+            assert "…" in result
+            assert FAKE_KEY not in result
+
+    def test_raises_when_missing(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(openai_key, "get_from_keyring", return_value=None):
+                with mock.patch.object(
+                    openai_key, "get_from_linux_file", return_value=None
+                ):
+                    with pytest.raises(RuntimeError):
+                        openai_key.load_openai_api_key_masked()
+
+
+class TestAssertOpenaiApiKeyValid:
+    def test_success(self):
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_KEY}):
+            with mock.patch("urllib.request.urlopen") as mock_urlopen:
+                mock_resp = mock.MagicMock()
+                mock_resp.read.return_value = b'{"data":[]}'
+                mock_resp.__enter__ = mock.MagicMock(return_value=mock_resp)
+                mock_resp.__exit__ = mock.MagicMock(return_value=False)
+                mock_urlopen.return_value = mock_resp
+                # Should not raise
+                openai_key.assert_openai_api_key_valid()
+
+    def test_http_error(self):
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_KEY}):
+            with mock.patch("urllib.request.urlopen") as mock_urlopen:
+                err = urllib.error.HTTPError(
+                    "https://api.openai.com/v1/models",
+                    401,
+                    "Unauthorized",
+                    {},
+                    None,
+                )
+                err.read = mock.MagicMock(
+                    return_value=b'{"error":{"message":"Invalid API key"}}'
+                )
+                mock_urlopen.side_effect = err
+                with pytest.raises(RuntimeError, match="HTTP 401"):
+                    openai_key.assert_openai_api_key_valid()
+
+    def test_raises_when_no_key(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(openai_key, "get_from_keyring", return_value=None):
+                with mock.patch.object(
+                    openai_key, "get_from_linux_file", return_value=None
+                ):
+                    with pytest.raises(RuntimeError, match="not found"):
+                        openai_key.assert_openai_api_key_valid()
+
+
+class TestOpenaiKeySource:
+    def test_env(self):
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_KEY}):
+            assert openai_key.openai_key_source() == "env"
+
+    def test_keychain(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(
+                openai_key, "get_from_keyring", return_value=FAKE_KEY
+            ):
+                assert openai_key.openai_key_source() == "keychain"
+
+    def test_none(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(openai_key, "get_from_keyring", return_value=None):
+                with mock.patch.object(
+                    openai_key, "get_from_linux_file", return_value=None
+                ):
+                    assert openai_key.openai_key_source() == "none"
+
+
+# ===========================================================================
+# CLI doctor subcommand
+# ===========================================================================
+
+
+class TestCLIDoctor:
+    def test_doctor_pass(self, capsys):
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_KEY}):
+            with mock.patch.object(openai_key, "assert_openai_api_key_valid"):
+                rc = openai_key.main(["doctor"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "PASS" in out
+        assert FAKE_KEY not in out
+
+    def test_doctor_fail_api(self, capsys):
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_KEY}):
+            with mock.patch.object(
+                openai_key,
+                "assert_openai_api_key_valid",
+                side_effect=RuntimeError("HTTP 401 — Invalid API key"),
+            ):
+                rc = openai_key.main(["doctor"])
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "FAIL" in out
+        assert FAKE_KEY not in out
+
+    def test_doctor_no_key(self, capsys):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(openai_key, "get_from_keyring", return_value=None):
+                with mock.patch.object(
+                    openai_key, "get_from_linux_file", return_value=None
+                ):
+                    rc = openai_key.main(["doctor"])
+        assert rc == 1
+        assert "not configured" in capsys.readouterr().out
 
 
 # ===========================================================================
@@ -600,10 +744,11 @@ class TestKeyNeverPrinted:
         assert FAKE_KEY not in captured.err
 
     def test_set_mode_no_raw_key(self, capsys):
-        with mock.patch("getpass.getpass", return_value=FAKE_KEY):
-            with mock.patch.object(openai_key, "_HAS_KEYRING", True):
-                with mock.patch.object(openai_key, "keyring"):
-                    openai_key.main(["set"])
+        with mock.patch.object(sys.stdin, "isatty", return_value=True):
+            with mock.patch("getpass.getpass", return_value=FAKE_KEY):
+                with mock.patch.object(openai_key, "_HAS_KEYRING", True):
+                    with mock.patch.object(openai_key, "keyring"):
+                        openai_key.main(["set"])
         captured = capsys.readouterr()
         assert FAKE_KEY not in captured.out
         assert FAKE_KEY not in captured.err
@@ -757,8 +902,8 @@ class TestSourceCodeSecurity:
                 #   print(f"export OPENAI_API_KEY={shlex.quote(key)}")  — shell-escaped emit
                 #   print(f"OpenAI API key: {result}")  — masked status output
                 safe_patterns = (
-                    'print(f"export OPENAI_API_KEY={shlex.quote(key)}")',
-                    'print(f"OpenAI API key: {result}")',
+                    'print(f"OpenAI API key: {_mask_key(val)} (source: {source})")',
+                    'print("OpenAI API key: not configured")',
                 )
                 if stripped in safe_patterns:
                     continue

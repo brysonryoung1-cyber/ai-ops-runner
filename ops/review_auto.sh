@@ -32,6 +32,8 @@ done
 if [ "${CODEX_SKIP:-0}" != "1" ]; then
   # shellcheck source=ensure_openai_key.sh
   source "$SCRIPT_DIR/ensure_openai_key.sh"
+  # Print masked key fingerprint for audit trail (never the actual key)
+  python3 "$SCRIPT_DIR/openai_key.py" status >&2
 fi
 
 # --- preflight: clean repo ---
