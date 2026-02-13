@@ -46,7 +46,18 @@ if [ -z "${_EMIT_OUTPUT:-}" ]; then
   return 1 2>/dev/null || exit 1
 fi
 
-eval "$_EMIT_OUTPUT"
+# Validate the output before eval (defense-in-depth against injection)
+case "$_EMIT_OUTPUT" in
+  "export OPENAI_API_KEY="*)
+    eval "$_EMIT_OUTPUT"
+    ;;
+  *)
+    echo "FATAL: openai_key.py --emit-env returned unexpected output. Pipeline stopped." >&2
+    unset _EMIT_OUTPUT
+    unset _ENSURE_KEY_DIR
+    return 1 2>/dev/null || exit 1
+    ;;
+esac
 
 # Scrub the temp variable immediately
 unset _EMIT_OUTPUT

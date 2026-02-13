@@ -456,15 +456,16 @@ def main(argv: "list[str] | None" = None) -> int:
 
     # --emit-env: controlled stdout emit for shell capture
     if args.emit_env:
-        key = resolve_key()
-        if not key:
-            return 1
-        # --emit-env: only safe when stdout is piped (not visible in terminal)
+        # TTY safety check FIRST — before resolve_key() which may prompt
+        # and persist a key on macOS. Fail fast, no side effects.
         if sys.stdout.isatty():
             _err(
                 "--emit-env refused: stdout is a TTY. "
                 'Use: eval "$(python3 openai_key.py --emit-env)"'
             )
+            return 1
+        key = resolve_key()
+        if not key:
             return 1
         # Shell-escape the key to prevent command injection when used
         # with eval "$(...)".  OpenAI keys are typically safe ASCII, but
