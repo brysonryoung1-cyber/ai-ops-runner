@@ -6,10 +6,31 @@
 
 ## Status
 
-All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation added (private-only, Tailscale-only). ORB doctor passes 18/18 in runner context (hooksPath hardening). SIZE_CAP fallback auto-generates review-packet artifacts. macOS Keychain storage uses stdin piping (no argv leak). Executor hooksPath logging hardened (check=True, explicit failure logging).
+All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation added (private-only, Tailscale-only). ORB doctor passes 18/18 in runner context (hooksPath hardening). SIZE_CAP fallback auto-generates review-packet artifacts (now exits 0 = success-with-warning). openclaw_doctor uses tailnet-aware port audit. Automated sshd remediation available. macOS Keychain storage uses stdin piping (no argv leak). Executor hooksPath logging hardened (check=True, explicit failure logging).
 
 ## Recent Changes
 
+- **openclaw_doctor tailnet-aware port audit** — The Public Port Audit (check 4) now classifies ports correctly:
+  - **Localhost** (127.0.0.1 / ::1) → always PASS
+  - **Tailnet** (100.64.0.0/10) → treated as PRIVATE for any process (sshd, tailscaled, etc.)
+  - **tailscaled** → allowed on any address (needed for DERP relay / WireGuard)
+  - **sshd on 0.0.0.0 / :::** → FAIL with automated remediation instructions
+  - **Any other process on public address** → FAIL
+  - Remediation box printed when sshd is public-bound, pointing to `openclaw_fix_ssh_tailscale_only.sh`
+  - Hermetic selftest: `ops/tests/openclaw_doctor_selftest.sh` (20 tests, including tailnet boundary checks)
+- **Automated sshd remediation** — `ops/openclaw_fix_ssh_tailscale_only.sh`:
+  - Detects Tailscale IPv4 via `tailscale ip -4`
+  - Writes `/etc/ssh/sshd_config.d/99-tailscale-only.conf` (AddressFamily inet, ListenAddress <TS_IP>)
+  - Does NOT change auth methods or disable root login (minimal, safe)
+  - Validates with `sshd -t`, restarts sshd, verifies with `ss`
+  - Fail-closed: exits non-zero if any step fails; removes drop-in on validation failure
+- **orb_review_bundle success-with-warning** — SIZE_CAP fallback now exits 0 (not 6):
+  - When SIZE_CAP is hit and fallback artifacts are generated successfully, the wrapper exits 0
+  - Executor sets `status=success`, `exit_code=0` (previously `status=failure`, `exit_code=6`)
+  - `artifact.json` carries warning flags: `size_cap_exceeded: true`, `warnings: ["SIZE_CAP_EXCEEDED"]`
+  - Also includes `review_packets_archive` and `review_packets_dir` at top level
+  - If fallback generation fails, wrapper still exits non-zero (fail-closed preserved)
+  - Tests updated: FORCE_SIZE_CAP path now asserts exit 0 + all artifact flags
 - **Secure OpenAI key loading** — Zero-recurring-step secret management for Codex CLI:
   - `ops/openai_key.py` — Cross-platform key loader (env → Keychain → Linux file → prompt)
   - `ops/ensure_openai_key.sh` — Shell wrapper (source before Codex calls)
@@ -71,6 +92,7 @@ ops/
 ├── runner_submit_orb_review.sh  # Submit orb_review_bundle + poll + print
 ├── runner_submit_orb_doctor.sh  # Submit orb_doctor + poll + print
 ├── runner_submit_orb_score.sh   # Submit orb_score_run + poll + print
+├── openclaw_fix_ssh_tailscale_only.sh  # Lock sshd to Tailscale IP (root, fail-closed)
 ├── vps_bootstrap.sh          # Idempotent VPS setup (docker, tailscale, UFW, systemd)
 ├── vps_deploy.sh             # Deploy wrapper (bootstrap + doctor)
 ├── vps_doctor.sh             # Remote VPS health check
@@ -84,6 +106,7 @@ ops/
     ├── review_finish_selftest.sh
     ├── ship_auto_selftest.sh
     ├── orb_integration_selftest.sh
+    ├── openclaw_doctor_selftest.sh
     ├── openai_key_selftest.sh
     └── test_openai_key.py
 
@@ -130,25 +153,58 @@ git -C "$WORKTREE" config core.hooksPath   # → .githooks
 git -C "$WORKTREE" status --porcelain       # → (empty)
 ```
 
-### B) SIZE_CAP → Review Packets (exit 6)
+### B) SIZE_CAP → Review Packets (success-with-warning)
 
-**Problem**: When the review bundle exceeds the size cap, `orb_review_bundle` exits 6 and the user has to manually generate review packets using Codex.
+**Problem (original)**: When the review bundle exceeds the size cap, `orb_review_bundle` exited 6 → executor set `status=failure`, blocking automation even though fallback artifacts were generated.
 
-**Fix**: The wrapper now auto-generates review packets on exit 6:
-1. Attempts ORB's `review_codex.sh --no-codex` if available
-2. Falls back to built-in per-file diff splitting (~50 KB per packet)
-3. Produces: `review_packets/<stamp>/packet_NNN.txt`, `HOW_TO_PASTE.txt`, `ORB_REVIEW_PACKETS.tar.gz`, `README_REVIEW_PACKETS.txt`, `size_cap_meta.json`
-4. Executor merges `size_cap_meta.json` into `artifact.json` as `size_cap_fallback`
+**Fix (two phases)**:
+1. **Phase 1** (previous): Auto-generate review packets on exit 6 (packets, archive, README, size_cap_meta.json).
+2. **Phase 2** (current): After successful fallback generation, wrapper exits 0 → executor sets `status=success`.
 
-**Test-only flag**: `FORCE_SIZE_CAP=1` env var deterministically triggers the exit-6 fallback path without depending on actual bundle size. This var is NOT in `allowed_params`, so the executor never injects it from API params.
+**Artifact contract**: `artifact.json` now includes:
+- `size_cap_exceeded: true` — top-level flag
+- `warnings: ["SIZE_CAP_EXCEEDED"]` — structured warnings array
+- `review_packets_archive: "ORB_REVIEW_PACKETS.tar.gz"` — path to archive
+- `review_packets_dir: "review_packets/<stamp>"` — path to packet directory
+- `size_cap_fallback: { ... }` — full metadata (preserved from phase 1)
+
+**Fail-closed invariant**: If fallback generation fails (tar error, disk full, etc.), `set -euo pipefail` causes the wrapper to exit non-zero before reaching `exit 0`. Only a fully successful fallback reports success.
+
+**Test-only flag**: `FORCE_SIZE_CAP=1` env var deterministically triggers the SIZE_CAP fallback path. Tests verify exit 0, all artifacts exist, and artifact.json contains warning flags.
 
 **Verification**:
 ```bash
-# Deterministic test:
+# Deterministic test (now exits 0):
 FORCE_SIZE_CAP=1 ARTIFACT_DIR=/tmp/test SINCE_SHA=$(git rev-list --max-parents=0 HEAD) \
   bash services/test_runner/orb_wrappers/orb_review_bundle.sh
-ls /tmp/test/  # → ORB_REVIEW_PACKETS.tar.gz, README_REVIEW_PACKETS.txt, ...
+echo $?    # → 0
+ls /tmp/test/  # → ORB_REVIEW_PACKETS.tar.gz, README_REVIEW_PACKETS.txt, size_cap_meta.json, ...
+cat /tmp/test/size_cap_meta.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['size_cap_exceeded'], d['warnings'])"
+# → True ['SIZE_CAP_EXCEEDED']
 ```
+
+### C) openclaw_doctor tailnet-aware port audit
+
+**Problem**: The Public Port Audit (check 4) used a simple grep that:
+- Flagged tailscaled on tailnet IPs (100.64.0.0/10) as "public" — false positive
+- Flagged sshd on 0.0.0.0:22 without remediation guidance
+- Matched peer address column in `ss` output (0.0.0.0:*) — false positive for tailnet-bound processes
+
+**Fix**: Replaced grep with an inline Python analyzer that:
+1. Parses `ss -tlnp` output column-by-column (local addr:port in column 3)
+2. Extracts process name from the `users:(("name",...))` field
+3. Applies policy: localhost → OK, tailnet (100.64.0.0/10) → PRIVATE, tailscaled → allowed, public → FAIL
+4. Prints structured output: `OK` | `VIOLATIONS` + lines + optional `SSHD_PUBLIC`
+5. When `SSHD_PUBLIC` detected, prints remediation block pointing to `openclaw_fix_ssh_tailscale_only.sh`
+
+**Remediation script**: `ops/openclaw_fix_ssh_tailscale_only.sh`
+- Run as root on VPS: `sudo ./ops/openclaw_fix_ssh_tailscale_only.sh`
+- Detects Tailscale IPv4, writes sshd drop-in config, validates, restarts, verifies
+- Fail-closed: removes drop-in and restores original config on any failure
+
+**Selftest**: `ops/tests/openclaw_doctor_selftest.sh` (20 tests):
+- Feeds mock `ss` output to the Python analyzer
+- Tests: sshd public/tailnet, tailscaled wildcard/tailnet, localhost, IPv6, boundary IPs, mixed scenarios
 
 ## Secure OpenAI Key Management
 
@@ -184,7 +240,7 @@ All Codex-powered workflows (`review_auto.sh`, `autoheal_codex.sh`, `ship_auto.s
 4. **Params**: Passed via `params.json` in artifact dir; executor injects as env vars (only `allowed_params` accepted)
 5. **Invariants**: Every job records `read_only_ok` and `clean_tree_ok` in `artifact.json`
 6. **Doctor 18/18**: Executor sets `core.hooksPath .githooks` in gitdir config at step 2a (before make_readonly); `orb_doctor.sh` also sets it as belt-and-suspenders
-7. **SIZE_CAP → packets**: `orb_review_bundle.sh` auto-generates review packets on exit 6; executor merges `size_cap_meta.json` into `artifact.json` as `size_cap_fallback`; `FORCE_SIZE_CAP=1` available for deterministic testing
+7. **SIZE_CAP → success-with-warning**: `orb_review_bundle.sh` auto-generates review packets on SIZE_CAP, exits 0 (success); executor merges `size_cap_meta.json` into `artifact.json` as `size_cap_fallback` and promotes `size_cap_exceeded`, `warnings`, `review_packets_archive`, `review_packets_dir` to top level; `FORCE_SIZE_CAP=1` available for deterministic testing
 
 ## Push Gate Design
 

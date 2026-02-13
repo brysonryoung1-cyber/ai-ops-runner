@@ -246,7 +246,8 @@ def test_size_cap_meta_readable_and_valid(tmp_path):
 
 
 def test_size_cap_fallback_in_artifact_json(tmp_path):
-    """artifact.json includes size_cap_fallback when size_cap_meta.json is present."""
+    """artifact.json includes size_cap_fallback + promoted fields when
+    size_cap_meta.json is present.  Wrapper now exits 0 on successful fallback."""
     from test_runner.artifacts import write_artifact_json, read_artifact_json
     import test_runner.artifacts as arts
 
@@ -257,9 +258,13 @@ def test_size_cap_fallback_in_artifact_json(tmp_path):
         job_id = "test-sizecap-001"
         art = arts.artifact_dir(job_id)
 
-        # Simulate wrapper writing size_cap_meta.json
+        # Simulate wrapper writing size_cap_meta.json (updated schema)
         meta = {
             "size_cap_triggered": True,
+            "size_cap_exceeded": True,
+            "warnings": ["SIZE_CAP_EXCEEDED"],
+            "review_packets_archive": "ORB_REVIEW_PACKETS.tar.gz",
+            "review_packets_dir": "review_packets/20260212_120000",
             "packet_dir": "review_packets/20260212_120000",
             "archive_path": "ORB_REVIEW_PACKETS.tar.gz",
             "packet_count": 3,
@@ -268,18 +273,33 @@ def test_size_cap_fallback_in_artifact_json(tmp_path):
             json.dump(meta, f)
 
         # Simulate executor reading it and writing artifact.json
-        write_artifact_json(job_id, {
+        # Wrapper exits 0 → executor records exit_code=0, status=success
+        artifact_data = {
             "job_id": job_id,
             "size_cap_fallback": meta,
-            "exit_code": 6,
+            "exit_code": 0,
+            "status": "success",
             "invariants": {"read_only_ok": True, "clean_tree_ok": True},
-        })
+        }
+        # Executor step 8b: promote fields
+        artifact_data["size_cap_exceeded"] = True
+        artifact_data["warnings"] = ["SIZE_CAP_EXCEEDED"]
+        artifact_data["review_packets_archive"] = "ORB_REVIEW_PACKETS.tar.gz"
+        artifact_data["review_packets_dir"] = "review_packets/20260212_120000"
+
+        write_artifact_json(job_id, artifact_data)
 
         loaded = read_artifact_json(job_id)
         assert loaded["size_cap_fallback"]["size_cap_triggered"] is True
         assert loaded["size_cap_fallback"]["packet_count"] == 3
-        assert loaded["exit_code"] == 6
+        assert loaded["exit_code"] == 0
+        assert loaded["status"] == "success"
         assert loaded["invariants"]["read_only_ok"] is True
+        # Promoted top-level fields
+        assert loaded["size_cap_exceeded"] is True
+        assert loaded["warnings"] == ["SIZE_CAP_EXCEEDED"]
+        assert loaded["review_packets_archive"] == "ORB_REVIEW_PACKETS.tar.gz"
+        assert loaded["review_packets_dir"] == "review_packets/20260212_120000"
     finally:
         arts.ARTIFACTS_ROOT = original_root
 
@@ -610,8 +630,11 @@ def test_force_size_cap_produces_all_artifacts(git_repo, tmp_path):
         capture_output=True,
         text=True,
     )
-    # FORCE_SIZE_CAP should exit 6
-    assert proc.returncode == 6, f"Expected exit 6, got {proc.returncode}\nstderr: {proc.stderr}"
+    # FORCE_SIZE_CAP should exit 0 (successful fallback — job status = success)
+    assert proc.returncode == 0, (
+        f"Expected exit 0 (SIZE_CAP fallback success), got {proc.returncode}"
+        f"\nstdout: {proc.stdout}\nstderr: {proc.stderr}"
+    )
 
     # Verify all expected artifacts exist
     assert os.path.isfile(os.path.join(art_dir, "ORB_REVIEW_PACKETS.tar.gz")), \
@@ -632,10 +655,14 @@ def test_force_size_cap_produces_all_artifacts(git_repo, tmp_path):
     packet_files = [f for f in os.listdir(stamp_dir) if f.startswith("packet_")]
     assert len(packet_files) >= 1, "No packet files generated"
 
-    # Verify size_cap_meta.json contents
+    # Verify size_cap_meta.json contents (including new top-level fields)
     with open(os.path.join(art_dir, "size_cap_meta.json")) as f:
         meta = json.load(f)
     assert meta["size_cap_triggered"] is True
+    assert meta["size_cap_exceeded"] is True
+    assert meta["warnings"] == ["SIZE_CAP_EXCEEDED"]
+    assert meta["review_packets_archive"] == "ORB_REVIEW_PACKETS.tar.gz"
+    assert meta["review_packets_dir"].startswith("review_packets/")
     assert meta["archive_path"] == "ORB_REVIEW_PACKETS.tar.gz"
     assert meta["readme_path"] == "README_REVIEW_PACKETS.txt"
     assert meta["packet_count"] >= 1
@@ -653,7 +680,8 @@ def test_force_size_cap_produces_all_artifacts(git_repo, tmp_path):
 
 def test_force_size_cap_artifact_json_integration(git_repo, tmp_path):
     """Verify that size_cap_meta.json produced by FORCE_SIZE_CAP is correctly
-    merged into artifact.json by the executor's read logic."""
+    merged into artifact.json by the executor's read logic, including
+    promoted top-level fields."""
     from test_runner.artifacts import write_artifact_json, read_artifact_json
     import test_runner.artifacts as arts
 
@@ -664,9 +692,13 @@ def test_force_size_cap_artifact_json_integration(git_repo, tmp_path):
         job_id = "test-forcecap-001"
         art = arts.artifact_dir(job_id)
 
-        # Simulate what the wrapper writes on FORCE_SIZE_CAP
+        # Simulate what the wrapper writes on FORCE_SIZE_CAP (now exits 0)
         meta = {
             "size_cap_triggered": True,
+            "size_cap_exceeded": True,
+            "warnings": ["SIZE_CAP_EXCEEDED"],
+            "review_packets_archive": "ORB_REVIEW_PACKETS.tar.gz",
+            "review_packets_dir": "review_packets/20260212_140000",
             "packet_dir": "review_packets/20260212_140000",
             "archive_path": "ORB_REVIEW_PACKETS.tar.gz",
             "readme_path": "README_REVIEW_PACKETS.txt",
@@ -678,9 +710,11 @@ def test_force_size_cap_artifact_json_integration(git_repo, tmp_path):
             json.dump(meta, f)
 
         # Simulate executor writing artifact.json with size_cap_fallback
-        write_artifact_json(job_id, {
+        # Wrapper now exits 0 → executor sets exit_code=0, status=success
+        artifact_data = {
             "job_id": job_id,
-            "exit_code": 6,
+            "exit_code": 0,
+            "status": "success",
             "invariants": {"read_only_ok": True, "clean_tree_ok": True},
             "size_cap_fallback": meta,
             "outputs": [
@@ -689,13 +723,28 @@ def test_force_size_cap_artifact_json_integration(git_repo, tmp_path):
                 "README_REVIEW_PACKETS.txt",
                 "size_cap_meta.json",
             ],
-        })
+        }
+        # Promote fields (mirrors executor step 8b)
+        artifact_data["size_cap_exceeded"] = meta.get("size_cap_exceeded", True)
+        artifact_data["warnings"] = meta.get("warnings", ["SIZE_CAP_EXCEEDED"])
+        artifact_data["review_packets_archive"] = meta.get("review_packets_archive")
+        artifact_data["review_packets_dir"] = meta.get("review_packets_dir")
+
+        write_artifact_json(job_id, artifact_data)
 
         loaded = read_artifact_json(job_id)
-        assert loaded["exit_code"] == 6
+        # Wrapper exits 0 → status success
+        assert loaded["exit_code"] == 0
+        assert loaded["status"] == "success"
+        # size_cap_fallback preserved
         assert loaded["size_cap_fallback"]["size_cap_triggered"] is True
         assert loaded["size_cap_fallback"]["readme_path"] == "README_REVIEW_PACKETS.txt"
         assert loaded["size_cap_fallback"]["packet_count"] == 2
+        # Promoted top-level fields
+        assert loaded["size_cap_exceeded"] is True
+        assert loaded["warnings"] == ["SIZE_CAP_EXCEEDED"]
+        assert loaded["review_packets_archive"] == "ORB_REVIEW_PACKETS.tar.gz"
+        assert loaded["review_packets_dir"] == "review_packets/20260212_140000"
         assert "ORB_REVIEW_PACKETS.tar.gz" in loaded["outputs"]
         assert "README_REVIEW_PACKETS.txt" in loaded["outputs"]
     finally:

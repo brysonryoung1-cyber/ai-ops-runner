@@ -171,6 +171,10 @@ EOF
       cat > "$ARTIFACT_DIR/size_cap_meta.json" <<EOF
 {
   "size_cap_triggered": true,
+  "size_cap_exceeded": true,
+  "warnings": ["SIZE_CAP_EXCEEDED"],
+  "review_packets_archive": "ORB_REVIEW_PACKETS.tar.gz",
+  "review_packets_dir": "review_packets/$STAMP",
   "packet_dir": "review_packets/$STAMP",
   "archive_path": "ORB_REVIEW_PACKETS.tar.gz",
   "readme_path": "README_REVIEW_PACKETS.txt",
@@ -180,7 +184,13 @@ EOF
 }
 EOF
       echo "    size_cap_meta.json written ($NPACKETS packets)"
+
+      # SIZE_CAP fallback succeeded — exit 0 so job status = success
+      # (artifact.json still carries size_cap_exceeded + warnings for callers)
+      echo "==> SIZE_CAP fallback artifacts generated successfully — exiting 0"
+      exit 0
     fi
+    # Non-SIZE_CAP failure — propagate original exit code
     exit $RC
   fi
   echo "==> REVIEW_BUNDLE.txt written ($(wc -c < "$OUT" | tr -d ' ') bytes)"

@@ -181,7 +181,7 @@ def execute_job(job: JobRecord) -> JobRecord:
                     job.job_id,
                 )
 
-        write_artifact_json(job.job_id, {
+        artifact_data = {
             "job_id": job.job_id,
             "repo_name": job.repo_name,
             "remote_url": job.remote_url,
@@ -204,7 +204,22 @@ def execute_job(job: JobRecord) -> JobRecord:
             "outputs": outputs,
             "invariants": invariants,
             "size_cap_fallback": size_cap_fallback,
-        })
+        }
+
+        # 8b. Promote SIZE_CAP warning fields to top level for easy querying
+        if size_cap_fallback:
+            artifact_data["size_cap_exceeded"] = size_cap_fallback.get(
+                "size_cap_exceeded", True)
+            artifact_data["warnings"] = size_cap_fallback.get(
+                "warnings", ["SIZE_CAP_EXCEEDED"])
+            artifact_data["review_packets_archive"] = size_cap_fallback.get(
+                "review_packets_archive",
+                size_cap_fallback.get("archive_path"))
+            artifact_data["review_packets_dir"] = size_cap_fallback.get(
+                "review_packets_dir",
+                size_cap_fallback.get("packet_dir"))
+
+        write_artifact_json(job.job_id, artifact_data)
 
         # 9. Cleanup worktree
         if worktree_path and os.path.isdir(worktree_path):
