@@ -8,21 +8,34 @@ const ALLOWED_ORIGINS = new Set([
 ]);
 
 /**
- * Validate the request Origin header to prevent cross-site request forgery.
- * Fail-closed: rejects requests with missing or non-local Origin.
+ * Validate request origin to prevent cross-site request forgery.
+ * Fail-closed: rejects requests that cannot be verified as same-origin.
+ *
+ * Checks (in order):
+ *  1. Origin header matches an allowed localhost origin, OR
+ *  2. Sec-Fetch-Site header is "same-origin" (sent by all modern browsers
+ *     for same-origin fetch(), including GET where Origin may be omitted).
+ *
+ * Rejects if neither condition is met.
  */
 function validateOrigin(req: NextRequest): NextResponse | null {
   const origin = req.headers.get("origin");
-  if (!origin || !ALLOWED_ORIGINS.has(origin)) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "Forbidden: invalid or missing Origin header. This API only accepts requests from the local console.",
-      },
-      { status: 403 }
-    );
+  if (origin && ALLOWED_ORIGINS.has(origin)) {
+    return null; // Explicit same-origin — allow
   }
-  return null;
+
+  const secFetchSite = req.headers.get("sec-fetch-site");
+  if (secFetchSite === "same-origin") {
+    return null; // Browser-verified same-origin — allow
+  }
+
+  return NextResponse.json(
+    {
+      ok: false,
+      error: "Forbidden: request origin could not be verified. This API only accepts same-origin requests from the local console.",
+    },
+    { status: 403 }
+  );
 }
 
 /**
@@ -39,8 +52,17 @@ export async function POST(req: NextRequest) {
   const originError = validateOrigin(req);
   if (originError) return originError;
 
+  let body: Record<string, unknown>;
   try {
-    const body = await req.json();
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: "Invalid or missing JSON body." },
+      { status: 400 }
+    );
+  }
+
+  try {
     const actionName = body?.action;
 
     if (!actionName || typeof actionName !== "string") {
@@ -67,8 +89,14 @@ export async function POST(req: NextRequest) {
 /**
  * GET /api/exec?check=connectivity
  * Quick SSH connectivity probe.
+ *
+ * Protected by Origin header validation (CSRF).
  */
 export async function GET(req: NextRequest) {
+  // CSRF: reject cross-origin or missing-origin requests
+  const originError = validateOrigin(req);
+  if (originError) return originError;
+
   const check = req.nextUrl.searchParams.get("check");
 
   if (check === "connectivity") {
