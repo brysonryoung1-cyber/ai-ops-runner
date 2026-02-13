@@ -6,10 +6,19 @@
 
 ## Status
 
-All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation added (private-only, Tailscale-only). ORB doctor passes 18/18 in runner context (hooksPath hardening). SIZE_CAP fallback auto-generates review-packet artifacts (now exits 0 = success-with-warning). openclaw_doctor uses tailnet-aware port audit. Automated sshd remediation deterministic on Ubuntu: daemon-reload after socket mask, Include directive enforcement, effective config validation via sshd -T, socket death verification. OpenAI key management hardened: key NEVER printed to human-visible output, importable API (get/set/delete/status), CLI subcommands. Executor hooksPath logging hardened (check=True, explicit failure logging). **OpenClaw safety permanently locked**: one-command apply+verify wrapper (`openclaw_apply_remote.sh`) and continuous VPS guard (`openclaw-guard.timer`, every 10 min) with safe auto-remediation.
+All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation added (private-only, Tailscale-only). ORB doctor passes 18/18 in runner context (hooksPath hardening). SIZE_CAP fallback auto-generates review-packet artifacts (now exits 0 = success-with-warning). openclaw_doctor uses tailnet-aware port audit. Automated sshd remediation deterministic on Ubuntu: daemon-reload after socket mask, Include directive enforcement, effective config validation via sshd -T, socket death verification. OpenAI key management hardened: key NEVER printed to human-visible output, importable API (get/set/delete/status), CLI subcommands. Executor hooksPath logging hardened (check=True, explicit failure logging). **OpenClaw safety permanently locked**: one-command apply+verify wrapper (`openclaw_apply_remote.sh`) and continuous VPS guard (`openclaw-guard.timer`, every 10 min) with safe auto-remediation. **OpenClaw Console**: private macOS-style web UI at `127.0.0.1:8787` for managing the OpenClaw stack on aiops-1 via Tailscale SSH — allowlisted commands only, no public exposure.
 
 ## Recent Changes
 
+- **OpenClaw Console** — Private, macOS-style web UI for managing OpenClaw on aiops-1:
+  - **`apps/openclaw-console/`** — Next.js app (TypeScript + Tailwind CSS) bound to `127.0.0.1:8787` only
+  - **Sidebar nav + 4 pages**: Overview (doctor/ports/timer/docker status), Logs (guard journal), Artifacts (job dirs), Actions (run doctor/apply/guard/ports)
+  - **Strict SSH allowlist** — Only 7 predefined commands can be executed: doctor, apply, guard, ports, timer, journal, artifacts. No arbitrary execution.
+  - **Tailscale CGNAT validation** — `AIOPS_HOST` must be in `100.64.0.0/10`; anything else is rejected fail-closed
+  - **SSH connectivity check** — Probes `ssh root@<HOST> 'echo ok'` on page load; shows clear error if unreachable
+  - **Parsed + raw output** — Status cards with PASS/FAIL indicators + collapsible raw terminal output
+  - **Launcher**: `./ops/openclaw_console_up.sh` — ensures deps, creates `.env.local`, starts on port 8787
+  - **Docs**: `docs/OPENCLAW_CONSOLE.md` — quick start, security model, troubleshooting
 - **OpenClaw safety permanently locked** — Two new automation layers ensure OpenClaw security cannot regress:
   - **One-command apply+verify** — `ops/openclaw_apply_remote.sh [host]` SSHes to aiops-1 (default `root@100.123.61.57`), syncs to origin/main, rebuilds Docker stack, applies SSH Tailscale-only fix, runs full doctor, and prints port proof. Exits nonzero if doctor fails. Tailscale-down guard: skips SSH fix if Tailscale is not up (avoids lockout).
   - **Continuous VPS guard** — `openclaw-guard.timer` runs every 10 minutes via systemd:
@@ -182,8 +191,24 @@ configs/
 ├── job_allowlist.yaml        # Allowlisted job types (incl. ORB jobs)
 └── repo_allowlist.yaml       # Allowlisted target repos (algo-nt8-orb)
 
+apps/openclaw-console/              # Private OpenClaw management UI
+├── src/app/                        # Next.js App Router pages
+│   ├── page.tsx                    # Overview (doctor, ports, timer, docker)
+│   ├── logs/page.tsx               # Guard journal tail
+│   ├── artifacts/page.tsx          # Artifact directory listing
+│   ├── actions/page.tsx            # Action buttons (doctor, apply, guard, ports)
+│   └── api/exec/route.ts          # API route (allowlisted SSH execution)
+├── src/lib/
+│   ├── ssh.ts                      # SSH execution via child_process.execFile
+│   ├── allowlist.ts                # Command allowlist (7 actions)
+│   ├── validate.ts                 # Tailscale CGNAT IP validation
+│   └── hooks.ts                    # React hooks for API calls
+├── src/components/                 # Sidebar, StatusCard, CollapsibleOutput, ActionButton
+└── .env.example                    # AIOPS_HOST, AIOPS_USER
+
 docs/
 ├── DEPLOY_VPS.md             # VPS deployment guide
+├── OPENCLAW_CONSOLE.md       # Console quick start + security model
 ├── LAST_REVIEWED_SHA.txt
 ├── REVIEW_WORKFLOW.md
 ├── REVIEW_PACKET.md
@@ -360,5 +385,6 @@ See `docs/CANONICAL_COMMANDS.md` for the full reference.
 4. **One-command OpenClaw apply**: `./ops/openclaw_apply_remote.sh` (syncs, builds, fixes SSH, verifies)
 5. **Install guard on VPS**: `sudo ./ops/openclaw_install_guard.sh` (enables 10-min timer)
 6. **Check guard status**: `systemctl status openclaw-guard.timer` + `tail /var/log/openclaw_guard.log`
-7. Deploy to VPS: `VPS_SSH_TARGET=runner@<IP> TAILSCALE_AUTHKEY=tskey-... ./ops/vps_deploy.sh`
-8. Check VPS health: `VPS_SSH_TARGET=runner@<IP> ./ops/vps_doctor.sh`
+7. **Launch OpenClaw Console**: `./ops/openclaw_console_up.sh` → http://127.0.0.1:8787
+8. Deploy to VPS: `VPS_SSH_TARGET=runner@<IP> TAILSCALE_AUTHKEY=tskey-... ./ops/vps_deploy.sh`
+9. Check VPS health: `VPS_SSH_TARGET=runner@<IP> ./ops/vps_doctor.sh`

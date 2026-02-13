@@ -9,9 +9,14 @@ build/
 .env
 .venv/
 venv/
-artifacts/
-repos/
+/artifacts/
+/repos/
 *.log
 .pytest_cache/
 .mypy_cache/
 review_packets/
+
+# OpenClaw Console
+apps/openclaw-console/node_modules/
+apps/openclaw-console/.next/
+apps/openclaw-console/.env.local
