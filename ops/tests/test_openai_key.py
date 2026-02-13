@@ -4,7 +4,8 @@ Tests verify:
   - Key from env var works
   - Key never appears in stderr
   - Fail-closed when key missing on all platforms
-  - macOS Keychain lookup/store (mocked)
+  - macOS Keychain lookup/store (mocked subprocess)
+  - Store uses stdin piping — secret NEVER in subprocess argv (argv-leak guard)
   - Linux secrets file (mocked)
   - Interactive prompt stores to Keychain (mocked)
 """
@@ -55,7 +56,7 @@ class TestEnvVar:
 
 
 # ===========================================================================
-# macOS Keychain (mocked)
+# macOS Keychain (mocked subprocess)
 # ===========================================================================
 
 class TestKeychainLookup:
@@ -96,6 +97,91 @@ class TestKeychainStore:
         )
         with mock.patch("subprocess.run", return_value=fake_err):
             assert openai_key.store_in_keychain(FAKE_KEY) is False
+
+    def test_store_passes_secret_via_stdin_not_argv(self):
+        """The secret must be piped via stdin (input=), NEVER in argv."""
+        calls = []
+
+        def capture_run(cmd, **kwargs):
+            calls.append((list(cmd), kwargs))
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with mock.patch("subprocess.run", side_effect=capture_run):
+            openai_key.store_in_keychain(FAKE_KEY)
+
+        # Find the add-generic-password call
+        add_calls = [
+            (cmd, kw) for cmd, kw in calls
+            if "add-generic-password" in cmd
+        ]
+        assert len(add_calls) == 1, f"Expected 1 add call, got {len(add_calls)}"
+        cmd, kwargs = add_calls[0]
+
+        # Secret must NOT appear anywhere in argv
+        for arg in cmd:
+            assert FAKE_KEY not in arg, (
+                f"Secret leaked into subprocess argv: {cmd}"
+            )
+
+        # Secret must be passed via input= (stdin)
+        assert "input" in kwargs, "Secret not passed via stdin"
+        assert FAKE_KEY in kwargs["input"], "Secret not found in stdin input"
+
+
+# ===========================================================================
+# Argv-leak guard: secret must NEVER appear in subprocess arguments
+# ===========================================================================
+
+class TestNoArgvLeak:
+    """Ensure keychain operations never pass the secret via subprocess argv."""
+
+    def test_get_keychain_argv_never_contains_secret(self):
+        """get_from_keychain never puts the secret in args (it reads from stdout)."""
+        fake_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=FAKE_KEY, stderr=""
+        )
+        with mock.patch("subprocess.run", return_value=fake_result) as m:
+            openai_key.get_from_keychain()
+            for call in m.call_args_list:
+                argv = call[0][0] if call[0] else []
+                for arg in argv:
+                    assert FAKE_KEY not in str(arg), (
+                        f"Secret found in get_from_keychain argv: {argv}"
+                    )
+
+    def test_store_keychain_argv_never_contains_secret(self):
+        """store_in_keychain passes the secret via stdin, not argv."""
+        fake_ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with mock.patch("subprocess.run", return_value=fake_ok) as m:
+            openai_key.store_in_keychain(FAKE_KEY)
+            for call in m.call_args_list:
+                argv = call[0][0] if call[0] else []
+                for arg in argv:
+                    assert FAKE_KEY not in str(arg), (
+                        f"Secret found in store_in_keychain argv: {argv}"
+                    )
+
+    def test_e2e_no_subprocess_argv_contains_secret(self):
+        """End-to-end: run main() on macOS and verify no subprocess call
+        ever receives the secret in argv."""
+        fake_ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch("platform.system", return_value="Darwin"):
+                with mock.patch.object(
+                    openai_key, "get_from_keychain", return_value=None
+                ):
+                    with mock.patch.object(
+                        openai_key, "prompt_and_store", return_value=FAKE_KEY
+                    ):
+                        with mock.patch("subprocess.run", return_value=fake_ok) as m:
+                            openai_key.main()
+                            for call in m.call_args_list:
+                                argv = call[0][0] if call[0] else call[1].get("args", [])
+                                for arg in argv:
+                                    assert FAKE_KEY not in str(arg), (
+                                        f"Secret found in subprocess argv: {argv}"
+                                    )
 
 
 # ===========================================================================

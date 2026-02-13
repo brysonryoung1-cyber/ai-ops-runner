@@ -6,19 +6,19 @@
 
 ## Status
 
-All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation added (private-only, Tailscale-only). ORB doctor passes 18/18 in runner context (hooksPath hardening). SIZE_CAP fallback auto-generates review-packet artifacts.
+All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation added (private-only, Tailscale-only). ORB doctor passes 18/18 in runner context (hooksPath hardening). SIZE_CAP fallback auto-generates review-packet artifacts. macOS Keychain storage uses stdin piping (no argv leak). Executor hooksPath logging hardened (check=True, explicit failure logging).
 
 ## Recent Changes
 
 - **Secure OpenAI key loading** — Zero-recurring-step secret management for Codex CLI:
   - `ops/openai_key.py` — Cross-platform key loader (env → Keychain → Linux file → prompt)
   - `ops/ensure_openai_key.sh` — Shell wrapper (source before Codex calls)
-  - macOS: auto-prompt + store in Keychain (service: `ai-ops-runner-openai`)
+  - macOS: Keychain storage uses `security` CLI with stdin piping (**no secret in argv** — eliminates credential-leak risk)
   - Linux: read from `/etc/ai-ops-runner/secrets/openai_api_key` (chmod 600)
   - Fail-closed: pipeline stops with clear message if key unavailable
   - Updated `review_auto.sh`, `autoheal_codex.sh`, `ship_auto.sh` to source the helper
   - `CODEX_SKIP=1` mode bypasses key loading (no Codex needed for simulated verdicts)
-  - Selftests: `ops/tests/openai_key_selftest.sh` + `ops/tests/test_openai_key.py` (22 tests)
+  - Selftests: `ops/tests/openai_key_selftest.sh` + `ops/tests/test_openai_key.py` (31 tests, including argv-leak guards)
 - **ORB Wrapper Hardening** (see dedicated section below)
 - **SIZE_CAP → review packets**: When `orb_review_bundle` hits exit code 6 (SIZE_CAP), the wrapper now auto-generates:
   - Per-file packet diffs in `review_packets/<stamp>/packet_NNN.txt`
@@ -118,7 +118,7 @@ Two paper cuts have been eliminated to make ORB automation day-to-day useful:
 **Problem**: ORB's `doctor_repo.sh` checks that `core.hooksPath` is set to `.githooks`. In the runner's ephemeral worktree (created from a bare mirror), this config was never set, causing a false finding (17/18).
 
 **Fix (two layers)**:
-1. **Executor** (`executor.py`, step 2a): After `create_worktree()` and **before** `make_readonly()`, the executor checks for `.githooks/` in the worktree and sets `git config core.hooksPath .githooks`. This applies to *all* job types.
+1. **Executor** (`executor.py`, step 2a): After `create_worktree()` and **before** `make_readonly()`, the executor checks for `.githooks/` in the worktree and sets `git config core.hooksPath .githooks` with `check=True`. On failure, logs a warning with stderr (never logs success if it failed). This applies to *all* job types.
 2. **Wrapper** (`orb_doctor.sh`): Belt-and-suspenders — the wrapper also sets `core.hooksPath` if `.githooks/` exists.
 
 **Why it's safe**: `git config` writes to the gitdir config (located under `/repos/` outside the worktree), so no tracked files are modified, `git status --porcelain` stays clean, and mutation detection is NOT tripped.
@@ -156,15 +156,16 @@ All Codex-powered workflows (`review_auto.sh`, `autoheal_codex.sh`, `ship_auto.s
 
 **Resolution order (fail-fast):**
 1. `OPENAI_API_KEY` env var — if already set, use immediately.
-2. macOS Keychain — service `ai-ops-runner-openai`, account `openai_api_key`.
+2. macOS Keychain — service `ai-ops-runner-openai`, account `openai_api_key` (read via `security find-generic-password`, **no secret in argv**).
 3. Linux file — `/etc/ai-ops-runner/secrets/openai_api_key` (chmod 600).
-4. macOS interactive prompt — uses `getpass` (no echo), stores in Keychain.
+4. macOS interactive prompt — uses `getpass` (no echo), stores in Keychain via `security add-generic-password` with stdin piping (**no secret in argv**).
 
 **Invariants:**
-- Key never committed to git, never echoed to terminal, never in stderr.
+- Key never committed to git, never echoed to terminal, never in stderr, **never in process argv**.
 - `CODEX_SKIP=1` (simulated mode) bypasses key loading entirely.
 - Fail-closed: if key unavailable, pipeline stops with human-readable instructions.
 - One-time bootstrap only: after initial setup, all reruns succeed without manual export.
+- No external Python dependencies required — uses macOS `security` CLI with stdin piping.
 
 ## VPS Deployment Design
 
@@ -204,7 +205,7 @@ The pre-push hook is the last line of defense. It has:
 6. **MUTATION_DETECTED** — if worktree is dirty post-job, job fails with changed file list
 7. **Private-only networking** — no public ports, Tailscale-only access, UFW deny incoming
 8. **Review-gated VPS updates** — fail-closed if code hasn't been APPROVED by ship_auto
-9. **Secure key management** — keys never in git; auto-loaded from Keychain (macOS) or /etc secrets (Linux); fail-closed
+9. **Secure key management** — keys never in git, never in argv; auto-loaded from Keychain via stdin piping (macOS) or /etc secrets (Linux); fail-closed
 
 ## Canonical Command
 

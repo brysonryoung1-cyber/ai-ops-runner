@@ -75,12 +75,21 @@ def execute_job(job: JobRecord) -> JobRecord:
         #     *all* job types (not just orb_doctor) see the correct config.
         githooks_dir = os.path.join(worktree_path, ".githooks")
         if os.path.isdir(githooks_dir):
-            subprocess.run(
-                ["git", "-C", worktree_path, "config",
-                 "core.hooksPath", ".githooks"],
-                capture_output=True,
-            )
-            log.info("Set core.hooksPath=.githooks for job %s", job.job_id)
+            try:
+                subprocess.run(
+                    ["git", "-C", worktree_path, "config",
+                     "core.hooksPath", ".githooks"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                log.info("Set core.hooksPath=.githooks for job %s", job.job_id)
+            except subprocess.CalledProcessError as exc:
+                log.warning(
+                    "Failed to set core.hooksPath for job %s: %s",
+                    job.job_id,
+                    exc.stderr.strip() if exc.stderr else str(exc),
+                )
 
         # 3. Make worktree read-only (preserve execute bits)
         make_readonly(worktree_path)

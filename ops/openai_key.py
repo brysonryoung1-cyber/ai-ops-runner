@@ -46,7 +46,12 @@ def get_from_env() -> "str | None":
 # ---------------------------------------------------------------------------
 
 def get_from_keychain() -> "str | None":
-    """Retrieve from macOS Keychain. Returns None if not found."""
+    """Retrieve from macOS Keychain via `security find-generic-password`.
+
+    The secret is NOT passed as an argv argument — it is returned in
+    stdout.  Safe from credential-leak via /proc or `ps`.
+    Returns None if not found.
+    """
     try:
         result = subprocess.run(
             [
@@ -68,7 +73,13 @@ def get_from_keychain() -> "str | None":
 
 
 def store_in_keychain(key: str) -> bool:
-    """Store key in macOS Keychain. Returns True on success."""
+    """Store key in macOS Keychain — secret piped via stdin, never in argv.
+
+    Uses `security add-generic-password … -w` (no trailing value) which
+    reads the password from stdin instead of from the command line.
+    This prevents the secret from appearing in process arguments
+    (visible via `ps` or /proc/*/cmdline).
+    """
     # Remove existing entry (ignore errors if absent)
     try:
         subprocess.run(
@@ -84,13 +95,16 @@ def store_in_keychain(key: str) -> bool:
         pass
 
     try:
+        # -w at end (no value) → reads password from stdin.
+        # Sent twice because security prompts for confirmation.
         result = subprocess.run(
             [
                 "security", "add-generic-password",
                 "-s", SERVICE_NAME,
                 "-a", ACCOUNT_NAME,
-                "-w", key,
+                "-w",
             ],
+            input=f"{key}\n{key}\n",
             capture_output=True,
             text=True,
             timeout=10,
