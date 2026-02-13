@@ -51,20 +51,41 @@ if command -v docker >/dev/null 2>&1; then
   else
     UNHEALTHY="$(echo "$COMPOSE_STATUS" | python3 -c "
 import sys, json
-lines = sys.stdin.read().strip().split('\n')
+
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(0)
+
+# docker compose ps --format json may emit:
+#   - one JSON object per line  (older docker compose)
+#   - a single JSON array       (newer docker compose)
+services = []
+try:
+    parsed = json.loads(raw)
+    if isinstance(parsed, list):
+        services = parsed
+    elif isinstance(parsed, dict):
+        services = [parsed]
+except json.JSONDecodeError:
+    # Fall back to line-by-line parsing
+    for line in raw.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            services.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
 bad = []
-for line in lines:
-    if not line.strip():
+for svc in services:
+    if not isinstance(svc, dict):
         continue
-    try:
-        svc = json.loads(line)
-        state = svc.get('State', '').lower()
-        health = svc.get('Health', '').lower()
-        name = svc.get('Name', svc.get('Service', 'unknown'))
-        if state != 'running' or health == 'unhealthy':
-            bad.append(f'{name}({state}/{health})')
-    except json.JSONDecodeError:
-        pass
+    state = svc.get('State', '').lower()
+    health = svc.get('Health', '').lower()
+    name = svc.get('Name', svc.get('Service', 'unknown'))
+    if state != 'running' or health == 'unhealthy':
+        bad.append(f'{name}({state}/{health})')
 if bad:
     print(' '.join(bad))
 " 2>/dev/null || echo "parse-error")"

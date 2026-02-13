@@ -23,6 +23,7 @@ import getpass
 import os
 import platform
 import queue as _queue
+import shlex
 import sys
 import threading as _threading
 
@@ -308,7 +309,10 @@ def main(argv: "list[str] | None" = None) -> int:
                 'Use: eval "$(python3 openai_key.py --emit-env)"'
             )
             return 1
-        print(f"export OPENAI_API_KEY={key}")
+        # Shell-escape the key to prevent command injection when used
+        # with eval "$(...)".  OpenAI keys are typically safe ASCII, but
+        # defense-in-depth: shlex.quote wraps in single quotes.
+        print(f"export OPENAI_API_KEY={shlex.quote(key)}")
     else:
         # Default mode: print key for shell capture via $()
         # (stdout is a pipe when captured — key is not visible to humans)

@@ -339,11 +339,30 @@ class TestEmitEnv:
 
     def test_emit_env_non_tty_ok(self, capsys):
         """--emit-env outputs export statement when stdout is not a TTY."""
+        import shlex
+
         with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_KEY}):
             with mock.patch.object(sys.stdout, "isatty", return_value=False):
                 rc = openai_key.main(["--emit-env"])
         assert rc == 0
-        assert capsys.readouterr().out.strip() == f"export OPENAI_API_KEY={FAKE_KEY}"
+        out = capsys.readouterr().out.strip()
+        assert out == f"export OPENAI_API_KEY={shlex.quote(FAKE_KEY)}"
+
+    def test_emit_env_shell_escaping(self, capsys):
+        """--emit-env must shell-escape the key to prevent command injection."""
+        import shlex
+
+        # Key with shell metacharacters (would be dangerous unescaped in eval)
+        evil_key = "sk-test$(rm -rf /)"
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": evil_key}):
+            with mock.patch.object(sys.stdout, "isatty", return_value=False):
+                rc = openai_key.main(["--emit-env"])
+        assert rc == 0
+        out = capsys.readouterr().out.strip()
+        # Must be safely quoted — the raw $() must NOT appear unquoted
+        assert out == f"export OPENAI_API_KEY={shlex.quote(evil_key)}"
+        # Double-check: the output must contain single quotes around the value
+        assert "'" in out
 
 
 # ===========================================================================
@@ -397,6 +416,8 @@ class TestSubprocessInvocation:
 
     def test_emit_env_e2e(self):
         """--emit-env outputs 'export OPENAI_API_KEY=...' when captured."""
+        import shlex
+
         result = subprocess.run(
             [sys.executable, str(KEY_SCRIPT), "--emit-env"],
             env={**os.environ, "OPENAI_API_KEY": FAKE_KEY},
@@ -405,7 +426,7 @@ class TestSubprocessInvocation:
             timeout=10,
         )
         assert result.returncode == 0
-        assert result.stdout.strip() == f"export OPENAI_API_KEY={FAKE_KEY}"
+        assert result.stdout.strip() == f"export OPENAI_API_KEY={shlex.quote(FAKE_KEY)}"
         assert FAKE_KEY not in result.stderr
 
 
@@ -463,8 +484,14 @@ class TestSourceCodeSecurity:
                 continue
             # Match print(...key...) but allow the two known-safe patterns
             if re.search(r'\bprint\(.*\bkey\b', stripped):
-                # Known safe: print(key) for stdout capture
-                if stripped in ("print(key)", "print(f\"export OPENAI_API_KEY={key}\")"):
+                # Known safe patterns:
+                #   print(key)                                          — stdout capture
+                #   print(f"export OPENAI_API_KEY={shlex.quote(key)}")  — shell-escaped emit
+                safe_patterns = (
+                    "print(key)",
+                    'print(f"export OPENAI_API_KEY={shlex.quote(key)}")',
+                )
+                if stripped in safe_patterns:
                     continue
                 # Fail on anything else
                 assert False, (
