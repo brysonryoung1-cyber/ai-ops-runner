@@ -55,6 +55,13 @@ function parseDockerStatus(stdout: string): string {
   return "—";
 }
 
+/** Extract the last N lines from a string. */
+function lastNLines(text: string, n: number): string {
+  const raw = text.replace(/\x1b\[[0-9;]*m/g, "");
+  const lines = raw.split("\n").filter((l) => l.trim());
+  return lines.slice(-n).join("\n");
+}
+
 export default function OverviewPage() {
   const { exec, loading, results } = useExec();
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -80,6 +87,7 @@ export default function OverviewPage() {
       exec("doctor");
       exec("ports");
       exec("timer");
+      exec("journal");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
@@ -87,11 +95,13 @@ export default function OverviewPage() {
   const doctorResult = results["doctor"];
   const portsResult = results["ports"];
   const timerResult = results["timer"];
+  const journalResult = results["journal"];
 
   const doctorSummary = doctorResult ? parseDoctorSummary(doctorResult.stdout) : "";
   const portInfo = portsResult ? parsePortSummary(portsResult.stdout) : null;
   const timerStatus = timerResult ? parseTimerStatus(timerResult.stdout) : "";
   const dockerStatus = doctorResult ? parseDockerStatus(doctorResult.stdout) : "";
+  const guardLogLines = journalResult ? lastNLines(journalResult.stdout, 20) : "";
 
   return (
     <div>
@@ -204,6 +214,36 @@ export default function OverviewPage() {
         />
       </div>
 
+      {/* Guard log lines (last 20) */}
+      {(guardLogLines || loading === "journal") && (
+        <div className="mt-6">
+          <div className="bg-apple-card rounded-apple border border-apple-border shadow-apple overflow-hidden">
+            <div className="px-5 py-3 bg-gray-50 border-b border-apple-border flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${loading === "journal" ? "bg-apple-blue animate-pulse-dot" : journalResult?.ok ? "bg-apple-green" : "bg-apple-border"}`} />
+                <span className="text-sm font-semibold text-apple-text">
+                  Guard Log (last 20 lines)
+                </span>
+              </div>
+              {journalResult && (
+                <span className="text-xs text-apple-muted">
+                  {journalResult.durationMs}ms
+                </span>
+              )}
+            </div>
+            {guardLogLines ? (
+              <div className="output-block rounded-none border-0 max-h-[300px]">
+                {guardLogLines}
+              </div>
+            ) : loading === "journal" ? (
+              <div className="px-5 py-4">
+                <p className="text-xs text-apple-muted">Loading guard logs…</p>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
+
       {/* Refresh button */}
       <div className="mt-6 flex justify-end">
         <button
@@ -211,6 +251,7 @@ export default function OverviewPage() {
             exec("doctor");
             exec("ports");
             exec("timer");
+            exec("journal");
           }}
           disabled={!!loading}
           className="px-4 py-2 text-xs font-medium text-apple-blue bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors disabled:opacity-50"

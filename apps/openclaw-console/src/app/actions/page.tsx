@@ -42,6 +42,13 @@ const ACTIONS: ActionDef[] = [
     description: "List all listening TCP ports (ss -lntp) on aiops-1",
     variant: "secondary",
   },
+  {
+    action: "journal",
+    label: "Tail Guard Log",
+    description:
+      "Show the last 200 lines of the openclaw-guard service journal",
+    variant: "secondary",
+  },
 ];
 
 export default function ActionsPage() {
@@ -171,7 +178,8 @@ export default function ActionsPage() {
         <p className="text-xs text-apple-muted">
           <span className="font-semibold">Security:</span> Only allowlisted
           commands are executed. No arbitrary command execution. All traffic goes
-          over Tailscale SSH. The console binds to 127.0.0.1 only.
+          over Tailscale SSH. The console binds to 127.0.0.1 only. API requires
+          X-OpenClaw-Token header when configured.
         </p>
       </div>
     </div>

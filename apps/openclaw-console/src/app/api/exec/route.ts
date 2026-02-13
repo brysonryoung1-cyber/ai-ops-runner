@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { executeAction, checkConnectivity } from "@/lib/ssh";
 
-/** Allowed origins for CSRF protection (localhost-only console). */
-const ALLOWED_ORIGINS = new Set([
-  "http://127.0.0.1:8787",
-  "http://localhost:8787",
-]);
+/**
+ * Compute allowed origins dynamically based on configured port.
+ * Supports OPENCLAW_CONSOLE_PORT env var (default 8787).
+ */
+function getAllowedOrigins(): Set<string> {
+  const port = process.env.OPENCLAW_CONSOLE_PORT || process.env.PORT || "8787";
+  return new Set([
+    `http://127.0.0.1:${port}`,
+    `http://localhost:${port}`,
+  ]);
+}
 
 /**
  * Validate request origin to prevent cross-site request forgery.
@@ -19,8 +25,10 @@ const ALLOWED_ORIGINS = new Set([
  * Rejects if neither condition is met.
  */
 function validateOrigin(req: NextRequest): NextResponse | null {
+  const allowedOrigins = getAllowedOrigins();
+
   const origin = req.headers.get("origin");
-  if (origin && ALLOWED_ORIGINS.has(origin)) {
+  if (origin && allowedOrigins.has(origin)) {
     return null; // Explicit same-origin — allow
   }
 
@@ -45,7 +53,10 @@ function validateOrigin(req: NextRequest): NextResponse | null {
  * Executes an allowlisted SSH command against the configured AIOPS host.
  * Returns structured JSON with stdout, stderr, exit code, and timing.
  *
- * Protected by Origin header validation (CSRF).
+ * Protected by:
+ *  1. Token auth (middleware — X-OpenClaw-Token header)
+ *  2. Origin validation (CSRF — this handler)
+ *  3. Command allowlist (ssh.ts / allowlist.ts)
  */
 export async function POST(req: NextRequest) {
   // CSRF: reject cross-origin or missing-origin requests
@@ -90,7 +101,9 @@ export async function POST(req: NextRequest) {
  * GET /api/exec?check=connectivity
  * Quick SSH connectivity probe.
  *
- * Protected by Origin header validation (CSRF).
+ * Protected by:
+ *  1. Token auth (middleware)
+ *  2. Origin validation (CSRF)
  */
 export async function GET(req: NextRequest) {
   // CSRF: reject cross-origin or missing-origin requests

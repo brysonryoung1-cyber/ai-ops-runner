@@ -6,10 +6,19 @@
 
 ## Status
 
-All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation added (private-only, Tailscale-only). ORB doctor passes 18/18 in runner context (hooksPath hardening). SIZE_CAP fallback auto-generates review-packet artifacts (now exits 0 = success-with-warning). openclaw_doctor uses tailnet-aware port audit. Automated sshd remediation deterministic on Ubuntu: daemon-reload after socket mask, Include directive enforcement, effective config validation via sshd -T, socket death verification. OpenAI key management hardened: key NEVER printed to human-visible output, importable API (get/set/delete/status), CLI subcommands. Executor hooksPath logging hardened (check=True, explicit failure logging). **OpenClaw safety permanently locked**: one-command apply+verify wrapper (`openclaw_apply_remote.sh`) and continuous VPS guard (`openclaw-guard.timer`, every 10 min) with safe auto-remediation. **OpenClaw Console**: private macOS-style web UI at `127.0.0.1:8787` for managing the OpenClaw stack on aiops-1 via Tailscale SSH — allowlisted commands only, no public exposure.
+All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation added (private-only, Tailscale-only). ORB doctor passes 18/18 in runner context (hooksPath hardening). SIZE_CAP fallback auto-generates review-packet artifacts (now exits 0 = success-with-warning). openclaw_doctor uses tailnet-aware port audit. Automated sshd remediation deterministic on Ubuntu: daemon-reload after socket mask, Include directive enforcement, effective config validation via sshd -T, socket death verification. OpenAI key management hardened: key NEVER printed to human-visible output, importable API (get/set/delete/status), CLI subcommands. Executor hooksPath logging hardened (check=True, explicit failure logging). **OpenClaw safety permanently locked**: one-command apply+verify wrapper (`openclaw_apply_remote.sh`) and continuous VPS guard (`openclaw-guard.timer`, every 10 min) with safe auto-remediation. **OpenClaw Console — production-grade**: private macOS-style web UI at `127.0.0.1:8787` with production build/start/stop lifecycle, macOS LaunchAgent autostart, Keychain-backed auth token, Tailscale-only target profiles, and full runbook.
 
 ## Recent Changes
 
+- **OpenClaw Console — production-grade operator panel** — Full lifecycle management for the console:
+  - **Production build/start/stop/status** — `ops/openclaw_console_build.sh` (npm ci + next build), `ops/openclaw_console_start.sh` (production server, 127.0.0.1 only, PID file, timestamped logs), `ops/openclaw_console_stop.sh` (graceful shutdown + force-kill fallback), `ops/openclaw_console_status.sh` (PID, URL, last 30 log lines). All idempotent.
+  - **macOS LaunchAgent autostart** — `ops/openclaw_console_install_macos_launchagent.sh` installs `com.openclaw.console.plist` for RunAtLoad. Uninstall script included. Idempotent.
+  - **Keychain auth token** — `ops/openclaw_console_token.py` (status/rotate) stores a 256-bit hex token in macOS Keychain (service=`ai-ops-runner`, account=`OPENCLAW_CONSOLE_TOKEN`). `start.sh` reads it from Keychain and passes as env var. Next.js middleware enforces `X-OpenClaw-Token` header on all `/api/*` routes. 401 on mismatch; single-line security event logged (no secrets).
+  - **Tailscale-only target profiles** — `ops/openclaw_targets.py` (init/show/set-active) manages `~/.config/openclaw/targets.json`. Hosts must be in `100.64.0.0/10`; non-tailnet IPs rejected fail-closed. Console UI shows active target in sidebar.
+  - **Enhanced UX** — Overview page now shows guard timer status + last 20 guard log lines. Actions page adds "Tail Guard Log" button. Dynamic port support via `OPENCLAW_CONSOLE_PORT` env var.
+  - **Security hardening** — Token auth middleware (fail-closed), dynamic origin validation (CSRF), no permissive CORS headers, command allowlist preserved, apply failures not masked.
+  - **Docs** — `docs/OPENCLAW_CONSOLE_RUNBOOK.md` with all commands + troubleshooting.
+  - **Tests** — `test_openclaw_console_token.py` (9 tests: generation, masking), `test_openclaw_targets.py` (20 tests: IP validation, target schema, boundary checks).
 - **Review gate OpenAI Keychain hardening** — Non-interactive, deterministic key loading:
   - **Canonical Keychain convention**: service=`ai-ops-runner`, account=`OPENAI_API_KEY` (migrates legacy entries automatically)
   - **New public API**: `load_openai_api_key() -> str`, `load_openai_api_key_masked() -> str`, `assert_openai_api_key_valid() -> None`
@@ -199,19 +208,22 @@ configs/
 ├── job_allowlist.yaml        # Allowlisted job types (incl. ORB jobs)
 └── repo_allowlist.yaml       # Allowlisted target repos (algo-nt8-orb)
 
-apps/openclaw-console/              # Private OpenClaw management UI
+apps/openclaw-console/              # Private OpenClaw management UI (production-grade)
 ├── src/app/                        # Next.js App Router pages
-│   ├── page.tsx                    # Overview (doctor, ports, timer, docker)
+│   ├── page.tsx                    # Overview (doctor, ports, timer, docker, guard logs)
 │   ├── logs/page.tsx               # Guard journal tail
 │   ├── artifacts/page.tsx          # Artifact directory listing
-│   ├── actions/page.tsx            # Action buttons (doctor, apply, guard, ports)
-│   └── api/exec/route.ts          # API route (allowlisted SSH execution)
+│   ├── actions/page.tsx            # Action buttons (doctor, apply, guard, ports, journal)
+│   └── api/exec/route.ts          # API route (allowlisted SSH execution, dynamic port)
+├── src/middleware.ts               # Token auth middleware (X-OpenClaw-Token)
 ├── src/lib/
 │   ├── ssh.ts                      # SSH execution via child_process.execFile
 │   ├── allowlist.ts                # Command allowlist (7 actions)
-│   ├── validate.ts                 # Tailscale CGNAT IP validation
-│   └── hooks.ts                    # React hooks for API calls
-├── src/components/                 # Sidebar, StatusCard, CollapsibleOutput, ActionButton
+│   ├── validate.ts                 # Tailscale CGNAT + targets.json support
+│   ├── hooks.ts                    # React hooks with token auth
+│   ├── token-context.tsx           # Client token context provider
+│   └── target-context.tsx          # Client target info context
+├── src/components/                 # Sidebar (with target badge), StatusCard, etc.
 └── .env.example                    # AIOPS_HOST, AIOPS_USER
 
 docs/
@@ -405,6 +417,14 @@ See `docs/CANONICAL_COMMANDS.md` for the full reference.
 4. **One-command OpenClaw apply**: `./ops/openclaw_apply_remote.sh` (syncs, builds, fixes SSH, verifies)
 5. **Install guard on VPS**: `sudo ./ops/openclaw_install_guard.sh` (enables 10-min timer)
 6. **Check guard status**: `systemctl status openclaw-guard.timer` + `tail /var/log/openclaw_guard.log`
-7. **Launch OpenClaw Console**: `./ops/openclaw_console_up.sh` → http://127.0.0.1:8787
-8. Deploy to VPS: `VPS_SSH_TARGET=runner@<IP> TAILSCALE_AUTHKEY=tskey-... ./ops/vps_deploy.sh`
-9. Check VPS health: `VPS_SSH_TARGET=runner@<IP> ./ops/vps_doctor.sh`
+7. **Launch OpenClaw Console (production)**:
+   ```bash
+   python3 ops/openclaw_targets.py init         # one-time
+   python3 ops/openclaw_console_token.py rotate  # one-time
+   ./ops/openclaw_console_build.sh
+   ./ops/openclaw_console_start.sh               # → http://127.0.0.1:8787
+   ```
+8. **Autostart at login**: `./ops/openclaw_console_install_macos_launchagent.sh`
+9. **Console runbook**: `docs/OPENCLAW_CONSOLE_RUNBOOK.md`
+10. Deploy to VPS: `VPS_SSH_TARGET=runner@<IP> TAILSCALE_AUTHKEY=tskey-... ./ops/vps_deploy.sh`
+11. Check VPS health: `VPS_SSH_TARGET=runner@<IP> ./ops/vps_doctor.sh`

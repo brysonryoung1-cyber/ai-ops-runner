@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useTarget } from "@/lib/target-context";
 
 const NAV_ITEMS = [
   {
@@ -44,6 +45,7 @@ const NAV_ITEMS = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const target = useTarget();
 
   return (
     <aside className="w-56 min-h-screen bg-apple-sidebar border-r border-apple-border flex flex-col">
@@ -65,6 +67,21 @@ export default function Sidebar() {
           </div>
         </div>
       </div>
+
+      {/* Active target badge */}
+      {target && (
+        <div className="mx-3 mb-3 px-3 py-2 bg-blue-50 rounded-lg border border-blue-100">
+          <p className="text-[10px] font-semibold text-apple-blue uppercase tracking-wider">
+            Target
+          </p>
+          <p className="text-[12px] font-medium text-apple-text mt-0.5">
+            {target.name}
+          </p>
+          <p className="text-[10px] text-apple-muted font-mono">
+            {target.host}
+          </p>
+        </div>
+      )}
 
       {/* Navigation */}
       <nav className="flex-1 px-3">
@@ -96,7 +113,7 @@ export default function Sidebar() {
       {/* Footer */}
       <div className="px-5 py-4 border-t border-apple-border">
         <p className="text-[11px] text-apple-muted">
-          Tailscale-only · 127.0.0.1
+          Tailscale-only &middot; 127.0.0.1
         </p>
       </div>
     </aside>

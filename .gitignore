@@ -20,3 +20,4 @@ review_packets/
 apps/openclaw-console/node_modules/
 apps/openclaw-console/.next/
 apps/openclaw-console/.env.local
+logs/
