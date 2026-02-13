@@ -6,12 +6,16 @@
 #
 # What it does:
 #   1. Determines the Tailscale IPv4 address.
-#   2. Writes /etc/ssh/sshd_config.d/99-tailscale-only.conf:
+#   2. Disables ssh.socket if active (systemd socket activation bypasses sshd_config).
+#   3. Writes /etc/ssh/sshd_config.d/99-tailscale-only.conf:
 #        AddressFamily inet
 #        ListenAddress <TAILSCALE_IP>
-#   3. Validates the config with: sshd -t
-#   4. Restarts sshd: systemctl restart ssh
-#   5. Verifies with: ss -ltnp | grep :22 that sshd no longer on 0.0.0.0 / :::
+#   4. Validates the config with: sshd -t
+#   5. Restarts sshd: systemctl restart ssh
+#   6. Verifies with: ss -ltnp | grep :22 that sshd no longer on 0.0.0.0 / :::
+#
+# Test mode: set OPENCLAW_TEST_ROOT to a temp dir to run without root
+#            (stubs systemctl/tailscale/sshd/ss in PATH).
 #
 # Does NOT change auth methods, disable root login, or alter any other
 # sshd settings. Minimal and safe.
@@ -27,8 +31,12 @@ echo "  Time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "  Host: $(hostname)"
 echo ""
 
-# --- 0. Root check ---
-if [ "$(id -u)" -ne 0 ]; then
+# --- 0. Root check (skipped in test mode) ---
+OPENCLAW_TEST_ROOT="${OPENCLAW_TEST_ROOT:-}"
+if [ -n "$OPENCLAW_TEST_ROOT" ]; then
+  echo "  [TEST MODE] OPENCLAW_TEST_ROOT=$OPENCLAW_TEST_ROOT"
+fi
+if [ -z "$OPENCLAW_TEST_ROOT" ] && [ "$(id -u)" -ne 0 ]; then
   echo "ERROR: This script must run as root (use sudo)." >&2
   exit 1
 fi
@@ -55,10 +63,34 @@ fi
 
 echo "  Tailscale IPv4: $TS_IP"
 
-# --- 2. Write sshd drop-in config ---
+# --- 2. Disable ssh.socket (systemd socket activation) ---
 echo ""
-echo "--- Step 2: Write sshd config ---"
-SSHD_CONF_DIR="/etc/ssh/sshd_config.d"
+echo "--- Step 2: Handle ssh.socket (systemd socket activation) ---"
+# When ssh.socket is active, systemd binds :22 on 0.0.0.0/[::] directly and
+# ignores sshd_config ListenAddress directives entirely.  We must disable it.
+if systemctl list-unit-files 2>/dev/null | grep -q '^ssh\.socket'; then
+  echo "  ssh.socket unit found — disabling socket activation"
+  systemctl disable --now ssh.socket 2>/dev/null || true
+  systemctl stop ssh.socket 2>/dev/null || true
+  # Mask prevents systemd from re-enabling on package upgrades
+  systemctl mask ssh.socket 2>/dev/null || true
+  echo "  ssh.socket: disabled + masked"
+  # Ensure the traditional ssh/sshd service is enabled (not socket-activated)
+  if systemctl list-unit-files ssh.service 2>/dev/null | grep -q 'ssh\.service'; then
+    systemctl enable ssh.service 2>/dev/null || true
+    echo "  ssh.service: enabled"
+  elif systemctl list-unit-files sshd.service 2>/dev/null | grep -q 'sshd\.service'; then
+    systemctl enable sshd.service 2>/dev/null || true
+    echo "  sshd.service: enabled"
+  fi
+else
+  echo "  ssh.socket not present — no action needed"
+fi
+
+# --- 3. Write sshd drop-in config ---
+echo ""
+echo "--- Step 3: Write sshd config ---"
+SSHD_CONF_DIR="${OPENCLAW_TEST_ROOT}/etc/ssh/sshd_config.d"
 SSHD_CONF="$SSHD_CONF_DIR/99-tailscale-only.conf"
 
 if [ ! -d "$SSHD_CONF_DIR" ]; then
@@ -79,9 +111,9 @@ echo "  Written: $SSHD_CONF"
 echo "    AddressFamily inet"
 echo "    ListenAddress $TS_IP"
 
-# --- 3. Validate sshd config ---
+# --- 4. Validate sshd config ---
 echo ""
-echo "--- Step 3: Validate sshd config ---"
+echo "--- Step 4: Validate sshd config ---"
 if ! sshd -t 2>&1; then
   echo "ERROR: sshd config validation failed (sshd -t). Removing drop-in." >&2
   rm -f "$SSHD_CONF"
@@ -90,9 +122,9 @@ if ! sshd -t 2>&1; then
 fi
 echo "  sshd -t: OK"
 
-# --- 4. Restart sshd ---
+# --- 5. Restart sshd ---
 echo ""
-echo "--- Step 4: Restart sshd ---"
+echo "--- Step 5: Restart sshd ---"
 if ! systemctl restart ssh 2>&1 && ! systemctl restart sshd 2>&1; then
   echo "ERROR: Failed to restart sshd." >&2
   echo "  Removing drop-in to restore previous config." >&2
@@ -103,9 +135,9 @@ if ! systemctl restart ssh 2>&1 && ! systemctl restart sshd 2>&1; then
 fi
 echo "  sshd restarted"
 
-# --- 5. Verify ---
+# --- 6. Verify ---
 echo ""
-echo "--- Step 5: Verify ---"
+echo "--- Step 6: Verify ---"
 # Give sshd a moment to bind
 sleep 1
 
@@ -116,12 +148,24 @@ if command -v ss >/dev/null 2>&1; then
     [ -n "$line" ] && echo "    $line"
   done
 
-  # Check for public binds
-  if echo "$SSH_BINDS" | grep -qE '(0\.0\.0\.0|::):22'; then
+  # Check for public binds (0.0.0.0:22, [::]:22, *:22)
+  if echo "$SSH_BINDS" | grep -qE '0\.0\.0\.0:22|\[::\]:22|\*:22'; then
     echo "" >&2
     echo "ERROR: sshd is STILL bound to a public address after fix!" >&2
-    echo "  This should not happen. Check /etc/ssh/sshd_config for conflicting" >&2
-    echo "  ListenAddress directives that override the drop-in." >&2
+    echo "" >&2
+    echo "  --- Debug: sshd effective config ---" >&2
+    sshd -T 2>&1 | grep -iE 'addressfamily|listenaddress|port' >&2 || true
+    echo "  --- Debug: systemctl status ---" >&2
+    systemctl status ssh.socket ssh.service sshd.service 2>&1 | head -30 >&2 || true
+    echo "  --- Debug: sshd config files ---" >&2
+    grep -rnH 'ListenAddress\|AddressFamily\|Include' \
+      "${OPENCLAW_TEST_ROOT}/etc/ssh/sshd_config" \
+      "${OPENCLAW_TEST_ROOT}/etc/ssh/sshd_config.d/" 2>/dev/null >&2 || true
+    echo "" >&2
+    echo "  Possible causes:" >&2
+    echo "    - ssh.socket re-activated (check: systemctl is-active ssh.socket)" >&2
+    echo "    - Conflicting ListenAddress in /etc/ssh/sshd_config" >&2
+    echo "    - Include directive loading configs before our drop-in" >&2
     exit 1
   fi
 

@@ -110,7 +110,7 @@ fi
 # --- 4. Public Port Audit (tailnet-aware) ---
 echo "--- Public Port Audit ---"
 # Tailnet-aware port policy (100.64.0.0/10 = Tailscale CGNAT range):
-#   1. 127.0.0.1 / ::1         → always allowed (localhost)
+#   1. 127.0.0.0/8 / ::1       → always allowed (loopback — includes systemd-resolve etc.)
 #   2. 100.64.0.0/10            → PRIVATE (tailnet); allowed for any process
 #   3. tailscaled / tailscale   → allowed on any address (DERP relay, etc.)
 #   4. sshd on 0.0.0.0 / ::    → FAIL (must bind to tailnet IP only)
@@ -134,6 +134,17 @@ def _ip2int(ip):
 def _is_tailnet(addr):
     n = _ip2int(addr)
     return n is not None and TAILNET_LO <= n <= TAILNET_HI
+
+def _is_loopback(addr):
+    if addr == '::1':
+        return True
+    p = addr.split('.')
+    if len(p) == 4:
+        try:
+            return int(p[0]) == 127
+        except ValueError:
+            return False
+    return False
 
 DQ = chr(34)
 DQ_PAT = re.compile(DQ + '([^' + DQ + ']+)' + DQ)
@@ -161,7 +172,7 @@ for line in sys.stdin:
             continue
         addr, port = local[:idx], local[idx+1:]
 
-    if addr in ('127.0.0.1', '::1'):
+    if _is_loopback(addr):
         continue
 
     pm = DQ_PAT.search(line)
@@ -210,11 +221,12 @@ else:
       echo "" >&2
       echo "  This will:" >&2
       echo "    1. Detect your Tailscale IPv4 address" >&2
-      echo "    2. Write /etc/ssh/sshd_config.d/99-tailscale-only.conf" >&2
+      echo "    2. Disable ssh.socket if active (systemd socket activation)" >&2
+      echo "    3. Write /etc/ssh/sshd_config.d/99-tailscale-only.conf" >&2
       echo "       (AddressFamily inet, ListenAddress <TAILSCALE_IP>)" >&2
-      echo "    3. Validate config with: sshd -t" >&2
-      echo "    4. Restart sshd: systemctl restart ssh" >&2
-      echo "    5. Verify sshd is no longer on 0.0.0.0 / :::" >&2
+      echo "    4. Validate config with: sshd -t" >&2
+      echo "    5. Restart sshd: systemctl restart ssh" >&2
+      echo "    6. Verify sshd is no longer on 0.0.0.0 / :::" >&2
       echo "" >&2
       echo "  After running the fix, re-run this doctor to confirm PASS." >&2
     fi

@@ -42,6 +42,17 @@ def _is_tailnet(addr):
     n = _ip2int(addr)
     return n is not None and TAILNET_LO <= n <= TAILNET_HI
 
+def _is_loopback(addr):
+    if addr == '::1':
+        return True
+    p = addr.split('.')
+    if len(p) == 4:
+        try:
+            return int(p[0]) == 127
+        except ValueError:
+            return False
+    return False
+
 DQ = chr(34)
 DQ_PAT = re.compile(DQ + '([^' + DQ + ']+)' + DQ)
 
@@ -68,7 +79,7 @@ for line in sys.stdin:
             continue
         addr, port = local[:idx], local[idx+1:]
 
-    if addr in ('127.0.0.1', '::1'):
+    if _is_loopback(addr):
         continue
 
     pm = DQ_PAT.search(line)
@@ -290,6 +301,80 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Test 16: systemd-resolve on 127.0.0.53:53 → PASS (loopback)
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 16: systemd-resolve on 127.0.0.53:53 → PASS ---"
+RESULT="$(run_analyzer 'LISTEN  0  4096  127.0.0.53:53  0.0.0.0:*  users:(("systemd-resolve",pid=400,fd=17))')"
+if [ "$RESULT" = "OK" ]; then
+  pass "127.0.0.53:53 (systemd-resolve) treated as loopback (OK)"
+else
+  fail "127.0.0.53 should be loopback, got: $RESULT"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 17: systemd-resolve on 127.0.0.54:53 → PASS (loopback)
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 17: systemd-resolve on 127.0.0.54:53 → PASS ---"
+RESULT="$(run_analyzer 'LISTEN  0  4096  127.0.0.54:53  0.0.0.0:*  users:(("systemd-resolve",pid=400,fd=18))')"
+if [ "$RESULT" = "OK" ]; then
+  pass "127.0.0.54:53 (systemd-resolve) treated as loopback (OK)"
+else
+  fail "127.0.0.54 should be loopback, got: $RESULT"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 18: Full VPS scenario — sshd tailnet + systemd-resolve + tailscaled
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 18: Full VPS scenario (clean) ---"
+MOCK_SS="LISTEN  0  128  100.123.61.57:22  0.0.0.0:*  users:((\"sshd\",pid=123,fd=3))
+LISTEN  0  4096  100.123.61.57:40469  0.0.0.0:*  users:((\"tailscaled\",pid=456,fd=9))
+LISTEN  0  4096  127.0.0.1:8000  0.0.0.0:*  users:((\"uvicorn\",pid=789,fd=5))
+LISTEN  0  4096  127.0.0.53:53  0.0.0.0:*  users:((\"systemd-resolve\",pid=400,fd=17))
+LISTEN  0  4096  127.0.0.54:53  0.0.0.0:*  users:((\"systemd-resolve\",pid=400,fd=18))"
+RESULT="$(run_analyzer "$MOCK_SS")"
+if [ "$RESULT" = "OK" ]; then
+  pass "Full VPS scenario: all private (sshd tailnet + resolve loopback + tailscaled)"
+else
+  fail "Full VPS scenario should be OK, got: $RESULT"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 19: sshd public + systemd-resolve → only sshd FAIL
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 19: sshd public + systemd-resolve → only sshd FAIL ---"
+MOCK_SS="LISTEN  0  128  0.0.0.0:22  0.0.0.0:*  users:((\"sshd\",pid=123,fd=3))
+LISTEN  0  4096  127.0.0.53:53  0.0.0.0:*  users:((\"systemd-resolve\",pid=400,fd=17))
+LISTEN  0  4096  127.0.0.54:53  0.0.0.0:*  users:((\"systemd-resolve\",pid=400,fd=18))
+LISTEN  0  4096  127.0.0.1:8000  0.0.0.0:*  users:((\"uvicorn\",pid=789,fd=5))"
+RESULT="$(run_analyzer "$MOCK_SS")"
+if echo "$RESULT" | grep -q "VIOLATIONS" && echo "$RESULT" | grep -q "SSHD_PUBLIC"; then
+  VCOUNT="$(echo "$RESULT" | grep -c ' on ')"
+  if [ "$VCOUNT" -eq 1 ]; then
+    pass "sshd public + systemd-resolve: only sshd violation (resolve OK)"
+  else
+    fail "Expected 1 violation, got $VCOUNT: $RESULT"
+  fi
+else
+  fail "sshd public + systemd-resolve: $RESULT"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 20: 127.99.99.99 is loopback (full 127.0.0.0/8 coverage)
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 20: 127.99.99.99 is loopback → PASS ---"
+RESULT="$(run_analyzer 'LISTEN  0  128  127.99.99.99:9999  0.0.0.0:*  users:(("someproc",pid=555,fd=3))')"
+if [ "$RESULT" = "OK" ]; then
+  pass "127.99.99.99 treated as loopback (full 127.0.0.0/8 coverage)"
+else
+  fail "127.99.99.99 should be loopback, got: $RESULT"
+fi
+
+# ---------------------------------------------------------------------------
 # Verify openclaw_doctor.sh contains the tailnet-aware code
 # ---------------------------------------------------------------------------
 echo ""
@@ -299,6 +384,16 @@ if grep -q '_is_tailnet' "$DOCTOR"; then
   pass "openclaw_doctor.sh contains _is_tailnet function"
 else
   fail "openclaw_doctor.sh missing _is_tailnet function"
+fi
+if grep -q '_is_loopback' "$DOCTOR"; then
+  pass "openclaw_doctor.sh contains _is_loopback function"
+else
+  fail "openclaw_doctor.sh missing _is_loopback function"
+fi
+if grep -q 'ssh\.socket' "$DOCTOR"; then
+  pass "openclaw_doctor.sh references ssh.socket in remediation"
+else
+  fail "openclaw_doctor.sh missing ssh.socket reference in remediation"
 fi
 if grep -q 'SSHD_PUBLIC' "$DOCTOR"; then
   pass "openclaw_doctor.sh detects SSHD_PUBLIC"
