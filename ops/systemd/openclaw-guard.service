@@ -1,0 +1,10 @@
+[Unit]
+Description=OpenClaw safety guard — detect regressions and optionally remediate
+After=ai-ops-runner.service
+Wants=ai-ops-runner.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai-ops-runner
+ExecStart=/bin/bash /opt/ai-ops-runner/ops/openclaw_guard.sh
+TimeoutStartSec=180

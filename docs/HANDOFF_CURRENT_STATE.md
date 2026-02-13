@@ -6,10 +6,32 @@
 
 ## Status
 
-All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation added (private-only, Tailscale-only). ORB doctor passes 18/18 in runner context (hooksPath hardening). SIZE_CAP fallback auto-generates review-packet artifacts (now exits 0 = success-with-warning). openclaw_doctor uses tailnet-aware port audit. Automated sshd remediation deterministic on Ubuntu: daemon-reload after socket mask, Include directive enforcement, effective config validation via sshd -T, socket death verification. OpenAI key management hardened: key NEVER printed to human-visible output, importable API (get/set/delete/status), CLI subcommands. Executor hooksPath logging hardened (check=True, explicit failure logging).
+All systems operational. Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation added (private-only, Tailscale-only). ORB doctor passes 18/18 in runner context (hooksPath hardening). SIZE_CAP fallback auto-generates review-packet artifacts (now exits 0 = success-with-warning). openclaw_doctor uses tailnet-aware port audit. Automated sshd remediation deterministic on Ubuntu: daemon-reload after socket mask, Include directive enforcement, effective config validation via sshd -T, socket death verification. OpenAI key management hardened: key NEVER printed to human-visible output, importable API (get/set/delete/status), CLI subcommands. Executor hooksPath logging hardened (check=True, explicit failure logging). **OpenClaw safety permanently locked**: one-command apply+verify wrapper (`openclaw_apply_remote.sh`) and continuous VPS guard (`openclaw-guard.timer`, every 10 min) with safe auto-remediation.
 
 ## Recent Changes
 
+- **OpenClaw safety permanently locked** — Two new automation layers ensure OpenClaw security cannot regress:
+  - **One-command apply+verify** — `ops/openclaw_apply_remote.sh [host]` SSHes to aiops-1 (default `root@100.123.61.57`), syncs to origin/main, rebuilds Docker stack, applies SSH Tailscale-only fix, runs full doctor, and prints port proof. Exits nonzero if doctor fails. Tailscale-down guard: skips SSH fix if Tailscale is not up (avoids lockout).
+  - **Continuous VPS guard** — `openclaw-guard.timer` runs every 10 minutes via systemd:
+    - Runs `openclaw_doctor.sh`. If PASS → logs and exits 0.
+    - If FAIL: checks Tailscale IPv4 availability AND whether sshd is bound to a public address.
+    - If BOTH conditions met → runs `openclaw_fix_ssh_tailscale_only.sh`, then re-runs doctor.
+    - **CRITICAL SAFETY**: If Tailscale is NOT up, NEVER touches sshd config (prevents bricking remote access).
+    - Always writes timestamped report to `/var/log/openclaw_guard.log` (append).
+  - **Guard install** — `ops/openclaw_install_guard.sh` copies systemd units, reloads, enables timer. Idempotent. Test-mode support via `OPENCLAW_GUARD_INSTALL_ROOT`.
+  - **Hermetic tests** — 62 new test assertions across 3 selftest files:
+    - `openclaw_apply_remote_selftest.sh` (18 tests): static structure, safety guards, Tailscale-down skip
+    - `openclaw_guard_selftest.sh` (25 tests): doctor pass/fail, Tailscale-down skip, remediation success/failure, post-remediation re-check, log append, IPv6 detection
+    - `openclaw_install_guard_selftest.sh` (19 tests): unit copy, permissions, systemctl commands, idempotency, content integrity
+  - **One-command deploy from LOCAL**:
+    ```bash
+    ./ops/openclaw_apply_remote.sh
+    ```
+  - **Guard status check on VPS**:
+    ```bash
+    systemctl status openclaw-guard.timer
+    cat /var/log/openclaw_guard.log | tail -20
+    ```
 - **SSH remediation deterministic on Ubuntu** — Three root causes of sshd still binding `0.0.0.0:22` / `[::]:22` after fix have been eliminated:
   - **systemd daemon-reload** — After masking socket units (`ssh.socket`, `sshd.socket`), `systemctl daemon-reload` is now called to force systemd to pick up the mask immediately. Without this, systemd used cached state and the socket mask didn't take effect before service restart. Socket death is verified; force-killed if still active.
   - **Include directive enforcement** — Script now verifies that `sshd_config` contains `Include /etc/ssh/sshd_config.d/*.conf`. If missing, it prepends one (with backup). Without this, the `99-tailscale-only.conf` drop-in was completely ignored by sshd.
@@ -132,6 +154,9 @@ ops/
 ├── runner_submit_orb_doctor.sh  # Submit orb_doctor + poll + print
 ├── runner_submit_orb_score.sh   # Submit orb_score_run + poll + print
 ├── openclaw_fix_ssh_tailscale_only.sh  # Lock sshd to Tailscale IP (root, fail-closed)
+├── openclaw_apply_remote.sh  # One-command apply + verify from LOCAL to VPS
+├── openclaw_guard.sh         # Continuous regression guard (systemd, safe auto-remediation)
+├── openclaw_install_guard.sh # Install guard systemd units (idempotent)
 ├── vps_bootstrap.sh          # Idempotent VPS setup (docker, tailscale, UFW, systemd)
 ├── vps_deploy.sh             # Deploy wrapper (bootstrap + doctor)
 ├── vps_doctor.sh             # Remote VPS health check
@@ -147,6 +172,9 @@ ops/
     ├── orb_integration_selftest.sh
     ├── openclaw_doctor_selftest.sh
     ├── openclaw_fix_ssh_selftest.sh
+    ├── openclaw_apply_remote_selftest.sh
+    ├── openclaw_guard_selftest.sh
+    ├── openclaw_install_guard_selftest.sh
     ├── openai_key_selftest.sh
     └── test_openai_key.py
 
@@ -329,5 +357,8 @@ See `docs/CANONICAL_COMMANDS.md` for the full reference.
 1. Run `./ops/INSTALL_HOOKS.sh` to activate git hooks
 2. Run `./ops/doctor_repo.sh` to verify repo health
 3. Use `./ops/ship_auto.sh` for the standard ship workflow
-4. Deploy to VPS: `VPS_SSH_TARGET=runner@<IP> TAILSCALE_AUTHKEY=tskey-... ./ops/vps_deploy.sh`
-5. Check VPS health: `VPS_SSH_TARGET=runner@<IP> ./ops/vps_doctor.sh`
+4. **One-command OpenClaw apply**: `./ops/openclaw_apply_remote.sh` (syncs, builds, fixes SSH, verifies)
+5. **Install guard on VPS**: `sudo ./ops/openclaw_install_guard.sh` (enables 10-min timer)
+6. **Check guard status**: `systemctl status openclaw-guard.timer` + `tail /var/log/openclaw_guard.log`
+7. Deploy to VPS: `VPS_SSH_TARGET=runner@<IP> TAILSCALE_AUTHKEY=tskey-... ./ops/vps_deploy.sh`
+8. Check VPS health: `VPS_SSH_TARGET=runner@<IP> ./ops/vps_doctor.sh`
