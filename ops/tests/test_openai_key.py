@@ -354,6 +354,14 @@ class TestEmitEnv:
 class TestSubprocessInvocation:
     """Run openai_key.py as a subprocess — closest to real usage."""
 
+    def _clean_env(self, **overrides):
+        """Build a clean subprocess env: no OPENAI_API_KEY, keyring disabled."""
+        env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
+        # Null backend ensures keyring never returns a stored real key
+        env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
+        env.update(overrides)
+        return env
+
     def test_env_var_e2e(self):
         result = subprocess.run(
             [sys.executable, str(KEY_SCRIPT)],
@@ -367,7 +375,8 @@ class TestSubprocessInvocation:
         assert FAKE_KEY not in result.stderr
 
     def test_missing_key_e2e(self):
-        env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
+        """No env var + null keyring backend → fail-closed (exit non-zero)."""
+        env = self._clean_env()
         result = subprocess.run(
             [sys.executable, str(KEY_SCRIPT)],
             env=env,
@@ -376,7 +385,11 @@ class TestSubprocessInvocation:
             timeout=10,
             stdin=subprocess.DEVNULL,
         )
-        assert result.returncode != 0
+        assert result.returncode != 0, (
+            "Expected non-zero exit when key is absent; got 0. "
+            "Hint: PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring "
+            "should prevent real Keychain from leaking a key."
+        )
         # stdout must be empty (no key printed on failure)
         assert result.stdout.strip() == ""
         # stderr must have diagnostic info
@@ -394,3 +407,66 @@ class TestSubprocessInvocation:
         assert result.returncode == 0
         assert result.stdout.strip() == f"export OPENAI_API_KEY={FAKE_KEY}"
         assert FAKE_KEY not in result.stderr
+
+
+# ===========================================================================
+# Source-code static security assertions
+# ===========================================================================
+
+
+class TestSourceCodeSecurity:
+    """Static analysis: the key script must NEVER use patterns that leak secrets."""
+
+    @pytest.fixture(autouse=True)
+    def _load_source(self):
+        self.source = KEY_SCRIPT.read_text()
+
+    def test_no_add_generic_password(self):
+        """security add-generic-password must never appear (argv leak via -w)."""
+        assert "add-generic-password" not in self.source
+
+    def test_no_find_generic_password(self):
+        """security find-generic-password must never appear (argv leak via -w)."""
+        assert "find-generic-password" not in self.source
+
+    def test_no_security_cli(self):
+        """No invocation of the 'security' macOS CLI at all."""
+        import re
+        # Match subprocess-style invocations: ["security" or 'security' as first arg
+        assert not re.search(r"""["']security["']""", self.source), (
+            "openai_key.py must not invoke the macOS 'security' CLI"
+        )
+
+    def test_no_subprocess_run_with_key_var(self):
+        """subprocess.run/call/Popen must never receive a variable named *key*."""
+        import re
+        # Catch patterns like subprocess.run([..., key, ...]) or
+        # subprocess.run([..., api_key, ...])
+        hits = re.findall(
+            r"subprocess\.\w+\([^)]*\bkey\b", self.source, re.DOTALL
+        )
+        assert not hits, (
+            f"Possible secret in subprocess argv: {hits}"
+        )
+
+    def test_no_print_of_key_variable(self):
+        """print() must never be called with the raw key variable (except emit)."""
+        import re
+        # The only prints in the script are _err/_info (stderr) or the
+        # controlled stdout emit.  Make sure there's no stray print(key).
+        # Exclude the two legitimate patterns: print(key) and
+        # print(f"export OPENAI_API_KEY={key}")
+        lines = self.source.splitlines()
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            # Match print(...key...) but allow the two known-safe patterns
+            if re.search(r'\bprint\(.*\bkey\b', stripped):
+                # Known safe: print(key) for stdout capture
+                if stripped in ("print(key)", "print(f\"export OPENAI_API_KEY={key}\")"):
+                    continue
+                # Fail on anything else
+                assert False, (
+                    f"Line {i}: potential key leak via print(): {stripped}"
+                )

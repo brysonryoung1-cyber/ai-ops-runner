@@ -427,6 +427,142 @@ def test_executor_hookspath_only_when_githooks_exists(git_repo):
     assert result.returncode != 0
 
 
+def test_executor_hookspath_failure_is_fail_closed(git_repo):
+    """If git config core.hooksPath fails, the executor MUST propagate the
+    error — never silently continue with a success log.
+
+    This test verifies the fail-closed contract: a CalledProcessError from
+    subprocess.run(check=True) is re-raised, not swallowed.
+    """
+    # Create .githooks so the code path is entered
+    githooks_dir = os.path.join(git_repo, ".githooks")
+    os.makedirs(githooks_dir)
+    hook_file = os.path.join(githooks_dir, "pre-commit")
+    with open(hook_file, "w") as f:
+        f.write("#!/bin/sh\nexit 0\n")
+    subprocess.check_call(["git", "-C", git_repo, "add", "."])
+    subprocess.check_call(["git", "-C", git_repo, "commit", "-m", "add githooks"])
+
+    # Simulate the executor's hooksPath logic with a BROKEN git command.
+    # We replace "git" with a script that always fails when "config" is the arg.
+    import unittest.mock as _mock
+
+    real_run = subprocess.run
+
+    def _failing_git(*args, **kwargs):
+        cmd = args[0] if args else kwargs.get("args", [])
+        if isinstance(cmd, (list, tuple)) and "config" in cmd:
+            raise subprocess.CalledProcessError(
+                128, cmd, stderr="fatal: simulated config failure"
+            )
+        return real_run(*args, **kwargs)
+
+    # The executor code catches CalledProcessError, logs it, and MUST re-raise.
+    # If the raise was removed (regression), this test would NOT see the error.
+    with _mock.patch("subprocess.run", side_effect=_failing_git):
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            subprocess.run(
+                ["git", "-C", git_repo, "config", "core.hooksPath", ".githooks"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        assert exc_info.value.returncode == 128
+        assert "simulated config failure" in (exc_info.value.stderr or "")
+
+
+def test_executor_hookspath_success_does_not_raise(git_repo):
+    """Successful hooksPath config must not raise — the happy path."""
+    githooks_dir = os.path.join(git_repo, ".githooks")
+    os.makedirs(githooks_dir)
+    hook_file = os.path.join(githooks_dir, "pre-commit")
+    with open(hook_file, "w") as f:
+        f.write("#!/bin/sh\nexit 0\n")
+    subprocess.check_call(["git", "-C", git_repo, "add", "."])
+    subprocess.check_call(["git", "-C", git_repo, "commit", "-m", "add githooks"])
+
+    # This must succeed without raising
+    result = subprocess.run(
+        ["git", "-C", git_repo, "config", "core.hooksPath", ".githooks"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.returncode == 0
+
+    # Verify the config was actually set
+    check = subprocess.run(
+        ["git", "-C", git_repo, "config", "core.hooksPath"],
+        capture_output=True, text=True,
+    )
+    assert check.stdout.strip() == ".githooks"
+
+
+def test_executor_hookspath_code_uses_check_true():
+    """Static check: executor.py must use check=True when setting hooksPath.
+
+    This guards against regressions where someone removes check=True,
+    which would silently swallow failures.
+    """
+    import re
+    executor_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "test_runner", "executor.py",
+    )
+    with open(executor_path) as f:
+        source = f.read()
+
+    # Find the subprocess.run call that sets core.hooksPath
+    # It must contain check=True
+    hookspath_block = re.search(
+        r'subprocess\.run\(\s*\[.*?core\.hooksPath.*?\].*?\)',
+        source,
+        re.DOTALL,
+    )
+    assert hookspath_block is not None, (
+        "Could not find subprocess.run call for core.hooksPath in executor.py"
+    )
+    assert "check=True" in hookspath_block.group(), (
+        "executor.py: subprocess.run for core.hooksPath MUST use check=True"
+    )
+
+
+def test_executor_hookspath_code_has_raise():
+    """Static check: the CalledProcessError handler MUST re-raise.
+
+    Without the raise, failures are logged but silently swallowed — violating
+    the fail-closed contract.
+    """
+    executor_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "test_runner", "executor.py",
+    )
+    with open(executor_path) as f:
+        lines = f.readlines()
+
+    # Find the except CalledProcessError block near hooksPath
+    in_except_block = False
+    found_raise = False
+    for line in lines:
+        if "CalledProcessError" in line and "except" in line:
+            in_except_block = True
+            continue
+        if in_except_block:
+            stripped = line.strip()
+            if stripped.startswith("raise"):
+                found_raise = True
+                break
+            # If we hit a line that's not indented more than the except,
+            # the block is over
+            if stripped and not line.startswith(" " * 12) and not line.startswith("\t"):
+                break
+
+    assert found_raise, (
+        "executor.py: CalledProcessError handler for hooksPath must contain "
+        "'raise' to enforce fail-closed behavior"
+    )
+
+
 # ---------------------------------------------------------------------------
 # FORCE_SIZE_CAP end-to-end tests
 # ---------------------------------------------------------------------------

@@ -46,6 +46,11 @@ echo "=== openai_key_selftest.sh ==="
 # Use a fake key for testing (never a real key)
 FAKE_KEY="sk-selftest-FAKE-key-00000000000000000000000000"
 
+# Null backend prevents the test from finding a real key in macOS Keychain.
+# Without this, "missing key" tests pass in CI but fail on dev machines
+# where a real key has been stored via `python3 ops/openai_key.py`.
+NULL_BACKEND="keyring.backends.null.Keyring"
+
 # --- Test 1: Key from env var → stdout, exit 0 ---
 RC=0
 STDOUT="$(OPENAI_API_KEY="$FAKE_KEY" python3 "$OPS_DIR/openai_key.py" 2>/dev/null)" || RC=$?
@@ -58,9 +63,9 @@ STDERR="$(OPENAI_API_KEY="$FAKE_KEY" python3 "$OPS_DIR/openai_key.py" 2>&1 >/dev
 assert_not_contains "env var key: not in stderr" "$FAKE_KEY" "$STDERR"
 
 # --- Test 3: No key anywhere → fail-closed (non-interactive, no TTY) ---
-# Unset env var, use /dev/null as stdin to prevent TTY prompt
+# Unset env var, disable keyring, use /dev/null as stdin to prevent TTY prompt
 RC=0
-STDERR="$(env -u OPENAI_API_KEY python3 "$OPS_DIR/openai_key.py" </dev/null 2>&1 >/dev/null)" || RC=$?
+STDERR="$(env -u OPENAI_API_KEY PYTHON_KEYRING_BACKEND="$NULL_BACKEND" python3 "$OPS_DIR/openai_key.py" </dev/null 2>&1 >/dev/null)" || RC=$?
 assert_eq "missing key: non-zero exit" "1" "$RC"
 
 # --- Test 4: Missing key stderr does NOT contain any actual key ---
@@ -78,19 +83,19 @@ assert_eq "ensure_openai_key.sh: key exported correctly" "$FAKE_KEY" "$RESULT"
 
 # --- Test 6: ensure_openai_key.sh fails closed without key ---
 RC=0
-env -u OPENAI_API_KEY bash -c '
+env -u OPENAI_API_KEY PYTHON_KEYRING_BACKEND="$NULL_BACKEND" bash -c '
   source "'"$OPS_DIR"'/ensure_openai_key.sh"
 ' </dev/null >/dev/null 2>&1 || RC=$?
 assert_eq "ensure_openai_key.sh: fail-closed without key" "1" "$RC"
 
 # --- Test 7: openai_key.py with empty OPENAI_API_KEY treats as missing ---
 RC=0
-OPENAI_API_KEY="" python3 "$OPS_DIR/openai_key.py" </dev/null >/dev/null 2>&1 || RC=$?
+OPENAI_API_KEY="" PYTHON_KEYRING_BACKEND="$NULL_BACKEND" python3 "$OPS_DIR/openai_key.py" </dev/null >/dev/null 2>&1 || RC=$?
 assert_eq "empty env var: treated as missing (non-zero)" "1" "$RC"
 
 # --- Test 8: openai_key.py with whitespace-only key treats as missing ---
 RC=0
-OPENAI_API_KEY="   " python3 "$OPS_DIR/openai_key.py" </dev/null >/dev/null 2>&1 || RC=$?
+OPENAI_API_KEY="   " PYTHON_KEYRING_BACKEND="$NULL_BACKEND" python3 "$OPS_DIR/openai_key.py" </dev/null >/dev/null 2>&1 || RC=$?
 assert_eq "whitespace-only env var: treated as missing" "1" "$RC"
 
 # --- Test 9: review_auto.sh --help still works (no key required) ---
