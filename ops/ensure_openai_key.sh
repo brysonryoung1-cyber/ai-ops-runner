@@ -55,6 +55,14 @@ unset _ENSURE_KEY_DIR
 # --- Schedule key scrubbing on script exit (unless caller opts out) ---
 # When KEEP_OPENAI_KEY=1, the key persists for interactive/multi-step use.
 # Default: scrub after the calling script finishes.
+# IMPORTANT: chain with any pre-existing EXIT trap from the caller.
 if [ "${KEEP_OPENAI_KEY:-0}" != "1" ]; then
-  trap 'unset OPENAI_API_KEY 2>/dev/null' EXIT
+  _PREV_EXIT_TRAP="$(trap -p EXIT | sed "s/^trap -- '//;s/' EXIT$//" || true)"
+  if [ -n "$_PREV_EXIT_TRAP" ]; then
+    # shellcheck disable=SC2064
+    trap "unset OPENAI_API_KEY 2>/dev/null; ${_PREV_EXIT_TRAP}" EXIT
+  else
+    trap 'unset OPENAI_API_KEY 2>/dev/null' EXIT
+  fi
+  unset _PREV_EXIT_TRAP
 fi
