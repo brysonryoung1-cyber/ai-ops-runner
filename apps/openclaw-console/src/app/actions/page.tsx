@@ -12,6 +12,9 @@ interface ActionDef {
   variant: "primary" | "secondary" | "danger";
 }
 
+/** Actions that mutate remote state and require confirmation before execution. */
+const DESTRUCTIVE_ACTIONS = new Set(["apply", "guard"]);
+
 const ACTIONS: ActionDef[] = [
   {
     action: "doctor",
@@ -46,6 +49,14 @@ export default function ActionsPage() {
   const [lastAction, setLastAction] = useState<string | null>(null);
 
   const handleExec = async (action: string) => {
+    // Require explicit confirmation for destructive/non-idempotent actions
+    if (DESTRUCTIVE_ACTIONS.has(action)) {
+      const confirmed = window.confirm(
+        `"${action}" will modify the remote server. Are you sure you want to proceed?`
+      );
+      if (!confirmed) return;
+    }
+
     setLastAction(action);
     await exec(action);
   };

@@ -84,9 +84,10 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
 
 /**
  * Resolve an action name to its allowed action, or null if not in the allowlist.
+ * Uses Object.hasOwn to reject prototype keys (__proto__, constructor, etc.).
  */
 export function resolveAction(name: string): AllowedAction | null {
-  if (name in ALLOWLIST) {
+  if (Object.hasOwn(ALLOWLIST, name)) {
     return ALLOWLIST[name as ActionName];
   }
   return null;
