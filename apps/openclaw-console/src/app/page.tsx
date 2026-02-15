@@ -1,11 +1,32 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import StatusCard from "@/components/StatusCard";
 import CollapsibleOutput from "@/components/CollapsibleOutput";
 import { useExec, ExecResult } from "@/lib/hooks";
+import { useToken } from "@/lib/token-context";
 
 type CardStatus = "pass" | "fail" | "loading" | "idle" | "warn";
+
+// ── AI Status Types ────────────────────────────────────────────
+
+interface AIProvider {
+  name: string;
+  configured: boolean;
+  fingerprint: string | null;
+  status: "active" | "inactive" | "unknown";
+}
+
+interface ReviewEngine {
+  mode: string;
+  last_review: string | null;
+  gate_status: string;
+}
+
+interface AIStatus {
+  providers: AIProvider[];
+  review_engine: ReviewEngine;
+}
 
 function deriveStatus(result?: ExecResult, loading?: boolean): CardStatus {
   if (loading) return "loading";
@@ -64,8 +85,10 @@ function lastNLines(text: string, n: number): string {
 
 export default function OverviewPage() {
   const { exec, loading, results } = useExec();
+  const token = useToken();
   const [connected, setConnected] = useState<boolean | null>(null);
   const [connError, setConnError] = useState<string | null>(null);
+  const [aiStatus, setAiStatus] = useState<AIStatus | null>(null);
 
   // Check connectivity on mount
   useEffect(() => {
@@ -81,6 +104,21 @@ export default function OverviewPage() {
       });
   }, []);
 
+  // Fetch AI provider status
+  const fetchAIStatus = useCallback(async () => {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) headers["X-OpenClaw-Token"] = token;
+      const res = await fetch("/api/ai-status", { headers });
+      const data = await res.json();
+      if (data.ok) {
+        setAiStatus({ providers: data.providers, review_engine: data.review_engine });
+      }
+    } catch {
+      // Non-critical; AI status panel just won't render
+    }
+  }, [token]);
+
   // Auto-refresh overview data on mount
   useEffect(() => {
     if (connected === true) {
@@ -89,6 +127,7 @@ export default function OverviewPage() {
       exec("timer");
       exec("journal");
     }
+    fetchAIStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
 
@@ -111,7 +150,7 @@ export default function OverviewPage() {
           Overview
         </h2>
         <p className="text-sm text-apple-muted mt-1">
-          System health for aiops-1 via Tailscale SSH
+          OpenClaw HQ — System health for aiops-1 via Tailscale SSH
         </p>
       </div>
 
@@ -244,6 +283,91 @@ export default function OverviewPage() {
         </div>
       )}
 
+      {/* AI Connections Status Panel */}
+      {aiStatus && (
+        <div className="mt-6">
+          <div className="bg-apple-card rounded-apple border border-apple-border shadow-apple overflow-hidden">
+            <div className="px-5 py-3 bg-gray-50 border-b border-apple-border">
+              <span className="text-sm font-semibold text-apple-text">
+                AI Connections
+              </span>
+            </div>
+            <div className="p-5">
+              {/* Providers */}
+              <div className="space-y-3">
+                {aiStatus.providers.map((provider) => (
+                  <div key={provider.name} className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span
+                        className={`w-2.5 h-2.5 rounded-full ${
+                          provider.status === "active"
+                            ? "bg-apple-green"
+                            : provider.status === "inactive"
+                              ? "bg-apple-red"
+                              : "bg-apple-orange"
+                        }`}
+                      />
+                      <div>
+                        <p className="text-sm font-medium text-apple-text">
+                          {provider.name}
+                        </p>
+                        <p className="text-[10px] text-apple-muted">
+                          {provider.configured
+                            ? `Configured · ${provider.fingerprint || "key present"}`
+                            : "Not configured"}
+                        </p>
+                      </div>
+                    </div>
+                    <span
+                      className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                        provider.status === "active"
+                          ? "bg-green-100 text-green-700"
+                          : provider.status === "inactive"
+                            ? "bg-red-100 text-red-700"
+                            : "bg-gray-100 text-gray-600"
+                      }`}
+                    >
+                      {provider.status === "active"
+                        ? "Active"
+                        : provider.status === "inactive"
+                          ? "Inactive"
+                          : "Unknown"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Review Engine */}
+              <div className="mt-4 pt-4 border-t border-apple-border">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-semibold text-apple-muted uppercase tracking-wider">
+                      Review Engine
+                    </p>
+                    <p className="text-sm text-apple-text mt-0.5">
+                      {aiStatus.review_engine.mode}
+                    </p>
+                    {aiStatus.review_engine.last_review && (
+                      <p className="text-[10px] text-apple-muted mt-0.5">
+                        Last review: {new Date(aiStatus.review_engine.last_review).toLocaleString()}
+                      </p>
+                    )}
+                  </div>
+                  <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                    {aiStatus.review_engine.gate_status}
+                  </span>
+                </div>
+              </div>
+
+              {/* Security note */}
+              <p className="text-[10px] text-apple-muted mt-3 pt-3 border-t border-apple-border">
+                Keys are never displayed. Only masked fingerprints are shown.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Refresh button */}
       <div className="mt-6 flex justify-end">
         <button
@@ -252,6 +376,7 @@ export default function OverviewPage() {
             exec("ports");
             exec("timer");
             exec("journal");
+            fetchAIStatus();
           }}
           disabled={!!loading}
           className="px-4 py-2 text-xs font-medium text-apple-blue bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors disabled:opacity-50"

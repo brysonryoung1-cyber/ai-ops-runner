@@ -8,8 +8,8 @@ import { TokenProvider } from "@/lib/token-context";
 import { TargetProvider, type TargetInfo } from "@/lib/target-context";
 
 export const metadata: Metadata = {
-  title: "OpenClaw Console",
-  description: "Private management console for OpenClaw on aiops-1",
+  title: "OpenClaw HQ",
+  description: "Private control panel for all OpenClaw projects on aiops-1",
 };
 
 /**

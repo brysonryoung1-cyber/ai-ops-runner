@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OpenClaw HQ Project Registry",
+  "type": "object",
+  "required": ["version", "projects"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "type": "integer", "const": 1 },
+    "projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "description", "enabled", "workflows", "schedules", "notification_flags", "tags"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{1,63}$",
+            "description": "Unique project identifier (lowercase, underscores, 2-64 chars)"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Human-readable project name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "Brief project description"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the project is actively running workflows"
+          },
+          "workflows": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "description": "List of workflow/action names this project can run"
+          },
+          "schedules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["workflow", "cron", "label"],
+              "additionalProperties": false,
+              "properties": {
+                "workflow": { "type": "string", "minLength": 1 },
+                "cron": { "type": "string", "minLength": 5 },
+                "label": { "type": "string", "minLength": 1 }
+              }
+            },
+            "description": "Scheduled workflow executions"
+          },
+          "notification_flags": {
+            "type": "object",
+            "required": ["on_success", "on_failure", "on_recovery", "channels"],
+            "additionalProperties": false,
+            "properties": {
+              "on_success": { "type": "boolean" },
+              "on_failure": { "type": "boolean" },
+              "on_recovery": { "type": "boolean" },
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": ["pushover", "sms", "email"]
+                }
+              }
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Freeform tags for filtering and grouping"
+          }
+        }
+      }
+    }
+  }
+}

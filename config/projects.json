@@ -1,0 +1,85 @@
+{
+  "$schema": "./projects.schema.json",
+  "version": 1,
+  "projects": [
+    {
+      "id": "infra_openclaw",
+      "name": "OpenClaw Infrastructure",
+      "description": "Core infrastructure: doctor, guard, heal, deploy, console, notifications",
+      "enabled": true,
+      "workflows": [
+        "doctor",
+        "apply",
+        "guard",
+        "heal",
+        "deploy",
+        "nightly"
+      ],
+      "schedules": [
+        { "workflow": "doctor", "cron": "0 * * * *", "label": "Hourly health check" },
+        { "workflow": "guard", "cron": "*/10 * * * *", "label": "10-min safety guard" },
+        { "workflow": "nightly", "cron": "0 2 * * *", "label": "Nightly ORB jobs" }
+      ],
+      "notification_flags": {
+        "on_success": false,
+        "on_failure": true,
+        "on_recovery": true,
+        "channels": ["pushover", "sms"]
+      },
+      "tags": ["infrastructure", "active", "production"]
+    },
+    {
+      "id": "soma_kajabi_library_ownership",
+      "name": "Soma Kajabi Library Ownership",
+      "description": "Kajabi library sync: Home + Practitioner snapshots, Gmail video harvest, mirror",
+      "enabled": false,
+      "workflows": [
+        "soma_snapshot_home",
+        "soma_snapshot_practitioner",
+        "soma_harvest",
+        "soma_mirror"
+      ],
+      "schedules": [
+        { "workflow": "soma_snapshot_home", "cron": "0 6 * * *", "label": "Daily Home snapshot" },
+        { "workflow": "soma_snapshot_practitioner", "cron": "0 6 * * *", "label": "Daily Practitioner snapshot" }
+      ],
+      "notification_flags": {
+        "on_success": false,
+        "on_failure": true,
+        "on_recovery": true,
+        "channels": ["sms"]
+      },
+      "tags": ["soma", "kajabi", "disabled-until-wired"]
+    },
+    {
+      "id": "clip_factory_monitoring",
+      "name": "Clip Factory Monitoring",
+      "description": "Content clip pipeline monitoring and health checks (placeholder)",
+      "enabled": false,
+      "workflows": [],
+      "schedules": [],
+      "notification_flags": {
+        "on_success": false,
+        "on_failure": true,
+        "on_recovery": false,
+        "channels": []
+      },
+      "tags": ["content", "placeholder"]
+    },
+    {
+      "id": "music_pipeline",
+      "name": "Music Pipeline",
+      "description": "AI music generation and distribution pipeline (placeholder)",
+      "enabled": false,
+      "workflows": [],
+      "schedules": [],
+      "notification_flags": {
+        "on_success": false,
+        "on_failure": true,
+        "on_recovery": false,
+        "channels": []
+      },
+      "tags": ["music", "placeholder"]
+    }
+  ]
+}

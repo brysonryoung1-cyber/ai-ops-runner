@@ -6,6 +6,7 @@ import {
   deriveActor,
   hashParams,
 } from "@/lib/audit";
+import { buildRunRecord, writeRunRecord } from "@/lib/run-recorder";
 
 /**
  * Compute allowed origins dynamically based on configured port.
@@ -134,15 +135,17 @@ export async function POST(req: NextRequest) {
 
   const actor = deriveActor(req.headers.get("x-openclaw-token"));
   const params = { action: actionName };
-  const startTime = Date.now();
+  const startedAt = new Date();
 
   try {
     // executeAction validates the allowlist internally (fail-closed)
     const result = await executeAction(actionName);
 
+    const finishedAt = new Date();
+
     // Write audit entry
     writeAuditEntry({
-      timestamp: new Date().toISOString(),
+      timestamp: finishedAt.toISOString(),
       actor,
       action_name: actionName,
       params_hash: hashParams(params),
@@ -151,14 +154,26 @@ export async function POST(req: NextRequest) {
       error: result.error,
     });
 
+    // Write run record (even on action failure — fail-closed recorder)
+    const runRecord = buildRunRecord(
+      actionName,
+      startedAt,
+      finishedAt,
+      result.exitCode,
+      result.ok,
+      result.error || null
+    );
+    writeRunRecord(runRecord);
+
     return NextResponse.json(result, { status: result.ok ? 200 : 502 });
   } catch (err) {
-    const duration_ms = Date.now() - startTime;
+    const finishedAt = new Date();
+    const duration_ms = finishedAt.getTime() - startedAt.getTime();
     const errorMsg = err instanceof Error ? err.message : String(err);
 
     // Audit the failure
     writeAuditEntry({
-      timestamp: new Date().toISOString(),
+      timestamp: finishedAt.toISOString(),
       actor,
       action_name: actionName,
       params_hash: hashParams(params),
@@ -166,6 +181,17 @@ export async function POST(req: NextRequest) {
       duration_ms,
       error: errorMsg,
     });
+
+    // Write run record even on internal errors (fail-closed)
+    const runRecord = buildRunRecord(
+      actionName,
+      startedAt,
+      finishedAt,
+      null,
+      false,
+      errorMsg
+    );
+    writeRunRecord(runRecord);
 
     return NextResponse.json(
       { ok: false, error: `Internal error: ${errorMsg}` },

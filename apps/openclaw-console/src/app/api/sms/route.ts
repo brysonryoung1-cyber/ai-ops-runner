@@ -191,7 +191,7 @@ export async function POST(req: NextRequest) {
     params_hash: hashParams({ from: from_number.slice(-4), body, messageSid }),
     exit_code: null,
     duration_ms: 0,
-    error: null,
+    error: undefined,
   });
 
   // Route the SMS command to the VPS Python handler via SSH
@@ -226,7 +226,7 @@ export async function POST(req: NextRequest) {
       params_hash: hashParams({ command, action }),
       exit_code: result.exitCode,
       duration_ms,
-      error: result.error || null,
+      error: result.error || undefined,
     });
 
     // Return TwiML with result summary

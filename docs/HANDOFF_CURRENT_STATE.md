@@ -2,12 +2,17 @@
 
 ## Last Updated
 
-2026-02-15 (Soma Kajabi + SMS milestone)
+2026-02-16 (OpenClaw HQ milestone)
 
 ## Status
 
-**LIVE on aiops-1.** Production-grade OpenClaw control plane fully deployed and phone-accessible via Tailscale Serve.
+**LIVE on aiops-1.** Production-grade OpenClaw HQ control plane fully deployed and phone-accessible via Tailscale Serve.
 
+- **OpenClaw HQ**: Unified control panel tracking ALL projects, runs, schedules, artifacts, and AI providers. See `docs/OPENCLAW_HQ.md`.
+- **Project Registry**: `config/projects.json` — source of truth for all projects (infra_openclaw, soma_kajabi_library_ownership, clip_factory_monitoring, music_pipeline). Schema-validated, fail-closed.
+- **Run Recorder**: Every console action writes `artifacts/runs/<run_id>/run.json` — even on failure (fail-closed). Timeline view in Runs page.
+- **AI Connections Panel**: Shows configured providers (OpenAI), review engine mode, masked fingerprints (NEVER raw keys), gate status.
+- **HQ UI**: 6-section sidebar (Overview, Projects, Runs, Logs, Artifacts, Actions). Projects page with status cards. Runs page with timeline + detail panel.
 - **One-command deploy**: `ops/openclaw_vps_deploy.sh` — 10-step scripted deploy (sync, build, heal, doctor, guard, console, tailscale serve, receipt)
 - **Phone access**: `https://aiops-1.tailc75c62.ts.net` via Tailscale Serve (HTTPS 443 → 127.0.0.1:8787)
 - **Canonical docs**: HANDOFF + OPS_INDEX as single source of truth; security contract, transfer packet, notification/heal/console docs
@@ -32,8 +37,11 @@ Docker smoke test passing. Full ops/review/ship framework active. ORB integratio
 | Doctor | Active (hourly timer, 9 checks) | `ops/openclaw_doctor.sh` |
 | Guard | Active (10-min timer) | `ops/openclaw_guard.sh` |
 | SSH Hardening | Locked (Tailscale-only) | `ops/openclaw_fix_ssh_tailscale_only.sh` |
-| Console | Production (127.0.0.1:8787) | `apps/openclaw-console/` |
+| **HQ Console** | Production (127.0.0.1:8787) | `apps/openclaw-console/` |
 | **Phone Access** | Tailscale Serve HTTPS | `https://aiops-1.tailc75c62.ts.net` |
+| **Project Registry** | 4 projects (fail-closed) | `config/projects.json` |
+| **Run Recorder** | Per-action recording | `artifacts/runs/<run_id>/run.json` |
+| **AI Status** | Provider + review engine | `GET /api/ai-status` |
 | Notifications | Pushover + SMS (outbound-only) | `ops/openclaw_notify.sh`, `ops/openclaw_notify_sms.sh` |
 | Heal | One-command entrypoint | `ops/openclaw_heal.sh` |
 | **Soma Kajabi Sync** | Active (on-demand) | `services/soma_kajabi_sync/` |
@@ -91,6 +99,19 @@ The following are **out of scope** for this repository:
 - **openclaw.ai assistant** — NOT installed on the ops plane. See `docs/OPENCLAW_SUPPLY_CHAIN.md` for rationale. "OpenClaw" in this project = private ops runner + doctor/guard + console only.
 
 ## Recent Changes
+
+- **OpenClaw HQ — unified control panel** (2026-02-16):
+  - **Console → HQ**: Renamed "OpenClaw Console" to "OpenClaw HQ" across UI, layout, sidebar
+  - **Project Registry**: `config/projects.json` — 4 starter projects (infra_openclaw, soma_kajabi_library_ownership, clip_factory_monitoring, music_pipeline). JSON Schema at `config/projects.schema.json`. Fail-closed validation via `src/lib/projects.ts`.
+  - **Run Recorder**: `src/lib/run-recorder.ts` — every exec API call writes `artifacts/runs/<run_id>/run.json`. Records written on both success and failure (fail-closed). Wired into `api/exec/route.ts`.
+  - **Projects page**: `/projects` — cards per project with status (green/yellow/red), last run, next schedule, last error, quick actions, tags
+  - **Runs page**: `/runs` — timeline/table of runs across all projects. Click into a run to view status, metadata, error summary, artifacts. Filter by project (`?project=ID`).
+  - **AI Connections panel**: Overview page shows configured AI providers (OpenAI), masked fingerprints (NEVER raw keys), review engine mode + last review time, gate status (fail-closed)
+  - **Sidebar expanded**: 6 sections: Overview, Projects, Runs, Logs, Artifacts, Actions
+  - **New API routes**: `GET /api/projects` (registry + last runs), `GET /api/runs` (list + detail), `GET /api/ai-status` (providers + review engine)
+  - **Security preserved**: Token auth, CSRF, allowlist-only, tailnet-only, no secret leakage, fail-closed
+  - **Self-tests**: `ops/tests/openclaw_hq_selftest.sh` — 35 assertions covering schema validation, run recorder, API routes, UI pages, security invariants
+  - **Docs**: `docs/OPENCLAW_HQ.md` — full HQ documentation
 
 - **Soma Kajabi Library Ownership + SMS** (2026-02-15):
   - **New service**: `services/soma_kajabi_sync/` — Python service with CLI entrypoints for Kajabi snapshots, Gmail video harvest, and library mirroring
