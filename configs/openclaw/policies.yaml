@@ -36,6 +36,19 @@ lanes:
     # Rate limit: max 5 content items per project per day.
     max_items_per_project_per_day: 5
 
+  soma:
+    enabled: true
+    # Soma lane: Kajabi library ownership + video sync.
+    # Snapshots and harvests run on-demand or via scheduled triggers.
+    max_jobs_per_project_per_day: 20
+
+  sms:
+    enabled: true
+    # SMS lane: Twilio-based outbound alerts + inbound commands.
+    # Behind allowlist + token, tailnet-only.
+    outbound_rate_limit_sec: 1800  # 30 min between duplicate alerts
+    inbound_rate_limit_sec: 60    # 1/min per sender
+
   browser:
     enabled: false
     # Browser lane is disabled until V3.

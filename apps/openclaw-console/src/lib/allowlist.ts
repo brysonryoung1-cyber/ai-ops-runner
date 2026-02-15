@@ -11,7 +11,14 @@ export type ActionName =
   | "ports"
   | "timer"
   | "journal"
-  | "artifacts";
+  | "artifacts"
+  | "soma_snapshot_home"
+  | "soma_snapshot_practitioner"
+  | "soma_harvest"
+  | "soma_mirror"
+  | "soma_status"
+  | "soma_last_errors"
+  | "sms_status";
 
 export interface AllowedAction {
   name: ActionName;
@@ -79,6 +86,63 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     remoteCommand:
       'cd /opt/ai-ops-runner && ls -1dt artifacts/* 2>/dev/null | head -n 15 && echo "---" && du -sh artifacts/* 2>/dev/null | sort -h | tail -n 15',
     timeoutSec: 10,
+  },
+  soma_snapshot_home: {
+    name: "soma_snapshot_home",
+    label: "Snapshot Home Library",
+    description: "Take a Kajabi snapshot of the Home User Library",
+    remoteCommand:
+      'cd /opt/ai-ops-runner && python3 -m services.soma_kajabi_sync.snapshot --product "Home User Library"',
+    timeoutSec: 120,
+  },
+  soma_snapshot_practitioner: {
+    name: "soma_snapshot_practitioner",
+    label: "Snapshot Practitioner Library",
+    description: "Take a Kajabi snapshot of the Practitioner Library",
+    remoteCommand:
+      'cd /opt/ai-ops-runner && python3 -m services.soma_kajabi_sync.snapshot --product "Practitioner Library"',
+    timeoutSec: 120,
+  },
+  soma_harvest: {
+    name: "soma_harvest",
+    label: "Harvest Gmail Videos",
+    description: "Harvest video metadata from Zane's Gmail",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi_sync.harvest",
+    timeoutSec: 180,
+  },
+  soma_mirror: {
+    name: "soma_mirror",
+    label: "Mirror Home → Practitioner",
+    description:
+      "Diff Home vs Practitioner libraries and produce mirror report",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi_sync.mirror --dry-run",
+    timeoutSec: 60,
+  },
+  soma_status: {
+    name: "soma_status",
+    label: "Soma Status",
+    description: "Show latest Soma artifact runs and health",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi_sync.sms status",
+    timeoutSec: 15,
+  },
+  soma_last_errors: {
+    name: "soma_last_errors",
+    label: "Soma Last Errors",
+    description: "Show the last 5 Soma/SMS error messages",
+    remoteCommand:
+      'cd /opt/ai-ops-runner && python3 -c "from services.soma_kajabi_sync.sms import get_last_errors; errs=get_last_errors(5); print(chr(10).join(f\\"{e[\'timestamp\'][:16]}: {e[\'message\']}\\\" for e in errs) if errs else \'No recent errors.\')"',
+    timeoutSec: 10,
+  },
+  sms_status: {
+    name: "sms_status",
+    label: "SMS Status",
+    description: "Test SMS (Twilio) configuration and connectivity",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi_sync.sms test",
+    timeoutSec: 15,
   },
 };
 

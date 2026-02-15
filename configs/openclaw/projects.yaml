@@ -19,6 +19,26 @@ projects:
       - orb_review_bundle
     schedule: nightly
 
+  # --- Active: Soma Kajabi Library Ownership ---
+  soma-kajabi:
+    description: "Kajabi library ownership: Home + Practitioner sync, video harvest"
+    lanes:
+      - soma
+      - sms
+    platform:
+      type: kajabi
+      products:
+        - "Home User Library"
+        - "Practitioner Library"
+    jobs:
+      - soma_snapshot_home
+      - soma_snapshot_practitioner
+      - soma_harvest
+      - soma_mirror
+      - soma_smoke
+    schedule: on-demand
+    enabled: true
+
   # --- Placeholder: Content lane (V2) ---
   soraworld:
     description: "SoraWorld content generation and publishing"

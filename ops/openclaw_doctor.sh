@@ -484,6 +484,13 @@ if [ "$FAILURES" -gt 0 ]; then
       --rate-key "doctor_fail" \
       "[$(hostname 2>/dev/null || echo unknown)] $FAILURES check(s) failed — run ./ops/openclaw_doctor.sh for details" 2>/dev/null || true
   fi
+  # SMS notification on failure (if configured)
+  if [ -x "$SCRIPT_DIR/openclaw_notify_sms.sh" ] && [ "${OPENCLAW_DOCTOR_NOTIFY:-0}" = "1" ]; then
+    "$SCRIPT_DIR/openclaw_notify_sms.sh" \
+      --event "DOCTOR_FAIL" \
+      --message "[$(hostname 2>/dev/null || echo unknown)] $FAILURES check(s) failed" \
+      --rate-key "doctor_fail" 2>/dev/null || true
+  fi
   exit 1
 fi
 echo "All checks passed."

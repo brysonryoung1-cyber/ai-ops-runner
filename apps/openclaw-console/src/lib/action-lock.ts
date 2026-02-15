@@ -20,6 +20,9 @@ const CONCURRENT_ALLOWED: ReadonlySet<string> = new Set([
   "timer",
   "journal",
   "artifacts",
+  "soma_status",
+  "soma_last_errors",
+  "sms_status",
 ]);
 
 /**

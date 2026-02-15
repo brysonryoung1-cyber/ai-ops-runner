@@ -1,0 +1,4 @@
+# Soma Kajabi Sync — Python dependencies
+# Core (stdlib-only for security — no unnecessary deps)
+# Optional: playwright for Kajabi browser automation
+# playwright>=1.40.0

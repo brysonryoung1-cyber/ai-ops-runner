@@ -95,9 +95,31 @@ REMOTE_DOCTOR
 echo ""
 
 # ---------------------------------------------------------------------------
-# Step 5: Port proof
+# Step 5: Soma smoke test
 # ---------------------------------------------------------------------------
-echo "==> Step 5: Port listeners (proof)"
+echo "==> Step 5: Soma smoke test"
+SOMA_SMOKE_RC=0
+# shellcheck disable=SC2086
+ssh $SSH_OPTS "$VPS_HOST" bash <<REMOTE_SOMA_SMOKE || SOMA_SMOKE_RC=$?
+set -euo pipefail
+cd '${VPS_DIR}'
+if [ -f ./ops/soma_smoke.sh ]; then
+  chmod +x ./ops/soma_smoke.sh
+  ./ops/soma_smoke.sh 2>&1 | tail -30
+else
+  echo "  SKIP: soma_smoke.sh not found"
+fi
+REMOTE_SOMA_SMOKE
+echo ""
+
+if [ "$SOMA_SMOKE_RC" -ne 0 ]; then
+  echo "  WARNING: Soma smoke failed (rc=$SOMA_SMOKE_RC) — non-fatal" >&2
+fi
+
+# ---------------------------------------------------------------------------
+# Step 6: Port proof
+# ---------------------------------------------------------------------------
+echo "==> Step 6: Port listeners (proof)"
 # shellcheck disable=SC2086
 ssh $SSH_OPTS "$VPS_HOST" bash <<'REMOTE_PORTS'
 ss -lntp 2>/dev/null | grep -E '(:22 |:8000 |:53 )' || echo "  (no matching listeners found)"

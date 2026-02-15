@@ -22,6 +22,13 @@ import { NextRequest, NextResponse } from "next/server";
 const MAX_BODY_SIZE = 1024 * 1024;
 
 export function middleware(req: NextRequest) {
+  // Exempt /api/sms from token auth — Twilio inbound webhooks cannot
+  // attach custom headers. SMS route has its own auth: Twilio signature
+  // validation (HMAC-SHA1) + sender allowlist + rate limiting.
+  if (req.nextUrl.pathname === "/api/sms") {
+    return NextResponse.next();
+  }
+
   const token = process.env.OPENCLAW_CONSOLE_TOKEN;
 
   // No token configured → skip auth (origin validation still active in routes)

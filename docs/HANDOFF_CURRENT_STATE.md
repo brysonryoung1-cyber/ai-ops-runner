@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-2026-02-15
+2026-02-15 (Soma Kajabi + SMS milestone)
 
 ## Status
 
@@ -12,13 +12,15 @@
 - **Phone access**: `https://aiops-1.tailc75c62.ts.net` via Tailscale Serve (HTTPS 443 → 127.0.0.1:8787)
 - **Canonical docs**: HANDOFF + OPS_INDEX as single source of truth; security contract, transfer packet, notification/heal/console docs
 - **Hardened console**: allowlist-only with schema validation, token auth, action lock, audit log, CSRF protection, VPS deploy behind Tailscale
-- **Outbound notifications**: Pushover-first (no inbound webhooks); rate-limited alerts from guard/doctor/deploy/nightly/SIZE_CAP
+- **Soma Kajabi Library Ownership**: First-class workflow for Kajabi snapshots (Home + Practitioner), Gmail video harvest, and library mirroring. CLI entrypoints + console UX + SMS commands.
+- **SMS integration**: Twilio-based outbound alerts (workflow SUCCESS/FAIL, doctor FAIL, guard FAIL, nightly FAIL, SIZE_CAP WARN) + inbound commands (STATUS, RUN_SNAPSHOT, RUN_HARVEST, RUN_MIRROR, LAST_ERRORS). Behind allowlist + token, tailnet-only.
+- **Outbound notifications**: Pushover-first + SMS; rate-limited alerts from guard/doctor/deploy/nightly/SIZE_CAP
 - **One-command heal**: `ops/openclaw_heal.sh` — apply + verify + evidence bundle
 - **Expanded doctor**: 9 checks — Docker port audit, disk pressure, log growth, key health (fingerprint), console bind, guard timer health, JSON output
 - **Automated review**: `ops/openclaw_codex_review.sh` — OpenAI API diff-only review with security gates
 - **Supply-chain decision**: openclaw.ai is open-source (MIT) but NOT adopted for ops — see `docs/OPENCLAW_SUPPLY_CHAIN.md`
 
-Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation (private-only, Tailscale-only). openclaw_doctor uses tailnet-aware port audit. OpenClaw safety permanently locked: continuous VPS guard (10 min) with safe auto-remediation.
+Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation (private-only, Tailscale-only). openclaw_doctor uses tailnet-aware port audit. OpenClaw safety permanently locked: continuous VPS guard (10 min) with safe auto-remediation. **Soma Kajabi Library Ownership** workflow active with CLI + console + SMS. See `docs/SOMA_KAJABI_RUNBOOK.md`.
 
 ## OpenClaw Current State
 
@@ -32,9 +34,12 @@ Docker smoke test passing. Full ops/review/ship framework active. ORB integratio
 | SSH Hardening | Locked (Tailscale-only) | `ops/openclaw_fix_ssh_tailscale_only.sh` |
 | Console | Production (127.0.0.1:8787) | `apps/openclaw-console/` |
 | **Phone Access** | Tailscale Serve HTTPS | `https://aiops-1.tailc75c62.ts.net` |
-| Notifications | Pushover (outbound-only) | `ops/openclaw_notify.sh` |
+| Notifications | Pushover + SMS (outbound-only) | `ops/openclaw_notify.sh`, `ops/openclaw_notify_sms.sh` |
 | Heal | One-command entrypoint | `ops/openclaw_heal.sh` |
+| **Soma Kajabi Sync** | Active (on-demand) | `services/soma_kajabi_sync/` |
+| **SMS Commands** | Active (Twilio) | `ops/openclaw_sms.sh` |
 | Artifacts | `./artifacts/<job_id>/` | Per-job output directories |
+| Soma Artifacts | `./artifacts/soma/<run_id>/` | Snapshots, manifests, reports |
 
 ### Doctor Checks
 
@@ -86,6 +91,26 @@ The following are **out of scope** for this repository:
 - **openclaw.ai assistant** — NOT installed on the ops plane. See `docs/OPENCLAW_SUPPLY_CHAIN.md` for rationale. "OpenClaw" in this project = private ops runner + doctor/guard + console only.
 
 ## Recent Changes
+
+- **Soma Kajabi Library Ownership + SMS** (2026-02-15):
+  - **New service**: `services/soma_kajabi_sync/` — Python service with CLI entrypoints for Kajabi snapshots, Gmail video harvest, and library mirroring
+  - **Snapshot CLI**: `python3 -m services.soma_kajabi_sync.snapshot --product "Home User Library"` → `artifacts/soma/<run_id>/snapshot.json`
+  - **Harvest CLI**: `python3 -m services.soma_kajabi_sync.harvest` → `artifacts/soma/<run_id>/gmail_video_index.json` + `video_manifest.csv`
+  - **Mirror CLI**: `python3 -m services.soma_kajabi_sync.mirror` → `artifacts/soma/<run_id>/mirror_report.json` + `changelog.md`
+  - **SMS integration**: Twilio-based outbound alerts + inbound commands (STATUS, RUN_SNAPSHOT, RUN_HARVEST, RUN_MIRROR, LAST_ERRORS)
+  - **SMS security**: Behind allowlist + token, tailnet-only, rate-limited (1/min inbound, 30min outbound), fail-closed
+  - **Console "Soma" page**: New sidebar section with action buttons for all Soma workflows, status cards, artifact viewer
+  - **Allowlist expanded**: 6 new console actions (soma_snapshot_home, soma_snapshot_practitioner, soma_harvest, soma_mirror, soma_status, sms_status)
+  - **SMS webhook**: `/api/sms` route for Twilio inbound, with TwiML responses
+  - **Soma smoke test**: `ops/soma_smoke.sh` — verifies all modules, artifact writing, integrity checks (no credentials needed)
+  - **Apply remote updated**: Step 5 now includes Soma smoke test
+  - **Doctor SMS alerts**: SMS notifications sent on doctor/guard/nightly failures (alongside Pushover)
+  - **Docker overlay**: `docker-compose.soma.yml` for containerized Soma runs
+  - **Configs updated**: `policies.yaml` (soma + sms lanes), `projects.yaml` (soma-kajabi project), `job_allowlist.yaml` (5 new jobs)
+  - **Hermetic tests**: 4 test files — test_artifacts.py, test_config.py, test_sms.py, test_mirror.py
+  - **Ops selftests**: soma_smoke_selftest.sh, openclaw_sms_selftest.sh
+  - **Docs**: `docs/SOMA_KAJABI_RUNBOOK.md` — complete runbook with setup, operations, troubleshooting
+  - **Secrets**: KAJABI_SESSION_TOKEN, GMAIL_USER, GMAIL_APP_PASSWORD, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER, SMS_ALLOWLIST — all via standard resolution (env → Keychain → file)
 
 - **OpenClaw LIVE deploy + phone access** (2026-02-15):
   - **One-command deploy**: `ops/openclaw_vps_deploy.sh` — 10-step automated deploy to aiops-1 over Tailscale (sync, docker build, heal, doctor, guard install, console build, bind verify, tailscale serve, phone URL validate, deploy receipt)
@@ -289,6 +314,9 @@ ops/
 ├── openclaw_notify.sh        # Outbound Pushover notifications (rate-limited)
 ├── openclaw_codex_review.sh  # Automated diff-only review via OpenAI API
 ├── openclaw_vps_deploy.sh   # One-command full deploy to aiops-1 (10 steps)
+├── openclaw_notify_sms.sh   # SMS alerts via Twilio (rate-limited, allowlist-only)
+├── openclaw_sms.sh          # SMS CLI driver (send, alert, test, status)
+├── soma_smoke.sh            # Soma workflow smoke test (no credentials needed)
 ├── vps_bootstrap.sh          # Idempotent VPS setup (docker, tailscale, UFW, systemd)
 ├── vps_deploy.sh             # Deploy wrapper (bootstrap + doctor)
 ├── vps_doctor.sh             # Remote VPS health check
@@ -313,7 +341,9 @@ ops/
     ├── openclaw_codex_review_selftest.sh
     ├── openclaw_vps_deploy_selftest.sh
     ├── openai_key_selftest.sh
-    └── test_openai_key.py
+    ├── test_openai_key.py
+    ├── soma_smoke_selftest.sh        # Soma workflow smoke selftest
+    └── openclaw_sms_selftest.sh      # SMS integration selftest
 
 configs/
 ├── job_allowlist.yaml        # Allowlisted job types (incl. ORB jobs)
@@ -326,11 +356,13 @@ apps/openclaw-console/              # Private OpenClaw management UI (production
 │   ├── logs/page.tsx               # Guard journal tail
 │   ├── artifacts/page.tsx          # Artifact directory listing
 │   ├── actions/page.tsx            # Action buttons (doctor, apply, guard, ports, journal)
-│   └── api/exec/route.ts          # API route (allowlisted SSH, audit log, action lock)
+│   ├── soma/page.tsx              # Soma Kajabi Library page (snapshots, harvest, mirror)
+│   ├── api/exec/route.ts          # API route (allowlisted SSH, audit log, action lock)
+│   └── api/sms/route.ts           # SMS inbound webhook (Twilio → SSH bridge)
 ├── src/middleware.ts               # Token auth + payload limits (X-OpenClaw-Token)
 ├── src/lib/
 │   ├── ssh.ts                      # SSH execution via child_process.execFile
-│   ├── allowlist.ts                # Command allowlist (7 actions)
+│   ├── allowlist.ts                # Command allowlist (13 actions incl. Soma + SMS)
 │   ├── validate.ts                 # Tailscale CGNAT + targets.json support
 │   ├── audit.ts                    # Append-only audit log (JSONL, actor fingerprint)
 │   ├── action-lock.ts              # Action lock (prevent overlapping execution)
@@ -352,12 +384,30 @@ docs/
 ├── DEPLOY_VPS.md             # VPS deployment guide
 ├── OPENCLAW_LIVE_CHECKLIST.md # "If it's live, these must be true" + commands
 ├── OPENCLAW_SUPPLY_CHAIN.md  # openclaw.ai supply-chain check (decision: NO)
+├── SOMA_KAJABI_RUNBOOK.md   # Soma Kajabi Library ownership runbook
 ├── LAST_REVIEWED_SHA.txt
 ├── REVIEW_WORKFLOW.md
 ├── REVIEW_PACKET.md
 └── CANONICAL_COMMANDS.md
 
 docker-compose.console.yml   # Console Docker deploy (127.0.0.1:8787 only)
+docker-compose.soma.yml      # Soma Kajabi Sync overlay (optional)
+
+services/soma_kajabi_sync/         # Soma Kajabi Library Ownership workflow
+├── __init__.py
+├── config.py                      # Secret/config management (fail-closed)
+├── artifacts.py                   # Artifact writing (snapshot, manifest, report, changelog)
+├── snapshot.py                    # Kajabi snapshot CLI (API + Playwright fallback)
+├── harvest.py                     # Gmail video harvest CLI (IMAP)
+├── mirror.py                      # Library mirror CLI (Home → Practitioner)
+├── sms.py                         # Twilio SMS (outbound alerts + inbound commands)
+├── requirements.txt
+├── Dockerfile
+└── tests/
+    ├── test_artifacts.py          # Artifact writing tests
+    ├── test_config.py             # Config/secret tests
+    ├── test_sms.py                # SMS allowlist/rate-limit tests
+    └── test_mirror.py             # Mirror diff computation tests
 
 services/test_runner/
 ├── orb_wrappers/             # Per-job-type scripts (read-only worktree safe)
@@ -538,7 +588,7 @@ See `docs/CANONICAL_COMMANDS.md` for the full reference.
 1. Run `./ops/INSTALL_HOOKS.sh` to activate git hooks
 2. Run `./ops/doctor_repo.sh` to verify repo health
 3. Use `./ops/ship_auto.sh` for the standard ship workflow
-4. **One-command OpenClaw apply**: `./ops/openclaw_apply_remote.sh` (syncs, builds, fixes SSH, verifies)
+4. **One-command OpenClaw apply**: `./ops/openclaw_apply_remote.sh` (syncs, builds, fixes SSH, verifies, Soma smoke)
 5. **Install guard on VPS**: `sudo ./ops/openclaw_install_guard.sh` (enables 10-min timer)
 6. **Check guard status**: `systemctl status openclaw-guard.timer` + `tail /var/log/openclaw_guard.log`
 7. **Launch OpenClaw Console (production)**:
@@ -552,3 +602,7 @@ See `docs/CANONICAL_COMMANDS.md` for the full reference.
 9. **Console runbook**: `docs/OPENCLAW_CONSOLE_RUNBOOK.md`
 10. Deploy to VPS: `VPS_SSH_TARGET=runner@<IP> TAILSCALE_AUTHKEY=tskey-... ./ops/vps_deploy.sh`
 11. Check VPS health: `VPS_SSH_TARGET=runner@<IP> ./ops/vps_doctor.sh`
+12. **Soma Kajabi snapshot**: `python3 -m services.soma_kajabi_sync.snapshot --product "Home User Library"`
+13. **Soma smoke test**: `./ops/soma_smoke.sh`
+14. **SMS status test**: `./ops/openclaw_sms.sh test`
+15. **Soma runbook**: `docs/SOMA_KAJABI_RUNBOOK.md`

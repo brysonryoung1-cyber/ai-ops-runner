@@ -1,0 +1,29 @@
+# docker-compose.soma.yml — Soma Kajabi Sync overlay
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.soma.yml up -d --build
+#
+# The soma_sync service runs as a one-shot container for each workflow step.
+# For continuous operation, use the CLI entrypoints directly.
+
+services:
+  soma_sync:
+    build:
+      context: ./services/soma_kajabi_sync
+      dockerfile: Dockerfile
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=128M
+    volumes:
+      - ./artifacts/soma:/artifacts/soma:rw
+      - ./services/soma_kajabi_sync:/app/soma_kajabi_sync:ro
+      - /etc/ai-ops-runner/secrets:/secrets:ro
+    environment:
+      SOMA_ARTIFACTS_ROOT: "/artifacts/soma"
+      # Secrets loaded from files at runtime — never in env
+    # No ports published — internal only, Tailscale-only access
+    # Default command: smoke test
+    command: ["python", "-m", "soma_kajabi_sync.snapshot", "--smoke"]
+    profiles:
+      - soma

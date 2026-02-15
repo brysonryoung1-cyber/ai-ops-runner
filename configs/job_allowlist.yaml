@@ -36,3 +36,25 @@ jobs:
     timeout_sec: 1800
     allowed_params: ["logs_day", "run_id"]
     requires_repo_allowlist: true
+
+  # --- Soma Kajabi Library Ownership jobs ---
+
+  soma_snapshot_home:
+    argv: ["python3", "-m", "services.soma_kajabi_sync.snapshot", "--product", "Home User Library"]
+    timeout_sec: 120
+
+  soma_snapshot_practitioner:
+    argv: ["python3", "-m", "services.soma_kajabi_sync.snapshot", "--product", "Practitioner Library"]
+    timeout_sec: 120
+
+  soma_harvest:
+    argv: ["python3", "-m", "services.soma_kajabi_sync.harvest"]
+    timeout_sec: 180
+
+  soma_mirror:
+    argv: ["python3", "-m", "services.soma_kajabi_sync.mirror", "--dry-run"]
+    timeout_sec: 60
+
+  soma_smoke:
+    argv: ["bash", "./ops/soma_smoke.sh"]
+    timeout_sec: 120

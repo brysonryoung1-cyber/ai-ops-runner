@@ -13,7 +13,7 @@ interface ActionDef {
 }
 
 /** Actions that mutate remote state and require confirmation before execution. */
-const DESTRUCTIVE_ACTIONS = new Set(["apply", "guard"]);
+const DESTRUCTIVE_ACTIONS = new Set(["apply", "guard", "soma_mirror"]);
 
 const ACTIONS: ActionDef[] = [
   {
