@@ -21,7 +21,7 @@ services:
       # but Docker only publishes to 127.0.0.1:8787 on the host.
       # The container is NOT accessible from outside the host.
       OPENCLAW_CONSOLE_TOKEN: "${OPENCLAW_CONSOLE_TOKEN}"
-      AIOPS_HOST: "127.0.0.1"
+      AIOPS_HOST: "${AIOPS_HOST}"
       AIOPS_USER: "root"
     restart: unless-stopped
     read_only: true
@@ -29,6 +29,8 @@ services:
       - /tmp:size=64M
     volumes:
       - console_data:/app/data:rw
+      - ./config:/app/config:ro
+      - ./artifacts:/app/artifacts:rw
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/ || exit 1"]
       interval: 30s

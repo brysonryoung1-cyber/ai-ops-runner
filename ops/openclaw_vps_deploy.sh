@@ -212,6 +212,19 @@ if [ -f /etc/ai-ops-runner/secrets/openclaw_console_token ]; then
 fi
 export OPENCLAW_CONSOLE_TOKEN="$CONSOLE_TOKEN"
 
+# Set AIOPS_HOST to this machine's Tailscale IPv4 (required for SSH exec)
+AIOPS_HOST="$(tailscale ip -4 2>/dev/null | head -n1 | tr -d '[:space:]')"
+if [ -z "$AIOPS_HOST" ]; then
+  echo "  ERROR: Could not determine Tailscale IPv4 — cannot start console safely" >&2
+  exit 1
+fi
+# Validate IPv4 format (digits and dots only, CGNAT 100.x range)
+if ! echo "$AIOPS_HOST" | grep -qE '^100\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "  ERROR: AIOPS_HOST='$AIOPS_HOST' does not look like a Tailscale CGNAT IPv4" >&2
+  exit 1
+fi
+export AIOPS_HOST
+
 docker compose -f docker-compose.yml -f docker-compose.console.yml up -d --build 2>&1 | tail -10
 echo "  Console: built and started"
 REMOTE_CONSOLE
