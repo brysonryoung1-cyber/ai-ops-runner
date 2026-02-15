@@ -88,10 +88,35 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Schema validation: body must be a plain object with exactly { action: string }
+  if (
+    body === null ||
+    typeof body !== "object" ||
+    Array.isArray(body)
+  ) {
+    return NextResponse.json(
+      { ok: false, error: "Request body must be a JSON object." },
+      { status: 400 }
+    );
+  }
+
   const actionName = body?.action;
   if (!actionName || typeof actionName !== "string") {
     return NextResponse.json(
-      { ok: false, error: 'Missing or invalid "action" field.' },
+      { ok: false, error: 'Missing or invalid "action" field. Must be a string.' },
+      { status: 400 }
+    );
+  }
+
+  // Reject unexpected fields (defense in depth)
+  const allowedFields = new Set(["action"]);
+  const extraFields = Object.keys(body).filter((k) => !allowedFields.has(k));
+  if (extraFields.length > 0) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: `Unexpected fields: ${extraFields.join(", ")}. Only "action" is accepted.`,
+      },
       { status: 400 }
     );
   }

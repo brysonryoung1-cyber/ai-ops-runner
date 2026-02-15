@@ -349,8 +349,9 @@ SMOKE_MODE="${OPENCLAW_DOCTOR_SMOKE:-0}"
 OPENAI_STATUS=""
 if [ -f "$SCRIPT_DIR/openai_key.py" ]; then
   OPENAI_STATUS="$(python3 "$SCRIPT_DIR/openai_key.py" status 2>/dev/null || echo "not available")"
+  OPENAI_FINGERPRINT="$(echo "$OPENAI_STATUS" | head -1 | grep -o 'sk-\.\.\.[a-zA-Z0-9]*' || echo "unknown")"
   if echo "$OPENAI_STATUS" | grep -q "sk-"; then
-    pass "OpenAI API key present ($(echo "$OPENAI_STATUS" | head -1))"
+    pass "OpenAI API key present (fingerprint: $OPENAI_FINGERPRINT)"
 
     # Smoke mode: actually test the key (requires network)
     if [ "$SMOKE_MODE" = "1" ]; then
@@ -413,6 +414,36 @@ elif command -v netstat >/dev/null 2>&1; then
   fi
 else
   pass "Port check unavailable (console bind check skipped)"
+fi
+
+# --- 9. Guard Timer Health ---
+echo "--- Guard Timer Health ---"
+if command -v systemctl >/dev/null 2>&1; then
+  GUARD_TIMER_ACTIVE="$(systemctl is-active openclaw-guard.timer 2>/dev/null || echo "inactive")"
+  if [ "$GUARD_TIMER_ACTIVE" = "active" ]; then
+    pass "Guard timer active"
+    # Check for recent PASS/FAIL in guard log
+    if [ -f /var/log/openclaw_guard.log ]; then
+      LAST_ENTRY="$(tail -20 /var/log/openclaw_guard.log 2>/dev/null | grep -E 'RESULT: (PASS|FAIL)' | tail -1 || true)"
+      if [ -n "$LAST_ENTRY" ]; then
+        if echo "$LAST_ENTRY" | grep -q "RESULT: PASS"; then
+          pass "Guard last result: PASS"
+        else
+          echo "  WARN: Guard last result: FAIL — check /var/log/openclaw_guard.log"
+          pass "Guard timer running (last result: FAIL — monitoring)"
+        fi
+      else
+        pass "Guard timer running (no results yet)"
+      fi
+    else
+      pass "Guard timer running (no log file yet)"
+    fi
+  else
+    fail "Guard timer not active (state: $GUARD_TIMER_ACTIVE)"
+  fi
+else
+  # macOS / non-systemd — skip
+  pass "Guard timer check N/A (no systemd)"
 fi
 
 # --- JSON Output ---

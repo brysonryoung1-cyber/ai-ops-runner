@@ -2,14 +2,15 @@
 
 Complete index of all operational scripts and commands in ai-ops-runner. This document is canonical and MUST be updated on every change.
 
-**Last Updated**: 2026-02-13
+**Last Updated**: 2026-02-15
 
 ## Quick Reference
 
 | Command | Purpose |
 |---------|---------|
+| `./ops/openclaw_vps_deploy.sh` | **One-command full deploy to aiops-1** |
 | `./ops/openclaw_heal.sh` | One-command apply + verify + evidence |
-| `./ops/openclaw_doctor.sh` | Infrastructure health checks |
+| `./ops/openclaw_doctor.sh` | Infrastructure health checks (9 checks) |
 | `./ops/openclaw_guard.sh` | Continuous regression guard |
 | `./ops/openclaw_notify.sh "msg"` | Send Pushover alert |
 | `./ops/openclaw_apply_remote.sh` | Remote apply + verify from Mac |
@@ -25,6 +26,13 @@ Complete index of all operational scripts and commands in ai-ops-runner. This do
 | `ops/openclaw_heal.sh` | Apply + verify + evidence bundle | root | on-demand |
 | `ops/openclaw_guard.sh` | Regression guard with safe auto-remediation | root | 10min (timer) |
 | `ops/doctor_repo.sh` | Repo health (files, hooks, configs) | any | on-demand |
+
+### Deploy
+
+| Script | Description | Run As |
+|--------|-------------|--------|
+| `ops/openclaw_vps_deploy.sh` | Full 10-step deploy to aiops-1 (sync, build, heal, doctor, guard, console, tailscale serve, receipt) | any (SSHes as root) |
+| `ops/openclaw_vps_deploy.sh --dry-run` | Print deploy plan without executing | any |
 
 ### Remediation
 
@@ -127,6 +135,7 @@ All tests run hermetically (no network, no real secrets).
 | `ops/tests/openclaw_notify_selftest.sh` | Notifications + rate limiting |
 | `ops/tests/openclaw_console_auth_selftest.sh` | Console auth + allowlist |
 | `ops/tests/openclaw_codex_review_selftest.sh` | Automated review pipeline |
+| `ops/tests/openclaw_vps_deploy_selftest.sh` | VPS deploy (mocked SSH, fail-closed) |
 | `ops/tests/review_bundle_selftest.sh` | Review bundle generation |
 | `ops/tests/review_auto_selftest.sh` | Review auto workflow |
 | `ops/tests/review_finish_selftest.sh` | Baseline advance |
@@ -148,5 +157,7 @@ All tests run hermetically (no network, no real secrets).
 | `docs/OPENCLAW_CONSOLE.md` | Console operation + VPS deploy |
 | `docs/OPENCLAW_HEAL.md` | Heal entrypoint contract |
 | `docs/DEPLOY_VPS.md` | VPS deployment guide |
+| `docs/OPENCLAW_LIVE_CHECKLIST.md` | "If it's live, these must be true" + verify commands |
+| `docs/OPENCLAW_SUPPLY_CHAIN.md` | openclaw.ai supply-chain check (decision: NO) |
 | `docs/REVIEW_WORKFLOW.md` | Review pipeline docs |
 | `docs/CANONICAL_COMMANDS.md` | Quick command reference |

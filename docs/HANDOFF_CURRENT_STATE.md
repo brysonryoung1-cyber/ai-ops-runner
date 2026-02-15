@@ -2,18 +2,21 @@
 
 ## Last Updated
 
-2026-02-13
+2026-02-15
 
 ## Status
 
-All systems operational. Production-grade OpenClaw control plane active with:
+**LIVE on aiops-1.** Production-grade OpenClaw control plane fully deployed and phone-accessible via Tailscale Serve.
+
+- **One-command deploy**: `ops/openclaw_vps_deploy.sh` — 10-step scripted deploy (sync, build, heal, doctor, guard, console, tailscale serve, receipt)
+- **Phone access**: `https://aiops-1.tailc75c62.ts.net` via Tailscale Serve (HTTPS 443 → 127.0.0.1:8787)
 - **Canonical docs**: HANDOFF + OPS_INDEX as single source of truth; security contract, transfer packet, notification/heal/console docs
-- **Hardened console**: allowlist-only, token auth, action lock, audit log, CSRF protection, VPS deploy behind Tailscale
-- **Outbound notifications**: Pushover-first (no inbound webhooks); rate-limited alerts from guard/doctor
+- **Hardened console**: allowlist-only with schema validation, token auth, action lock, audit log, CSRF protection, VPS deploy behind Tailscale
+- **Outbound notifications**: Pushover-first (no inbound webhooks); rate-limited alerts from guard/doctor/deploy/nightly/SIZE_CAP
 - **One-command heal**: `ops/openclaw_heal.sh` — apply + verify + evidence bundle
-- **Expanded doctor**: Docker port audit, disk pressure, log growth, key health, console bind, JSON output
+- **Expanded doctor**: 9 checks — Docker port audit, disk pressure, log growth, key health (fingerprint), console bind, guard timer health, JSON output
 - **Automated review**: `ops/openclaw_codex_review.sh` — OpenAI API diff-only review with security gates
-- **68 new test assertions** across 4 selftest files (notify, heal, console auth, codex review)
+- **Supply-chain decision**: openclaw.ai is open-source (MIT) but NOT adopted for ops — see `docs/OPENCLAW_SUPPLY_CHAIN.md`
 
 Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation (private-only, Tailscale-only). openclaw_doctor uses tailnet-aware port audit. OpenClaw safety permanently locked: continuous VPS guard (10 min) with safe auto-remediation.
 
@@ -23,10 +26,12 @@ Docker smoke test passing. Full ops/review/ship framework active. ORB integratio
 
 | Component | Status | Location |
 |-----------|--------|----------|
-| Doctor | Active (hourly timer) | `ops/openclaw_doctor.sh` |
+| **VPS Deploy** | One-command (10 steps) | `ops/openclaw_vps_deploy.sh` |
+| Doctor | Active (hourly timer, 9 checks) | `ops/openclaw_doctor.sh` |
 | Guard | Active (10-min timer) | `ops/openclaw_guard.sh` |
 | SSH Hardening | Locked (Tailscale-only) | `ops/openclaw_fix_ssh_tailscale_only.sh` |
 | Console | Production (127.0.0.1:8787) | `apps/openclaw-console/` |
+| **Phone Access** | Tailscale Serve HTTPS | `https://aiops-1.tailc75c62.ts.net` |
 | Notifications | Pushover (outbound-only) | `ops/openclaw_notify.sh` |
 | Heal | One-command entrypoint | `ops/openclaw_heal.sh` |
 | Artifacts | `./artifacts/<job_id>/` | Per-job output directories |
@@ -39,8 +44,9 @@ Docker smoke test passing. Full ops/review/ship framework active. ORB integratio
 4. Public port audit (tailnet-aware)
 5. Docker published ports audit
 6. Disk pressure + log growth
-7. Key health (OpenAI, Pushover)
+7. Key health (OpenAI masked fingerprint, Pushover)
 8. Console bind verification
+9. Guard timer health (active + recent PASS/FAIL entries)
 
 ### Guard Behavior
 
@@ -77,9 +83,21 @@ The following are **out of scope** for this repository:
 - **NT8 / NinjaTrader** strategy code, deployment, and Windows VPS mechanics
 - **ORB C# strategy internals** — ORB is permitted ONLY as a runner use-case (review bundle generation, log auditing, artifacts)
 - **Windows VPS** configuration and management
+- **openclaw.ai assistant** — NOT installed on the ops plane. See `docs/OPENCLAW_SUPPLY_CHAIN.md` for rationale. "OpenClaw" in this project = private ops runner + doctor/guard + console only.
 
 ## Recent Changes
 
+- **OpenClaw LIVE deploy + phone access** (2026-02-15):
+  - **One-command deploy**: `ops/openclaw_vps_deploy.sh` — 10-step automated deploy to aiops-1 over Tailscale (sync, docker build, heal, doctor, guard install, console build, bind verify, tailscale serve, phone URL validate, deploy receipt)
+  - **Phone access**: Console exposed via Tailscale Serve at `https://aiops-1.tailc75c62.ts.net` (HTTPS 443 → http://127.0.0.1:8787)
+  - **Deploy receipt artifacts**: JSON + text receipts in `artifacts/deploy/<timestamp>/` with timestamps, key status, doctor summary (no secrets)
+  - **Notifications expanded**: Deploy PASS/FAIL alerts, nightly job FAIL alerts, SIZE_CAP WARN alerts. All rate-limited per check_id per 30 min.
+  - **Console schema validation**: Strict JSON body validation on exec API — rejects unexpected fields, validates action type
+  - **Doctor expanded to 9 checks**: Added guard timer health check (active + recent PASS/FAIL entries), enhanced key fingerprint display
+  - **Supply-chain verification**: openclaw.ai confirmed open-source (MIT, 196k stars) but NOT adopted — attack surface too broad for ops plane. Decision documented in `docs/OPENCLAW_SUPPLY_CHAIN.md`.
+  - **Live checklist**: `docs/OPENCLAW_LIVE_CHECKLIST.md` — single-page verification with commands
+  - **Hermetic tests**: 29 new assertions for VPS deploy selftest (mocked SSH, fail-closed, security patterns)
+  - **Explicit boundary**: openclaw.ai assistant is NOT installed on the ops plane. "OpenClaw" = private ops runner + doctor/guard + console only.
 - **OpenClaw production-grade control plane upgrade** — Major hardening across all components:
   - **Canonical docs**: Created `OPENCLAW_TRANSFER_PACKET.md`, `OPENCLAW_SECURITY_CONTRACT.md`, `OPENCLAW_NOTIFICATIONS.md`, `OPENCLAW_HEAL.md`, `OPS_INDEX.md` (canonical). Updated `HANDOFF_CURRENT_STATE.md` with Operating Rules + Out of Scope.
   - **Notifications (Pushover)**: `ops/openclaw_notify.sh` — outbound-only alerts with rate limiting (30min per check_id), priority levels, dry-run mode. Secrets via key handling contract. Integrated into guard (FAIL → alert, remediation failure → emergency) and doctor (optional notify mode).
@@ -270,6 +288,7 @@ ops/
 ├── openclaw_heal.sh          # One-command apply + verify + evidence bundle
 ├── openclaw_notify.sh        # Outbound Pushover notifications (rate-limited)
 ├── openclaw_codex_review.sh  # Automated diff-only review via OpenAI API
+├── openclaw_vps_deploy.sh   # One-command full deploy to aiops-1 (10 steps)
 ├── vps_bootstrap.sh          # Idempotent VPS setup (docker, tailscale, UFW, systemd)
 ├── vps_deploy.sh             # Deploy wrapper (bootstrap + doctor)
 ├── vps_doctor.sh             # Remote VPS health check
@@ -292,6 +311,7 @@ ops/
     ├── openclaw_notify_selftest.sh
     ├── openclaw_console_auth_selftest.sh
     ├── openclaw_codex_review_selftest.sh
+    ├── openclaw_vps_deploy_selftest.sh
     ├── openai_key_selftest.sh
     └── test_openai_key.py
 
@@ -330,6 +350,8 @@ docs/
 ├── OPENCLAW_HEAL.md          # Heal entrypoint contract
 ├── OPENCLAW_ARCHITECTURE.md  # Architecture overview
 ├── DEPLOY_VPS.md             # VPS deployment guide
+├── OPENCLAW_LIVE_CHECKLIST.md # "If it's live, these must be true" + commands
+├── OPENCLAW_SUPPLY_CHAIN.md  # openclaw.ai supply-chain check (decision: NO)
 ├── LAST_REVIEWED_SHA.txt
 ├── REVIEW_WORKFLOW.md
 ├── REVIEW_PACKET.md

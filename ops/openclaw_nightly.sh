@@ -146,6 +146,33 @@ PYEOF
 echo ""
 echo "=== Nightly summary written to: $PROOF_DIR/summary.json ==="
 
+# --- Notifications (Pushover, rate-limited) ---
+NOTIFY_CMD="$SCRIPT_DIR/openclaw_notify.sh"
+if [ -x "$NOTIFY_CMD" ]; then
+  # Job FAIL alerts
+  if [ "$DOCTOR_STATUS" != "success" ] && [ "$DOCTOR_STATUS" != "not_submitted" ]; then
+    "$NOTIFY_CMD" --priority high --title "OpenClaw Nightly" \
+      --rate-key "nightly_doctor_fail" \
+      "[$(hostname)] orb_doctor FAIL ($DOCTOR_STATUS)" 2>/dev/null || true
+  fi
+  if [ "$REVIEW_STATUS" != "success" ] && [ "$REVIEW_STATUS" != "not_submitted" ]; then
+    "$NOTIFY_CMD" --priority high --title "OpenClaw Nightly" \
+      --rate-key "nightly_review_fail" \
+      "[$(hostname)] orb_review_bundle FAIL ($REVIEW_STATUS)" 2>/dev/null || true
+  fi
+
+  # SIZE_CAP WARN: check if review job artifact has size_cap_exceeded
+  if [ -n "$REVIEW_JID" ] && [ "$REVIEW_STATUS" = "success" ]; then
+    SIZE_CAP="$(curl -sf "$API_BASE/jobs/$REVIEW_JID" 2>/dev/null | \
+      python3 -c "import sys,json; d=json.load(sys.stdin); a=d.get('artifact',{}); print('true' if a.get('size_cap_exceeded') else 'false')" 2>/dev/null || echo "false")"
+    if [ "$SIZE_CAP" = "true" ]; then
+      "$NOTIFY_CMD" --priority normal --title "OpenClaw Nightly" \
+        --rate-key "nightly_size_cap_warn" \
+        "[$(hostname)] SIZE_CAP WARN: orb_review_bundle exceeded size cap (review packets generated)" 2>/dev/null || true
+    fi
+  fi
+fi
+
 # Overall exit code: fail if both jobs failed
 if [ "$DOCTOR_STATUS" != "success" ] && [ "$REVIEW_STATUS" != "success" ]; then
   echo "FAIL: All nightly jobs failed." >&2
