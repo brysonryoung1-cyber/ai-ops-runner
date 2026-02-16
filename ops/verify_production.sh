@@ -31,8 +31,19 @@ FAILURES=0
 RESULTS=""
 STATE_RESP=""
 
-jq_ok() { echo "$1" | jq -e '.' >/dev/null 2>&1; }
-check_ok() { echo "$1" | jq -e ".ok == true" >/dev/null 2>&1; }
+# Use python3 for JSON parsing (jq may not be installed on minimal VPS)
+check_ok() { echo "$1" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') is True else 1)" 2>/dev/null; }
+json_get() {
+  local json="$1" path="$2"
+  echo "$json" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for k in [p for p in \"$path\".strip('.').split('.') if p]:
+  d=d.get(k) if isinstance(d,dict) else None
+  if d is None: break
+print(d or '')
+" 2>/dev/null || echo ""
+}
 
 # --- 1. GET /api/ai-status ---
 echo "==> Checking /api/ai-status"
@@ -76,10 +87,10 @@ elif ! check_ok "$STATE_RESP"; then
   FAILURES=$((FAILURES + 1))
   RESULTS="${RESULTS}project_state=not_ok "
 else
-  LAST_DEPLOY="$(echo "$STATE_RESP" | jq -r '.state.last_deploy_timestamp // empty')"
-  LAST_DOCTOR="$(echo "$STATE_RESP" | jq -r '.state.last_doctor_result // empty')"
-  LAST_GUARD="$(echo "$STATE_RESP" | jq -r '.state.last_guard_result // empty')"
-  LAST_HEAD="$(echo "$STATE_RESP" | jq -r '.state.last_verified_vps_head // empty')"
+  LAST_DEPLOY="$(json_get "$STATE_RESP" ".state.last_deploy_timestamp")"
+  LAST_DOCTOR="$(json_get "$STATE_RESP" ".state.last_doctor_result")"
+  LAST_GUARD="$(json_get "$STATE_RESP" ".state.last_guard_result")"
+  LAST_HEAD="$(json_get "$STATE_RESP" ".state.last_verified_vps_head")"
   if [ -n "$LAST_DEPLOY" ]; then
     echo "  PASS: /api/project/state ok:true (last_deploy: $LAST_DEPLOY)"
   else
@@ -115,7 +126,7 @@ fi
 echo "==> Checking guard"
 GUARD_PASS=0
 if [ -n "$STATE_RESP" ] && check_ok "$STATE_RESP"; then
-  GUARD_RES="$(echo "$STATE_RESP" | jq -r '.state.last_guard_result // empty')"
+  GUARD_RES="$(json_get "$STATE_RESP" ".state.last_guard_result")"
   if [ "$GUARD_RES" = "PASS" ]; then
     GUARD_PASS=1
   fi
