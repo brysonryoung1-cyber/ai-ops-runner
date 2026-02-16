@@ -25,6 +25,8 @@ interface LLMProviderStatus {
   fingerprint: string | null;
   api_base?: string;
   review_model?: string;
+  review_fallback?: boolean;
+  review_fallback_model?: string;
 }
 
 interface ProviderDoctorState {
@@ -76,6 +78,8 @@ async function getLLMStatus(): Promise<LLMStatusResponse> {
             fingerprint: p.fingerprint ?? null,
             api_base: p.api_base,
             review_model: p.review_model,
+            review_fallback: p.review_fallback,
+            review_fallback_model: p.review_fallback_model,
           })),
           router: {
             review_provider: data.router?.review_provider ?? "OpenAI",
@@ -142,6 +146,8 @@ except Exception as e:
           fingerprint: p.fingerprint || null,
           api_base: p.api_base,
           review_model: p.review_model,
+          review_fallback: p.review_fallback,
+          review_fallback_model: p.review_fallback_model,
         })
       );
 
