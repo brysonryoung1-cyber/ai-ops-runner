@@ -13,20 +13,40 @@
         "guard",
         "heal",
         "deploy",
-        "nightly"
+        "nightly",
+        "deploy_and_verify"
       ],
       "schedules": [
-        { "workflow": "doctor", "cron": "0 * * * *", "label": "Hourly health check" },
-        { "workflow": "guard", "cron": "*/10 * * * *", "label": "10-min safety guard" },
-        { "workflow": "nightly", "cron": "0 2 * * *", "label": "Nightly ORB jobs" }
+        {
+          "workflow": "doctor",
+          "cron": "0 * * * *",
+          "label": "Hourly health check"
+        },
+        {
+          "workflow": "guard",
+          "cron": "*/10 * * * *",
+          "label": "10-min safety guard"
+        },
+        {
+          "workflow": "nightly",
+          "cron": "0 2 * * *",
+          "label": "Nightly ORB jobs"
+        }
       ],
       "notification_flags": {
         "on_success": false,
         "on_failure": true,
         "on_recovery": true,
-        "channels": ["pushover", "sms"]
+        "channels": [
+          "pushover",
+          "sms"
+        ]
       },
-      "tags": ["infrastructure", "active", "production"]
+      "tags": [
+        "infrastructure",
+        "active",
+        "production"
+      ]
     },
     {
       "id": "soma_kajabi_library_ownership",
@@ -40,16 +60,30 @@
         "soma_mirror"
       ],
       "schedules": [
-        { "workflow": "soma_snapshot_home", "cron": "0 6 * * *", "label": "Daily Home snapshot" },
-        { "workflow": "soma_snapshot_practitioner", "cron": "0 6 * * *", "label": "Daily Practitioner snapshot" }
+        {
+          "workflow": "soma_snapshot_home",
+          "cron": "0 6 * * *",
+          "label": "Daily Home snapshot"
+        },
+        {
+          "workflow": "soma_snapshot_practitioner",
+          "cron": "0 6 * * *",
+          "label": "Daily Practitioner snapshot"
+        }
       ],
       "notification_flags": {
         "on_success": false,
         "on_failure": true,
         "on_recovery": true,
-        "channels": ["sms"]
+        "channels": [
+          "sms"
+        ]
       },
-      "tags": ["soma", "kajabi", "disabled-until-wired"]
+      "tags": [
+        "soma",
+        "kajabi",
+        "disabled-until-wired"
+      ]
     },
     {
       "id": "clip_factory_monitoring",
@@ -64,7 +98,10 @@
         "on_recovery": false,
         "channels": []
       },
-      "tags": ["content", "placeholder"]
+      "tags": [
+        "content",
+        "placeholder"
+      ]
     },
     {
       "id": "music_pipeline",
@@ -79,7 +116,10 @@
         "on_recovery": false,
         "channels": []
       },
-      "tags": ["music", "placeholder"]
+      "tags": [
+        "music",
+        "placeholder"
+      ]
     }
   ]
 }

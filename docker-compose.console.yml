@@ -21,6 +21,7 @@ services:
       # but Docker only publishes to 127.0.0.1:8787 on the host.
       # The container is NOT accessible from outside the host.
       OPENCLAW_CONSOLE_TOKEN: "${OPENCLAW_CONSOLE_TOKEN}"
+      OPENCLAW_ADMIN_TOKEN: "${OPENCLAW_ADMIN_TOKEN}"
       AIOPS_HOST: "${AIOPS_HOST}"
       RUNNER_API_URL: "${RUNNER_API_URL:-http://test_runner_api:8000}"
       AIOPS_USER: "root"

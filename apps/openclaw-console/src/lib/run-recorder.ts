@@ -55,6 +55,7 @@ const ACTION_PROJECT_MAP: Record<string, string> = {
   timer: "infra_openclaw",
   journal: "infra_openclaw",
   artifacts: "infra_openclaw",
+  deploy_and_verify: "infra_openclaw",
   // soma_kajabi_library_ownership
   soma_snapshot_home: "soma_kajabi_library_ownership",
   soma_snapshot_practitioner: "soma_kajabi_library_ownership",

@@ -56,8 +56,8 @@ else
   fail "allowlist.ts not found"
 fi
 
-# --- Test 6: Allowlist has all expected actions ---
-EXPECTED_ACTIONS="doctor apply guard ports timer journal artifacts"
+# --- Test 6: Allowlist has expected actions (deploy_and_verify, not ship on production) ---
+EXPECTED_ACTIONS="doctor apply guard ports timer journal artifacts deploy_and_verify"
 ALL_FOUND=true
 for action in $EXPECTED_ACTIONS; do
   if ! grep -q "\"$action\"" "$ALLOWLIST"; then
@@ -66,7 +66,12 @@ for action in $EXPECTED_ACTIONS; do
   fi
 done
 if [ "$ALL_FOUND" = "true" ]; then
-  pass "Allowlist has all 7 expected actions"
+  pass "Allowlist has expected actions including deploy_and_verify"
+fi
+if grep -q "ship_and_deploy" "$ALLOWLIST"; then
+  fail "Allowlist must not expose ship_and_deploy on production (use deploy_and_verify)"
+elif [ "$ALL_FOUND" = "true" ]; then
+  pass "Allowlist does not expose ship_and_deploy (production pull-only)"
 fi
 
 # --- Test 7: resolveAction rejects prototype keys ---
@@ -181,6 +186,26 @@ if ! grep -q "0\.0\.0\.0" "$ALLOWLIST"; then
   pass "Allowlist has no 0.0.0.0 references"
 else
   fail "Allowlist should not reference 0.0.0.0"
+fi
+
+# --- Test 22: Admin gating — deploy_and_verify returns 503 when admin not configured ---
+if grep -q "admin not configured" "$ROUTE" && grep -q "503" "$ROUTE"; then
+  pass "Exec route returns 503 when admin not configured for admin actions"
+else
+  fail "Exec route should return 503 when OPENCLAW_ADMIN_TOKEN unset for deploy_and_verify"
+fi
+
+# --- Test 23: Auth context fail-closed — no token never gets isAdmin ---
+AUTH_CONTEXT="$CONSOLE_DIR/src/app/api/auth/context/route.ts"
+if [ -f "$AUTH_CONTEXT" ] && grep -q "isAdmin" "$AUTH_CONTEXT" && ! grep -q "isAdmin = true" "$AUTH_CONTEXT" | grep -v "provided === adminToken"; then
+  pass "Auth context does not grant isAdmin by default"
+else
+  # Only grant isAdmin when explicit token match
+  if grep -q "adminToken" "$AUTH_CONTEXT" && grep -q "provided === adminToken" "$AUTH_CONTEXT"; then
+    pass "Auth context grants isAdmin only on explicit token match"
+  else
+    fail "Auth context should be fail-closed (admin only with OPENCLAW_ADMIN_TOKEN)"
+  fi
 fi
 
 # --- Summary ---

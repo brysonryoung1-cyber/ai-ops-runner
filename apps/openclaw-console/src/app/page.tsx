@@ -154,6 +154,13 @@ export default function OverviewPage() {
   const [projectState, setProjectState] = useState<ProjectState | null>(null);
   const [docModal, setDocModal] = useState<{ name: string; label: string } | null>(null);
   const [docContent, setDocContent] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [deployLast, setDeployLast] = useState<{
+    run_id: string | null;
+    overall: string | null;
+    step_failed: string | null;
+    artifact_dir: string | null;
+  } | null>(null);
 
   // Check connectivity on mount
   useEffect(() => {
@@ -209,6 +216,41 @@ export default function OverviewPage() {
     }
   }, [token]);
 
+  // Auth context (Ship+Deploy visibility)
+  const fetchAuthContext = useCallback(async () => {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) headers["X-OpenClaw-Token"] = token;
+      const res = await fetch("/api/auth/context", { headers });
+      const data = await res.json();
+      if (data?.ok && typeof data.isAdmin === "boolean") setIsAdmin(data.isAdmin);
+    } catch {
+      setIsAdmin(false);
+    }
+  }, [token]);
+
+  // Last deploy result (proof bundle)
+  const fetchDeployLast = useCallback(async () => {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) headers["X-OpenClaw-Token"] = token;
+      const res = await fetch("/api/deploy/last", { headers });
+      const data = await res.json();
+      if (data?.ok && data.run_id) {
+        setDeployLast({
+          run_id: data.run_id,
+          overall: data.overall ?? null,
+          step_failed: data.step_failed ?? null,
+          artifact_dir: data.artifact_dir ?? null,
+        });
+      } else {
+        setDeployLast(null);
+      }
+    } catch {
+      setDeployLast(null);
+    }
+  }, [token]);
+
   // Open doc modal and fetch content
   const openDoc = useCallback(
     async (key: string, label: string) => {
@@ -237,8 +279,16 @@ export default function OverviewPage() {
     }
     fetchAIStatus();
     fetchProjectState();
+    fetchAuthContext();
+    fetchDeployLast();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
+
+  // Refetch last deploy result when deploy_and_verify completes
+  const deployResult = results["deploy_and_verify"];
+  useEffect(() => {
+    if (deployResult !== undefined) fetchDeployLast();
+  }, [deployResult, fetchDeployLast]);
 
   const doctorResult = results["doctor"];
   const portsResult = results["ports"];
@@ -346,6 +396,65 @@ export default function OverviewPage() {
                   {label}
                 </button>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Deploy+Verify (admin only) */}
+      {isAdmin && (
+        <div className="mb-6 bg-apple-card rounded-apple border border-apple-border shadow-apple overflow-hidden">
+          <div className="px-5 py-3 bg-gradient-to-r from-amber-50 to-orange-50 border-b border-apple-border flex items-center justify-between flex-wrap gap-2">
+            <span className="text-sm font-semibold text-apple-text">
+              Deploy+Verify
+            </span>
+            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-200 text-amber-800">
+              Pull, build, verify, update project state
+            </span>
+          </div>
+          <div className="p-5">
+            <p className="text-xs text-apple-muted mb-3">
+              Pull origin/main → rebuild → verify production → update Project Brain. Proof in artifacts/deploy/&lt;run_id&gt;/.
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Run Deploy+Verify on aiops-1? (Pull, build, verify, update state.)"
+                    )
+                  ) {
+                    exec("deploy_and_verify");
+                  }
+                }}
+                disabled={loading !== null && loading !== "deploy_and_verify"}
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {loading === "deploy_and_verify" ? "Running…" : "Deploy+Verify"}
+              </button>
+              {deployLast && (
+                <div className="flex items-center gap-2 text-xs">
+                  <span
+                    className={`w-2.5 h-2.5 rounded-full ${
+                      deployLast.overall === "PASS" ? "bg-apple-green" : "bg-apple-red"
+                    }`}
+                  />
+                  <span className="text-apple-text font-medium">
+                    Last: {deployLast.overall ?? "—"}
+                  </span>
+                  {deployLast.step_failed && (
+                    <span className="text-apple-muted">
+                      (failed at: {deployLast.step_failed})
+                    </span>
+                  )}
+                  {deployLast.artifact_dir && (
+                    <span className="text-apple-muted" title="Artifact path">
+                      • {deployLast.artifact_dir}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>

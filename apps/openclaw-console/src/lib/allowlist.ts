@@ -13,6 +13,7 @@ export type ActionName =
   | "timer"
   | "journal"
   | "artifacts"
+  | "deploy_and_verify"
   | "soma_snapshot_home"
   | "soma_snapshot_practitioner"
   | "soma_harvest"
@@ -95,6 +96,14 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     remoteCommand:
       'cd /opt/ai-ops-runner && ls -1dt artifacts/* 2>/dev/null | head -n 15 && echo "---" && du -sh artifacts/* 2>/dev/null | sort -h | tail -n 15',
     timeoutSec: 10,
+  },
+  deploy_and_verify: {
+    name: "deploy_and_verify",
+    label: "Deploy+Verify",
+    description:
+      "Pull origin/main, rebuild, verify production, update project state; writes proof to artifacts/deploy/<run_id>/",
+    remoteCommand: "cd /opt/ai-ops-runner && ./ops/deploy_pipeline.sh",
+    timeoutSec: 600,
   },
   soma_snapshot_home: {
     name: "soma_snapshot_home",

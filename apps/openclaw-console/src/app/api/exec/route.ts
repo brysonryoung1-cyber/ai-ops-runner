@@ -51,6 +51,12 @@ function validateOrigin(req: NextRequest): NextResponse | null {
     return null; // Browser-verified same-origin — allow
   }
 
+  // Same-host automation (curl from aiops-1 to itself): no Origin, Host is loopback
+  const host = req.headers.get("host") ?? "";
+  if (!origin && (host.startsWith("127.0.0.1") || host.startsWith("localhost"))) {
+    return null;
+  }
+
   return NextResponse.json(
     {
       ok: false,
@@ -120,6 +126,25 @@ export async function POST(req: NextRequest) {
       },
       { status: 400 }
     );
+  }
+
+  // Admin-only actions: deploy_and_verify (and ship_only when exposed). Fail-closed.
+  const adminOnlyActions = new Set(["deploy_and_verify"]);
+  if (adminOnlyActions.has(actionName)) {
+    const adminToken = process.env.OPENCLAW_ADMIN_TOKEN;
+    if (typeof adminToken !== "string" || adminToken.length === 0) {
+      return NextResponse.json(
+        { ok: false, error: "admin not configured" },
+        { status: 503 }
+      );
+    }
+    const provided = req.headers.get("x-openclaw-token");
+    if (provided !== adminToken) {
+      return NextResponse.json(
+        { ok: false, error: "Deploy+Verify requires admin token." },
+        { status: 403 }
+      );
+    }
   }
 
   // Action lock — prevent overlapping execution
