@@ -439,7 +439,36 @@ else
   pass "Port check unavailable (console bind check skipped)"
 fi
 
-# --- 10. Guard Timer Health ---
+# --- 10. Project State Files (fail-closed: repo is canonical brain) ---
+echo "--- Project State Files ---"
+CURRENT_MD="$ROOT_DIR/docs/OPENCLAW_CURRENT.md"
+NEXT_MD="$ROOT_DIR/docs/OPENCLAW_NEXT.md"
+if [ ! -f "$CURRENT_MD" ]; then
+  fail "docs/OPENCLAW_CURRENT.md missing (required for project brain)"
+elif [ ! -f "$NEXT_MD" ]; then
+  fail "docs/OPENCLAW_NEXT.md missing (required for project brain)"
+elif [ ! -s "$NEXT_MD" ]; then
+  fail "docs/OPENCLAW_NEXT.md is empty (required for project brain)"
+else
+  STATE_PASS=1
+  # Staleness: warn if CURRENT older than 7 days; optional FAIL in CI/ship mode
+  STALE_DAYS="${OPENCLAW_STATE_STALE_DAYS:-7}"
+  NOW_TS="$(date +%s)"
+  CURRENT_TS="$(stat -c %Y "$CURRENT_MD" 2>/dev/null || stat -f %m "$CURRENT_MD" 2>/dev/null || echo 0)"
+  if [ -n "$CURRENT_TS" ] && [ "$CURRENT_TS" -gt 0 ]; then
+    AGE_DAYS=$(( (NOW_TS - CURRENT_TS) / 86400 ))
+    if [ "$AGE_DAYS" -gt "$STALE_DAYS" ]; then
+      echo "  WARN: OPENCLAW_CURRENT.md is ${AGE_DAYS} days old (threshold: ${STALE_DAYS})"
+      if [ "${OPENCLAW_STATE_STALE_FAIL:-0}" = "1" ]; then
+        fail "Project state files stale (OPENCLAW_STATE_STALE_FAIL=1)"
+        STATE_PASS=0
+      fi
+    fi
+  fi
+  [ "$STATE_PASS" -eq 1 ] && pass "Project state files present (OPENCLAW_CURRENT.md, OPENCLAW_NEXT.md)"
+fi
+
+# --- 11. Guard Timer Health ---
 echo "--- Guard Timer Health ---"
 if command -v systemctl >/dev/null 2>&1; then
   GUARD_TIMER_ACTIVE="$(systemctl is-active openclaw-guard.timer 2>/dev/null || echo "inactive")"
@@ -492,6 +521,11 @@ result = {
 with open(out_file, "w") as f:
     json.dump(result, f, indent=2)
 PYEOF
+
+# --- Update project state (canonical brain snapshot after doctor) ---
+if [ -f "$SCRIPT_DIR/update_project_state.py" ]; then
+  OPS_DIR="$SCRIPT_DIR" python3 "$SCRIPT_DIR/update_project_state.py" 2>/dev/null || true
+fi
 
 # --- Summary ---
 echo ""

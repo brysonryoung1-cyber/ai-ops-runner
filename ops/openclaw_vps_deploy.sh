@@ -183,8 +183,22 @@ else
   fail "Doctor FAILED (rc=$DOCTOR_RC)"
 fi
 
+# --- Update project state on VPS (canonical brain + artifact snapshot) ---
+step "Update project state (brain snapshot)"
+OPENCLAW_DEPLOY_TIMESTAMP="$DEPLOY_TIMESTAMP" _ssh_script <<REMOTE_STATE
+set -euo pipefail
+cd '${VPS_DIR}'
+if [ -f ops/update_project_state.py ]; then
+  OPENCLAW_DEPLOY_TIMESTAMP='${DEPLOY_TIMESTAMP}' OPS_DIR="\$(pwd)/ops" python3 ops/update_project_state.py
+  echo "  Project state updated; artifact written to artifacts/state/"
+else
+  echo "  WARN: ops/update_project_state.py not found"
+fi
+REMOTE_STATE
+pass "Project state updated on VPS"
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 5: Install/update guard timer
+# Step 6: Install/update guard timer
 # ─────────────────────────────────────────────────────────────────────────────
 step "Install/update guard timer (idempotent)"
 GUARD_RC=0
@@ -201,7 +215,7 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 6: Console build + start (idempotent, docker-compose)
+# Step 7: Console build + start (idempotent, docker-compose)
 # ─────────────────────────────────────────────────────────────────────────────
 step "Build/start console (docker-compose, idempotent)"
 CONSOLE_RC=0
@@ -240,7 +254,7 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 7: Verify console bind (ONLY 127.0.0.1:8787)
+# Step 8: Verify console bind (ONLY 127.0.0.1:8787)
 # ─────────────────────────────────────────────────────────────────────────────
 step "Verify console binds to 127.0.0.1:$CONSOLE_PORT only"
 sleep 2
@@ -259,7 +273,7 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 8: Tailscale serve mapping (idempotent)
+# Step 9: Tailscale serve mapping (idempotent)
 # ─────────────────────────────────────────────────────────────────────────────
 step "Set up tailscale serve (HTTPS 443 → http://127.0.0.1:$CONSOLE_PORT)"
 TS_SERVE_RC=0
@@ -272,7 +286,7 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 9: Print phone URL + validate tailnet-only
+# Step 10: Print phone URL + validate tailnet-only
 # ─────────────────────────────────────────────────────────────────────────────
 step "Validate phone URL (tailnet-only)"
 TS_DNS_NAME="$(_ssh_cmd 'tailscale status --json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get(\"Self\",{}).get(\"DNSName\",\"\").rstrip(\".\"))"' 2>/dev/null || echo "")"
@@ -291,7 +305,7 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 10: Deploy receipt
+# Step 11: Deploy receipt
 # ─────────────────────────────────────────────────────────────────────────────
 step "Write deploy receipt"
 mkdir -p "$RECEIPT_DIR"

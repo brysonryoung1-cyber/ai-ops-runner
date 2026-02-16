@@ -1,0 +1,15 @@
+{
+  "project_name": "OpenClaw",
+  "goal_summary": "Self-updating project brain; repo + HQ canonical; no ChatGPT memory reliance.",
+  "last_verified_vps_head": "3df15eb",
+  "last_deploy_timestamp": null,
+  "last_guard_result": null,
+  "last_doctor_result": "FAIL",
+  "llm_primary_provider": "openai",
+  "llm_primary_model": "gpt-4o-mini",
+  "llm_fallback_provider": "mistral",
+  "llm_fallback_model": "labs-devstral-small-2512",
+  "zane_agent_phase": 0,
+  "next_action_id": "phase0-soma-skeleton",
+  "next_action_text": "Create soma_kajabi project skeleton (Phase 0 read-only actions + artifacts)"
+}

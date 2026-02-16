@@ -36,6 +36,13 @@ echo "  Max attempts: $MAX_ATTEMPTS"
 echo "  No-push:      $NO_PUSH"
 echo ""
 
+# --- preflight: project brain (OPENCLAW_NEXT.md required before review) ---
+NEXT_MD="$ROOT_DIR/docs/OPENCLAW_NEXT.md"
+if [ ! -f "$NEXT_MD" ] || [ ! -s "$NEXT_MD" ]; then
+  echo "ERROR: docs/OPENCLAW_NEXT.md missing or empty. Project brain requires a single next action." >&2
+  exit 1
+fi
+
 # --- run tests ---
 run_tests() {
   echo "==> Running tests..."

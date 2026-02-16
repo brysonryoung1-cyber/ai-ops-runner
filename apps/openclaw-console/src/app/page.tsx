@@ -64,6 +64,23 @@ interface LLMStatus {
   };
 }
 
+// Project Brain (canonical state)
+interface ProjectState {
+  project_name?: string;
+  goal_summary?: string;
+  last_verified_vps_head?: string | null;
+  last_deploy_timestamp?: string | null;
+  last_guard_result?: string | null;
+  last_doctor_result?: string | null;
+  llm_primary_provider?: string;
+  llm_primary_model?: string;
+  llm_fallback_provider?: string;
+  llm_fallback_model?: string;
+  zane_agent_phase?: number;
+  next_action_id?: string | null;
+  next_action_text?: string | null;
+}
+
 function deriveStatus(result?: ExecResult, loading?: boolean): CardStatus {
   if (loading) return "loading";
   if (!result) return "idle";
@@ -119,6 +136,14 @@ function lastNLines(text: string, n: number): string {
   return lines.slice(-n).join("\n");
 }
 
+const DOC_NAMES: { key: string; label: string }[] = [
+  { key: "OPENCLAW_GOALS", label: "Goals" },
+  { key: "OPENCLAW_ROADMAP", label: "Roadmap" },
+  { key: "OPENCLAW_DECISIONS", label: "Decisions" },
+  { key: "OPENCLAW_CURRENT", label: "Current" },
+  { key: "OPENCLAW_NEXT", label: "Next" },
+];
+
 export default function OverviewPage() {
   const { exec, loading, results } = useExec();
   const token = useToken();
@@ -126,6 +151,9 @@ export default function OverviewPage() {
   const [connError, setConnError] = useState<string | null>(null);
   const [aiStatus, setAiStatus] = useState<AIStatus | null>(null);
   const [llmStatus, setLlmStatus] = useState<LLMStatus | null>(null);
+  const [projectState, setProjectState] = useState<ProjectState | null>(null);
+  const [docModal, setDocModal] = useState<{ name: string; label: string } | null>(null);
+  const [docContent, setDocContent] = useState<string | null>(null);
 
   // Check connectivity on mount
   useEffect(() => {
@@ -168,6 +196,37 @@ export default function OverviewPage() {
     }
   }, [token]);
 
+  // Fetch project state (canonical brain)
+  const fetchProjectState = useCallback(async () => {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) headers["X-OpenClaw-Token"] = token;
+      const res = await fetch("/api/project/state", { headers });
+      const data = await res.json();
+      if (data?.ok && data?.state) setProjectState(data.state);
+    } catch {
+      // Non-critical
+    }
+  }, [token]);
+
+  // Open doc modal and fetch content
+  const openDoc = useCallback(
+    async (key: string, label: string) => {
+      setDocModal({ name: key, label });
+      setDocContent(null);
+      try {
+        const headers: Record<string, string> = {};
+        if (token) headers["X-OpenClaw-Token"] = token;
+        const res = await fetch(`/api/project/docs/${key}`, { headers });
+        const data = await res.json();
+        setDocContent(data?.ok ? data.content : "Unable to load doc.");
+      } catch {
+        setDocContent("Request failed.");
+      }
+    },
+    [token]
+  );
+
   // Auto-refresh overview data on mount
   useEffect(() => {
     if (connected === true) {
@@ -177,6 +236,7 @@ export default function OverviewPage() {
       exec("journal");
     }
     fetchAIStatus();
+    fetchProjectState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
 
@@ -221,6 +281,109 @@ export default function OverviewPage() {
           <p className="text-sm text-apple-blue font-medium">
             Checking SSH connectivity…
           </p>
+        </div>
+      )}
+
+      {/* Project Brain panel */}
+      {projectState && (
+        <div className="mb-6 bg-apple-card rounded-apple border border-apple-border shadow-apple overflow-hidden">
+          <div className="px-5 py-3 bg-gradient-to-r from-slate-50 to-slate-100 border-b border-apple-border flex items-center justify-between">
+            <span className="text-sm font-semibold text-apple-text">
+              Project Brain
+            </span>
+            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
+              Canonical state
+            </span>
+          </div>
+          <div className="p-5">
+            <p className="text-sm text-apple-text mb-3">
+              {projectState.goal_summary || "—"}
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <span className="text-apple-muted uppercase tracking-wider">Phase</span>
+                <p className="text-apple-text font-medium mt-0.5">
+                  Zane agent Phase {projectState.zane_agent_phase ?? 0}
+                </p>
+              </div>
+              <div>
+                <span className="text-apple-muted uppercase tracking-wider">Next action</span>
+                <p className="text-apple-text font-medium mt-0.5">
+                  {projectState.next_action_text || "—"}
+                </p>
+              </div>
+              <div>
+                <span className="text-apple-muted uppercase tracking-wider">Last deploy</span>
+                <p className="text-apple-text mt-0.5">{projectState.last_deploy_timestamp || "—"}</p>
+              </div>
+              <div>
+                <span className="text-apple-muted uppercase tracking-wider">Last guard / doctor</span>
+                <p className="text-apple-text mt-0.5">
+                  {projectState.last_guard_result ?? "—"} / {projectState.last_doctor_result ?? "—"}
+                </p>
+              </div>
+              <div>
+                <span className="text-apple-muted uppercase tracking-wider">LLM primary</span>
+                <p className="text-apple-text mt-0.5">
+                  {projectState.llm_primary_provider ?? "—"} / {projectState.llm_primary_model ?? "—"}
+                </p>
+              </div>
+              <div>
+                <span className="text-apple-muted uppercase tracking-wider">LLM fallback</span>
+                <p className="text-apple-text mt-0.5">
+                  {projectState.llm_fallback_provider ?? "—"} / {projectState.llm_fallback_model ?? "—"}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 pt-4 border-t border-apple-border flex flex-wrap gap-2">
+              {DOC_NAMES.map(({ key, label }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => openDoc(key, label)}
+                  className="px-3 py-1.5 text-xs font-medium text-apple-blue bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Doc modal */}
+      {docModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setDocModal(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`View ${docModal.label}`}
+        >
+          <div
+            className="bg-white rounded-apple shadow-apple max-w-2xl w-full max-h-[80vh] flex flex-col mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-3 border-b border-apple-border flex justify-between items-center">
+              <span className="text-sm font-semibold text-apple-text">{docModal.label}</span>
+              <button
+                type="button"
+                onClick={() => setDocModal(null)}
+                className="text-apple-muted hover:text-apple-text text-lg leading-none"
+              >
+                ×
+              </button>
+            </div>
+            <div className="p-5 overflow-auto flex-1">
+              {docContent === null ? (
+                <p className="text-sm text-apple-muted">Loading…</p>
+              ) : (
+                <pre className="whitespace-pre-wrap text-sm text-apple-text font-sans">
+                  {docContent}
+                </pre>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -567,6 +730,7 @@ export default function OverviewPage() {
             exec("timer");
             exec("journal");
             fetchAIStatus();
+            fetchProjectState();
           }}
           disabled={!!loading}
           className="px-4 py-2 text-xs font-medium text-apple-blue bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors disabled:opacity-50"

@@ -72,6 +72,34 @@ def healthz():
 
 
 _REPO_ROOT = "/repo"
+_ARTIFACTS_ROOT = os.environ.get("ARTIFACTS_ROOT", "/artifacts")
+
+
+@app.get("/project/state")
+def project_state():
+    """Return project state (canonical brain). Safe fields only; no secrets.
+    Includes config/project_state.json plus latest artifacts/state snapshot metadata."""
+    state_path = os.path.join(_REPO_ROOT, "config", "project_state.json")
+    state = {}
+    if os.path.isfile(state_path):
+        try:
+            with open(state_path, encoding="utf-8") as f:
+                state = _json.load(f)
+        except Exception:
+            pass
+    latest_snapshot = None
+    state_dir = os.path.join(_ARTIFACTS_ROOT, "state")
+    if os.path.isdir(state_dir):
+        try:
+            subdirs = [d for d in os.listdir(state_dir) if os.path.isdir(os.path.join(state_dir, d))]
+            if subdirs:
+                latest_ts = sorted(subdirs)[-1]
+                snapshot_path = os.path.join(state_dir, latest_ts, "state.json")
+                if os.path.isfile(snapshot_path):
+                    latest_snapshot = {"timestamp": latest_ts, "path": f"artifacts/state/{latest_ts}/state.json"}
+        except Exception:
+            pass
+    return {"ok": True, "state": state, "latest_snapshot": latest_snapshot}
 
 
 @app.get("/llm/status")
