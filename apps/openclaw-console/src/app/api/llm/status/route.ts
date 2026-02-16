@@ -56,10 +56,50 @@ interface LLMStatusResponse {
   };
 }
 
-function getLLMStatus(): LLMStatusResponse {
-  // Try to get status from the Python LLM router
+async function getLLMStatus(): Promise<LLMStatusResponse> {
+  const repoRoot = process.env.OPENCLAW_REPO_ROOT || process.cwd();
+  // On VPS: fetch from runner API (has repo + secrets mount)
+  const runnerUrl = process.env.RUNNER_API_URL;
+  if (runnerUrl) {
+    try {
+      const url = `${runnerUrl.replace(/\/$/, "")}/llm/status`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      const data = await res.json();
+      if (data?.ok && Array.isArray(data.providers)) {
+        const status: LLMStatusResponse = {
+          ok: true,
+          providers: data.providers.map((p: any) => ({
+            name: p.name,
+            enabled: p.enabled,
+            configured: p.configured,
+            status: p.status,
+            fingerprint: p.fingerprint ?? null,
+            api_base: p.api_base,
+            review_model: p.review_model,
+          })),
+          router: {
+            review_provider: data.router?.review_provider ?? "OpenAI",
+            review_model: data.router?.review_model ?? "gpt-4o-mini",
+            review_gate: "fail-closed",
+            expensive_review_override: !!data.router?.expensive_review_override,
+            review_guard: data.router?.review_guard ?? "pass",
+          },
+          config: {
+            valid: data.config?.valid ?? !data.init_error,
+            path: data.config?.path ?? "config/llm.json",
+            error: data.config?.error ?? data.init_error ?? null,
+          },
+        };
+        const doctorData = readLatestProviderDoctor(repoRoot);
+        if (doctorData) status.doctor = doctorData;
+        return status;
+      }
+    } catch {
+      // Fall through to Python or fallback
+    }
+  }
+  // Try to get status from the Python LLM router (local dev with repo cwd)
   try {
-    const repoRoot = process.cwd();
     const result = execSync(
       `python3 -c "
 import sys, json, os
@@ -130,8 +170,7 @@ except Exception as e:
   }
 
   // Fallback: read config/llm.json directly and check env vars
-  const status = getFallbackStatus();
-  const repoRoot = process.cwd();
+  const status = getFallbackStatus(repoRoot);
   const doctorData = readLatestProviderDoctor(repoRoot);
   if (doctorData) status.doctor = doctorData;
   return status;
@@ -172,8 +211,7 @@ function readLatestProviderDoctor(repoRoot: string): LLMStatusResponse["doctor"]
   }
 }
 
-function getFallbackStatus(): LLMStatusResponse {
-  const repoRoot = process.cwd();
+function getFallbackStatus(repoRoot: string): LLMStatusResponse {
   const configPath = join(repoRoot, "config", "llm.json");
 
   let configValid = false;
@@ -282,6 +320,6 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const status = getLLMStatus();
+  const status = await getLLMStatus();
   return NextResponse.json(status);
 }

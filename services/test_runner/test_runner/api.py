@@ -71,6 +71,60 @@ def healthz():
     return {"ok": True}
 
 
+_REPO_ROOT = "/repo"
+
+
+@app.get("/llm/status")
+def llm_status():
+    """Return LLM provider status for HQ (same shape as console /api/llm/status).
+    Requires repo mounted at /repo and secrets at /run/openclaw_secrets."""
+    import sys
+
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
+    try:
+        from src.llm.router import get_router
+        from src.llm.openai_provider import CODEX_REVIEW_MODEL
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": str(e),
+            "providers": [],
+            "router": {
+                "review_provider": "OpenAI",
+                "review_model": "gpt-4o-mini",
+                "review_gate": "fail-closed",
+                "expensive_review_override": False,
+                "review_guard": "fail",
+            },
+            "config": {"valid": False, "path": "config/llm.json", "error": str(e)},
+        }
+    router = get_router()
+    statuses = router.get_all_status()
+    allow_expensive = os.environ.get("OPENCLAW_ALLOW_EXPENSIVE_REVIEW") == "1"
+    review_guard_pass = not (CODEX_REVIEW_MODEL == "gpt-4o" and not allow_expensive)
+    return {
+        "ok": True,
+        "providers": statuses,
+        "review_model": CODEX_REVIEW_MODEL,
+        "allow_expensive_review": allow_expensive,
+        "review_guard_pass": review_guard_pass,
+        "init_error": getattr(router, "init_error", None),
+        "router": {
+            "review_provider": "OpenAI",
+            "review_model": CODEX_REVIEW_MODEL,
+            "review_gate": "fail-closed",
+            "expensive_review_override": allow_expensive,
+            "review_guard": "pass" if review_guard_pass else "fail",
+        },
+        "config": {
+            "valid": not getattr(router, "init_error", None),
+            "path": "config/llm.json",
+            "error": getattr(router, "init_error", None),
+        },
+    }
+
+
 @app.post("/jobs", response_model=SubmitJobResponse, status_code=201)
 def submit_job(req: SubmitJobRequest):
     # --- Validate job type against job allowlist ---
