@@ -2,14 +2,36 @@
   "$schema": "./llm.schema.json",
   "enabledProviders": ["openai"],
   "defaults": {
-    "general": { "provider": "openai", "model": "gpt-4o" },
-    "review":  { "provider": "openai", "model": "gpt-4o" },
+    "general": { "provider": "openai", "model": "gpt-4o-mini" },
+    "review":  { "provider": "openai", "model": "gpt-4o-mini" },
     "vision":  { "provider": "openai", "model": "gpt-4o" }
+  },
+  "reviewFallback": {
+    "provider": "mistral",
+    "model": "codestral-2501"
+  },
+  "budget": {
+    "maxUsdPerReview": 0.50,
+    "maxUsdPerRun": 5.00,
+    "pricing": {
+      "gpt-4o-mini": { "inputPer1M": 0.15, "outputPer1M": 0.60 },
+      "gpt-4o": { "inputPer1M": 2.50, "outputPer1M": 10.00 },
+      "codestral-2501": { "inputPer1M": 0.30, "outputPer1M": 0.90 }
+    }
+  },
+  "reviewCaps": {
+    "maxOutputTokens": 600,
+    "temperature": 0
   },
   "providers": {
     "openai": {
       "apiBase": "https://api.openai.com/v1",
       "keySource": "existing_secret_store"
+    },
+    "mistral": {
+      "apiBase": "https://api.mistral.ai/v1",
+      "keyEnv": "MISTRAL_API_KEY",
+      "enabled": false
     },
     "moonshot": {
       "apiBase": "https://api.moonshot.cn/v1",

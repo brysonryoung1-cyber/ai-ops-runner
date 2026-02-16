@@ -231,6 +231,25 @@ if [ ! -f "$VERDICT_FILE" ]; then
   exit 1
 fi
 
+# --- Add range info to verdict meta (for pre-push hook compatibility) ---
+python3 - "$VERDICT_FILE" "$SINCE_SHA" "$HEAD_SHA" <<'PYEOF'
+import json, sys
+vfile, since_sha, to_sha = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(vfile) as f:
+    v = json.load(f)
+meta = v.get("meta", {})
+meta["since_sha"] = since_sha
+meta["to_sha"] = to_sha
+v["meta"] = meta
+with open(vfile, "w") as f:
+    json.dump(v, f, indent=2)
+PYEOF
+
+# --- Copy verdict to review_packets/ for pre-push hook ---
+REVIEW_PACKETS_DIR="$ROOT_DIR/review_packets/${STAMP}"
+mkdir -p "$REVIEW_PACKETS_DIR"
+cp "$VERDICT_FILE" "$REVIEW_PACKETS_DIR/CODEX_VERDICT.json"
+
 # --- Display results ---
 echo ""
 echo "=== Review Result ==="
@@ -258,6 +277,9 @@ if v.get("non_blocking"):
     for n in v["non_blocking"]:
         print(f"    - {n}")
 
+meta = v.get("meta", {})
+cost = meta.get("cost_usd", 0)
+print(f"  Cost: ${cost:.6f}")
 print(f"  Artifacts: {sys.argv[1]}")
 PYEOF
 

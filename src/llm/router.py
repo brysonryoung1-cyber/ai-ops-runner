@@ -1,9 +1,14 @@
 """Model router — selects provider/model by purpose using config.
 
-Review gate invariant (HARD-PINNED, NON-NEGOTIABLE):
-  purpose="review" ALWAYS resolves to OpenAIProvider + CODEX_REVIEW_MODEL.
-  No fallback, no override, no config bypass.
-  Missing OpenAI key => fail-closed (RuntimeError with clear message).
+Review gate (HARD-PINNED, NON-NEGOTIABLE):
+  purpose="review" ALWAYS resolves to OpenAIProvider + CODEX_REVIEW_MODEL (primary).
+  If OpenAI returns quota/rate/5xx/timeout, falls back to the configured
+  reviewFallback provider (e.g., Mistral Codestral).
+  Both fail => fail-closed (RuntimeError with clear message).
+  Missing OpenAI key => fail-closed (no silent downgrade to fallback-only).
+
+  Budget cap is enforced before each call — review refused if estimate
+  exceeds maxUsdPerReview (fail-closed).
 
 For non-review purposes:
   Router checks config/llm.json defaults -> selects enabled provider.
@@ -17,23 +22,55 @@ from typing import Any
 
 from src.llm.config import load_llm_config, LLMConfigError
 from src.llm.openai_provider import OpenAIProvider, CODEX_REVIEW_MODEL
+from src.llm.mistral_provider import MistralProvider
 from src.llm.moonshot_provider import MoonshotProvider
 from src.llm.ollama_provider import OllamaProvider
 from src.llm.provider import BaseProvider, _log
 from src.llm.types import LLMConfig, LLMRequest, LLMResponse
+from src.llm.budget import (
+    BudgetConfig,
+    estimate_cost,
+    check_budget,
+    actual_cost,
+    write_cost_telemetry,
+)
 
 # Singleton router instance
 _router_instance: ModelRouter | None = None
+
+# HTTP status codes that trigger review fallback (transient/quota errors)
+_REVIEW_FALLBACK_HTTP_CODES = {429, 500, 502, 503, 504}
+
+
+def _is_transient_error(exc: RuntimeError) -> bool:
+    """Check if a RuntimeError from a provider is a transient/quota error.
+
+    Returns True for HTTP 429, 5xx, timeout, and unreachable errors.
+    These are the only errors that trigger the review fallback path.
+    """
+    msg = str(exc).lower()
+    # HTTP status code checks
+    for code in _REVIEW_FALLBACK_HTTP_CODES:
+        if f"http {code}" in msg:
+            return True
+    # Timeout / unreachable
+    if "timeout" in msg or "unreachable" in msg or "timed out" in msg:
+        return True
+    return False
 
 
 class ModelRouter:
     """Routes LLM requests to the correct provider based on purpose.
 
     Invariants:
-      1. purpose="review" -> OpenAIProvider + CODEX_REVIEW_MODEL (always)
-      2. No silent fallback for review (fail-closed)
+      1. purpose="review" -> OpenAIProvider + CODEX_REVIEW_MODEL (primary)
+         - If OpenAI fails with transient error, try reviewFallback provider
+         - Both fail -> fail-closed
+      2. No silent fallback for review on auth/config errors (fail-closed)
       3. Non-review purposes use config defaults, with OpenAI as safe fallback
       4. Disabled providers are never called
+      5. Budget cap enforced before each review call (fail-closed)
+      6. Review caps (max_output_tokens, temperature) enforced on all review requests
     """
 
     def __init__(self, config: LLMConfig | None = None):
@@ -45,6 +82,7 @@ class ModelRouter:
         self._config = config
         self._providers: dict[str, BaseProvider] = {}
         self._init_error: str | None = None
+        self._budget: BudgetConfig = BudgetConfig()
 
         if config is None:
             try:
@@ -53,6 +91,10 @@ class ModelRouter:
                 self._init_error = str(exc)
                 _log(f"Config load failed (using OpenAI-only): {exc}")
                 self._config = LLMConfig()  # Defaults: openai only
+
+        # Load budget config
+        if self._config and self._config.budget_config:
+            self._budget = BudgetConfig.from_dict(self._config.budget_config)
 
         self._setup_providers()
 
@@ -69,6 +111,19 @@ class ModelRouter:
             if openai_base
             else OpenAIProvider()
         )
+
+        # Mistral — always initialize if in config (needed for review fallback)
+        mistral_cfg = config.providers.get("mistral")
+        if mistral_cfg:
+            mistral_base = mistral_cfg.api_base if mistral_cfg.api_base else ""
+            try:
+                self._providers["mistral"] = (
+                    MistralProvider(api_base=mistral_base)
+                    if mistral_base
+                    else MistralProvider()
+                )
+            except Exception as exc:
+                _log(f"Mistral provider init failed: {exc}")
 
         # Moonshot — only if enabled in config
         if "moonshot" in config.enabled_providers:
@@ -117,7 +172,7 @@ class ModelRouter:
         RuntimeError
             If purpose=review and OpenAI is not configured (fail-closed).
         """
-        # HARD-PINNED: review always goes to OpenAI
+        # HARD-PINNED: review always goes to OpenAI (primary)
         if purpose == "review":
             openai = self._providers.get("openai")
             if openai is None:
@@ -151,7 +206,7 @@ class ModelRouter:
             )
 
         # Use config default model for general, or a sensible default
-        default_model = "gpt-4o"
+        default_model = "gpt-4o-mini"
         if route:
             default_model = route.model
         elif "general" in config.defaults:
@@ -159,14 +214,57 @@ class ModelRouter:
 
         return openai, default_model
 
+    def resolve_review_fallback(self) -> tuple[BaseProvider, str] | None:
+        """Resolve the review fallback provider, if configured.
+
+        Returns None if no fallback is configured or the fallback
+        provider is not available/configured.
+        """
+        config = self._config
+        assert config is not None
+
+        fb = config.review_fallback
+        if not fb or not fb.provider or not fb.model:
+            return None
+
+        provider = self._providers.get(fb.provider)
+        if provider is None:
+            _log(
+                f"Review fallback provider '{fb.provider}' not initialized"
+            )
+            return None
+
+        if not provider.is_configured():
+            _log(
+                f"Review fallback provider '{fb.provider}' not configured "
+                f"(missing API key?)"
+            )
+            return None
+
+        return provider, fb.model
+
     def generate(self, request: LLMRequest) -> LLMResponse:
         """Route and execute an LLM request based on purpose.
 
-        Convenience method that resolves provider + model, then calls generate_text.
+        For review purpose:
+          1. Enforce review caps (max_output_tokens, temperature)
+          2. Check budget cap
+          3. Try OpenAI (primary)
+          4. If transient error + fallback configured, try fallback
+          5. Both fail -> raise (fail-closed)
+          6. Record provenance
+
+        For non-review:
+          Standard routing via resolve().
         """
+        config = self._config
+        assert config is not None
+
+        if request.purpose == "review":
+            return self._generate_review(request)
+
         provider, model = self.resolve(request.purpose)
 
-        # Override model with the resolved one (purpose-based routing)
         routed_request = LLMRequest(
             model=model,
             messages=request.messages,
@@ -179,6 +277,139 @@ class ModelRouter:
 
         return provider.generate_text(routed_request)
 
+    def _generate_review(self, request: LLMRequest) -> LLMResponse:
+        """Execute a review request with fallback and budget enforcement.
+
+        Flow:
+          1. Apply review caps (max_output_tokens from config)
+          2. Estimate cost + check budget cap (fail-closed)
+          3. Call OpenAI (primary)
+          4. On transient error: try fallback provider
+          5. On success: add fallback provenance to response if used
+        """
+        config = self._config
+        assert config is not None
+        caps = config.review_caps
+
+        # Resolve primary
+        primary_provider, primary_model = self.resolve("review")
+
+        # Apply review caps
+        max_tokens = caps.max_output_tokens
+        temperature = caps.temperature
+
+        # Build prompt text for cost estimation
+        prompt_text = ""
+        for msg in request.messages:
+            prompt_text += msg.get("content", "")
+
+        # Budget check (fail-closed for review gate)
+        est = estimate_cost(
+            model=primary_model,
+            prompt_text=prompt_text,
+            max_output_tokens=max_tokens,
+            pricing=self._budget.pricing,
+            provider="openai",
+        )
+        allowed, reason = check_budget(
+            est, self._budget.max_usd_per_review, "review"
+        )
+        if not allowed:
+            raise RuntimeError(
+                f"BUDGET EXCEEDED (fail-closed): {reason}. "
+                f"Increase budget.maxUsdPerReview in config/llm.json "
+                f"or reduce bundle size."
+            )
+
+        _log(
+            f"Review budget check: {reason} "
+            f"(est ~${est.estimated_cost_usd:.4f})",
+            trace_id=request.trace_id,
+        )
+
+        # Build the routed request with enforced caps
+        routed_request = LLMRequest(
+            model=primary_model,
+            messages=request.messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            purpose="review",
+            trace_id=request.trace_id,
+            response_format=request.response_format,
+        )
+
+        # Try primary (OpenAI)
+        primary_error: RuntimeError | None = None
+        try:
+            response = primary_provider.generate_text(routed_request)
+            return response
+        except RuntimeError as exc:
+            primary_error = exc
+            if not _is_transient_error(exc):
+                # Non-transient error (auth, config, etc.) -> fail-closed
+                raise
+
+        # Primary failed with transient error -> try fallback
+        _log(
+            f"Review primary (OpenAI) failed with transient error: "
+            f"{primary_error}. Trying fallback...",
+            trace_id=request.trace_id,
+        )
+
+        fallback = self.resolve_review_fallback()
+        if fallback is None:
+            raise RuntimeError(
+                f"Review primary (OpenAI) failed: {primary_error}. "
+                f"No fallback reviewer configured. "
+                f"Set reviewFallback in config/llm.json + MISTRAL_API_KEY."
+            ) from primary_error
+
+        fallback_provider, fallback_model = fallback
+
+        # Budget check for fallback model
+        fb_est = estimate_cost(
+            model=fallback_model,
+            prompt_text=prompt_text,
+            max_output_tokens=max_tokens,
+            pricing=self._budget.pricing,
+            provider=fallback_provider.provider_name,
+        )
+        fb_allowed, fb_reason = check_budget(
+            fb_est, self._budget.max_usd_per_review, "review_fallback"
+        )
+        if not fb_allowed:
+            raise RuntimeError(
+                f"BUDGET EXCEEDED for fallback (fail-closed): {fb_reason}"
+            ) from primary_error
+
+        # Build fallback request
+        fb_request = LLMRequest(
+            model=fallback_model,
+            messages=request.messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            purpose="review",
+            trace_id=request.trace_id,
+            response_format=request.response_format,
+        )
+
+        try:
+            response = fallback_provider.generate_text(fb_request)
+            # Tag response with fallback provenance
+            _log(
+                f"Review fallback ({fallback_provider.provider_name}/"
+                f"{fallback_model}) succeeded",
+                trace_id=request.trace_id,
+            )
+            return response
+        except RuntimeError as fb_exc:
+            # Both failed -> fail-closed
+            raise RuntimeError(
+                f"Review FAILED (fail-closed): "
+                f"primary (OpenAI) error: {primary_error}; "
+                f"fallback ({fallback_provider.provider_name}) error: {fb_exc}"
+            ) from fb_exc
+
     def get_all_status(self) -> list[dict[str, Any]]:
         """Return status for all known providers (for HQ status endpoint).
 
@@ -188,7 +419,7 @@ class ModelRouter:
         assert config is not None
 
         statuses = []
-        for pname in ["openai", "moonshot", "ollama"]:
+        for pname in ["openai", "mistral", "moonshot", "ollama"]:
             provider = self._providers.get(pname)
             if provider:
                 status = provider.get_status()
@@ -198,6 +429,7 @@ class ModelRouter:
                 status = {
                     "name": {
                         "openai": "OpenAI",
+                        "mistral": "Mistral (Codestral)",
                         "moonshot": "Moonshot (Kimi)",
                         "ollama": "Ollama (Local)",
                     }.get(pname, pname),
@@ -208,7 +440,26 @@ class ModelRouter:
                 }
             statuses.append(status)
 
+        # Add review fallback info
+        fb = config.review_fallback
+        if fb and fb.provider:
+            for s in statuses:
+                if s.get("name", "").lower().startswith(fb.provider[:4]):
+                    s["review_fallback"] = True
+                    s["review_fallback_model"] = fb.model
+
+        # Add budget info
+        budget_info = {
+            "max_usd_per_review": self._budget.max_usd_per_review,
+            "max_usd_per_run": self._budget.max_usd_per_run,
+        }
+
         return statuses
+
+    @property
+    def budget(self) -> BudgetConfig:
+        """Return budget config (for external cost checks)."""
+        return self._budget
 
     @property
     def init_error(self) -> str | None:

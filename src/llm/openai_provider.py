@@ -17,8 +17,9 @@ from pathlib import Path
 from src.llm.provider import BaseProvider, _log, redact_for_log
 from src.llm.types import LLMRequest, LLMResponse
 
-# Hard-pinned review model constant — NEVER overridden by config
-CODEX_REVIEW_MODEL = os.environ.get("OPENCLAW_REVIEW_MODEL", "gpt-4o")
+# Hard-pinned review model constant — env override for testing/migration only
+# Uses gpt-4o-mini: code-capable, chat-completions compatible, 16x cheaper than gpt-4o
+CODEX_REVIEW_MODEL = os.environ.get("OPENCLAW_REVIEW_MODEL", "gpt-4o-mini")
 
 # Default API base
 DEFAULT_API_BASE = "https://api.openai.com/v1"

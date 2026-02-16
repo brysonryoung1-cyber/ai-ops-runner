@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "OpenClaw LLM Provider Configuration",
-  "description": "Configuration for LLM providers and routing. Review gate is always OpenAI Codex (fail-closed).",
+  "description": "Configuration for LLM providers, routing, budget caps, and review fallback. Review gate primary is always OpenAI (fail-closed); Mistral Codestral is the fallback reviewer.",
   "type": "object",
   "required": ["enabledProviders", "defaults", "providers"],
   "additionalProperties": false,
@@ -11,10 +11,10 @@
       "type": "array",
       "items": {
         "type": "string",
-        "enum": ["openai", "moonshot", "ollama"]
+        "enum": ["openai", "mistral", "moonshot", "ollama"]
       },
       "contains": { "const": "openai" },
-      "description": "List of enabled providers. 'openai' is always required (review gate)."
+      "description": "List of enabled providers. 'openai' is always required (review gate primary)."
     },
     "defaults": {
       "type": "object",
@@ -27,13 +27,76 @@
           "required": ["provider", "model"],
           "additionalProperties": false,
           "properties": {
-            "provider": { "type": "string", "const": "openai", "description": "Review MUST use OpenAI (fail-closed, non-negotiable)" },
+            "provider": { "type": "string", "const": "openai", "description": "Review primary MUST use OpenAI (fail-closed, non-negotiable)" },
             "model": { "type": "string", "minLength": 1 }
           }
         },
         "vision": { "$ref": "#/definitions/purposeRoute" }
       },
       "description": "Default provider + model for each purpose. review.provider MUST be 'openai'."
+    },
+    "reviewFallback": {
+      "type": "object",
+      "required": ["provider", "model"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["mistral", "moonshot"],
+          "description": "Fallback reviewer provider (NOT openai — that's the primary)"
+        },
+        "model": { "type": "string", "minLength": 1 }
+      },
+      "description": "Fallback reviewer when OpenAI returns quota/rate/5xx/timeout. Must be a non-OpenAI code-specialized model."
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxUsdPerReview": {
+          "type": "number",
+          "minimum": 0.01,
+          "description": "Maximum USD per review call. Fail-closed: review refused if estimate exceeds."
+        },
+        "maxUsdPerRun": {
+          "type": "number",
+          "minimum": 0.01,
+          "description": "Maximum USD per run (all LLM calls in a session)."
+        },
+        "pricing": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["inputPer1M", "outputPer1M"],
+            "additionalProperties": false,
+            "properties": {
+              "inputPer1M": { "type": "number", "minimum": 0, "description": "Cost per 1M input tokens (USD)" },
+              "outputPer1M": { "type": "number", "minimum": 0, "description": "Cost per 1M output tokens (USD)" }
+            }
+          },
+          "description": "Per-model pricing table (USD per 1M tokens)."
+        }
+      },
+      "description": "Budget caps and pricing. Cost estimated before each call; refused if over cap (fail-closed for gates)."
+    },
+    "reviewCaps": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxOutputTokens": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 4096,
+          "description": "Hard cap on review response tokens. Default 600."
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Temperature for review calls. Default 0 (deterministic)."
+        }
+      },
+      "description": "Strict caps for review gate API calls."
     },
     "providers": {
       "type": "object",
@@ -47,6 +110,16 @@
             "apiBase": { "type": "string", "format": "uri" },
             "keySource": { "type": "string" },
             "keyEnv": { "type": "string" },
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "mistral": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "apiBase": { "type": "string", "format": "uri" },
+            "keyEnv": { "type": "string" },
+            "keySource": { "type": "string" },
             "enabled": { "type": "boolean" }
           }
         },
@@ -85,7 +158,7 @@
       "properties": {
         "provider": {
           "type": "string",
-          "enum": ["openai", "moonshot", "ollama"]
+          "enum": ["openai", "mistral", "moonshot", "ollama"]
         },
         "model": {
           "type": "string",

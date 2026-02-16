@@ -107,29 +107,85 @@ The following are **out of scope** for this repository:
 
 OpenClaw uses a provider abstraction layer (`src/llm/`) with a fail-closed model router. The router selects provider + model by "purpose" (review, general, vision) using `config/llm.json`.
 
-**Review gate invariant (NON-NEGOTIABLE):** `purpose=review` ALWAYS resolves to `OpenAIProvider` + `CODEX_REVIEW_MODEL`. No fallback, no override, no config bypass. Missing OpenAI key → fail-closed with clear error message.
+**Review gate invariant (NON-NEGOTIABLE):** `purpose=review` resolves to `OpenAIProvider` + `gpt-4o-mini` (primary). If OpenAI returns a transient error (429/5xx/timeout), the router falls back to `MistralProvider` + `codestral-2501`. Both fail → fail-closed. Missing OpenAI key → fail-closed (no silent downgrade).
+
+**Cost optimization:** Review gate uses `gpt-4o-mini` (code-specialized, cheaper than gpt-4o). Strict caps: `max_output_tokens: 600`, `temperature: 0`. Budget cap enforced before each call (fail-closed). Non-critical ops route to `gpt-4o-mini`.
 
 ### Available Providers
 
 | Provider | Status | Key Source | Purpose |
 |----------|--------|------------|---------|
-| **OpenAI** | Always enabled | env → Keychain → Linux file (existing hardened flow) | Review (hard-pinned), general, vision |
+| **OpenAI** | Always enabled | env → Keychain → Linux file (existing hardened flow) | Review primary, general, vision |
+| **Mistral (Codestral)** | Review fallback | `MISTRAL_API_KEY` env var | Review fallback (transient errors only) |
 | **Moonshot (Kimi)** | Disabled by default | `MOONSHOT_API_KEY` env var | General tasks only (NEVER review) |
 | **Ollama** | Disabled by default | None (local, no key needed) | General tasks only (NEVER review) |
 
 ### How Routing Works
 
 1. `ModelRouter.resolve(purpose)` selects provider + model
-2. For `purpose=review`: always returns `OpenAIProvider` + `CODEX_REVIEW_MODEL` (env `OPENCLAW_REVIEW_MODEL`, default `gpt-4o`)
-3. For `purpose=general|vision`: checks `config/llm.json` defaults, then enabled providers; falls back to OpenAI
-4. Disabled providers are never called
-5. Unknown purposes fall back to OpenAI
+2. For `purpose=review`:
+   - Primary: `OpenAIProvider` + `gpt-4o-mini` (env `OPENCLAW_REVIEW_MODEL`)
+   - Budget check: estimated cost must be ≤ `maxUsdPerReview` (fail-closed)
+   - Caps: `max_output_tokens=600`, `temperature=0` enforced on every call
+   - On transient error (429/500-504/timeout): try `MistralProvider` + `codestral-2501`
+   - Both fail → fail-closed (`RuntimeError`)
+   - Non-transient errors (401, config) → immediate fail-closed (no fallback)
+3. For `purpose=general`: routes to `gpt-4o-mini` (cheap) via config defaults
+4. For `purpose=vision`: routes to `gpt-4o` (capability required)
+5. Disabled providers are never called
+6. Unknown purposes fall back to OpenAI
+
+### Review Fallback Behavior
+
+The `reviewFallback` config section defines the fallback reviewer:
+```json
+"reviewFallback": { "provider": "mistral", "model": "codestral-2501" }
+```
+
+- **Trigger**: Only on transient/quota errors from OpenAI (HTTP 429, 500-504, timeout, unreachable)
+- **NOT triggered**: Auth errors (401), bad requests (400), config errors, parse errors
+- **Provenance**: Response records `provider: "mistral"`, verdict `meta.fallback_used: true`
+- **Pre-push hook**: Accepts any `provider` in provenance (openai, mistral, etc.)
+- **No fallback configured**: If `reviewFallback` is missing or Mistral key is not set, transient errors fail-closed with clear message
+
+### Budget & Cost Tracking
+
+```json
+"budget": {
+  "maxUsdPerReview": 0.50,
+  "maxUsdPerRun": 5.00,
+  "pricing": {
+    "gpt-4o-mini": { "inputPer1M": 1.50, "outputPer1M": 6.00 },
+    "gpt-4o": { "inputPer1M": 2.50, "outputPer1M": 10.00 },
+    "codestral-2501": { "inputPer1M": 0.30, "outputPer1M": 0.90 }
+  }
+}
+```
+
+- **Pre-call estimation**: `estimate_cost()` calculates from prompt token count (chars/4) + `max_output_tokens`
+- **Fail-closed for gates**: If estimated cost exceeds `maxUsdPerReview`, review is refused (`RuntimeError`)
+- **Post-call actuals**: `actual_cost()` calculates from real `usage` data returned by the API
+- **Telemetry**: Per-call JSONL written to `<artifact_dir>/cost_telemetry.jsonl` — model, provider, usage, estimated/actual cost, verdict
+- **HQ visibility**: Cost telemetry surfaced in LLM panel via artifact directory
+
+### Review Caps
+
+```json
+"reviewCaps": { "maxOutputTokens": 600, "temperature": 0 }
+```
+
+- Enforced by the router on every review call (overrides caller values)
+- Prevents expensive runaway responses
+- Keeps verdicts concise and structured (JSON only, no essays)
 
 ### Config: `config/llm.json`
 
 - Schema: `config/llm.schema.json` (strict, additionalProperties: false)
 - `enabledProviders`: MUST include `"openai"` (validated at startup)
 - `defaults.review.provider`: MUST be `"openai"` (enforced in schema + code)
+- `reviewFallback.provider`: Must NOT be `"openai"` (that's the primary)
+- `budget`: `maxUsdPerReview` and `maxUsdPerRun` caps with per-model pricing
+- `reviewCaps`: `maxOutputTokens` (100–4096) and `temperature` (0–1)
 - `providers.ollama.apiBase`: MUST be localhost (127.0.0.1/::1) — no public Ollama endpoints
 - Invalid config → fail-closed with clear error message listing all violations
 
@@ -159,28 +215,36 @@ To enable:
 - `GET /api/llm/status` — full provider status (enabled/disabled, configured, masked fingerprint, router info, config validation)
 - `GET /api/ai-status` — backward-compatible (now includes all LLM providers)
 - Overview page "LLM Providers" panel — status lights, review gate badge, config health
+- Cost telemetry: `artifacts/codex_review/<timestamp>/cost_telemetry.jsonl`
 
 ### Review Gate Statement
 
-**The review gate is ALWAYS OpenAI Codex and fail-closed.** This is enforced at three levels:
-1. **Config schema**: `defaults.review.provider` is constrained to `"openai"` (const in JSON Schema)
-2. **Router code**: `ModelRouter.resolve("review")` hard-returns OpenAI regardless of config
-3. **Provider check**: If OpenAI key is missing, `resolve("review")` raises `RuntimeError` (non-zero exit)
+**The review gate is fail-closed with multi-vendor resilience:**
+1. **Primary**: OpenAI `gpt-4o-mini` (code-specialized, cost-efficient)
+2. **Fallback**: Mistral `codestral-2501` (on transient errors only — 429/5xx/timeout)
+3. **Fail-closed**: Both fail → `RuntimeError`, non-transient errors → immediate failure
+4. **Budget**: Pre-call cost estimate checked against `maxUsdPerReview` cap
+5. **Caps**: `max_output_tokens: 600`, `temperature: 0` enforced on all review calls
 
-No Moonshot, Ollama, or any other provider can be used for review. This is by design and MUST NOT be changed.
+Enforced at three levels:
+1. **Config schema**: `defaults.review.provider` is constrained to `"openai"` (const in JSON Schema)
+2. **Router code**: `ModelRouter.resolve("review")` hard-returns OpenAI; `_generate_review()` handles fallback
+3. **Provider check**: If OpenAI key is missing, `resolve("review")` raises `RuntimeError` (non-zero exit)
 
 ### Architecture
 
 ```
 src/llm/
 ├── __init__.py            # Package exports
-├── types.py               # LLMConfig, LLMRequest, LLMResponse, ProviderStatus
+├── types.py               # LLMConfig, LLMRequest, LLMResponse, ReviewFallbackConfig, ReviewCapsConfig
 ├── provider.py            # BaseProvider ABC + redact_for_log
-├── openai_provider.py     # OpenAIProvider (hard-pinned for review)
+├── openai_provider.py     # OpenAIProvider (review primary, gpt-4o-mini)
+├── mistral_provider.py    # MistralProvider (review fallback, codestral-2501)
 ├── moonshot_provider.py   # MoonshotProvider (optional, disabled by default)
 ├── ollama_provider.py     # OllamaProvider (local-only, disabled by default)
-├── router.py              # ModelRouter (purpose-based routing, fail-closed)
+├── router.py              # ModelRouter (purpose-based routing, review fallback, budget enforcement)
 ├── config.py              # Config loader + strict schema validation
+├── budget.py              # Cost estimation, budget caps, telemetry
 └── review_gate.py         # CLI entrypoint for review pipeline
 
 config/
@@ -190,17 +254,35 @@ config/
 
 ### Tests
 
-56 hermetic tests in `ops/tests/test_llm_router.py`:
-- Review pinning (4): review always selects OpenAI even with moonshot/ollama defaults
+103 hermetic tests in `ops/tests/test_llm_router.py`:
+- Review pinning (5): review always selects OpenAI even with moonshot/ollama defaults, default model is gpt-4o-mini
 - Fail-closed (3): missing key → RuntimeError with clear instructions
-- Config validation (14): good config passes, bad configs rejected (unknown fields, missing fields, wrong provider, non-localhost ollama)
-- Secret redaction (9): keys never in status output, errors redacted, stderr clean
-- Provider tests (8): instantiation, configuration, localhost enforcement, vision stub
+- Config validation (22): good config passes, bad configs rejected (unknown fields, missing fields, wrong provider, non-localhost ollama, reviewFallback/budget/reviewCaps validation)
+- Secret redaction (10): keys never in status output (incl. Mistral), errors redacted, stderr clean
+- Provider tests (10): instantiation, configuration, localhost enforcement, vision stub, Mistral provider
 - Router behavior (7): routing logic, fallback, idempotency, init error capture
+- Review fallback (7): OpenAI quota/5xx/timeout triggers Codestral, auth error does NOT trigger, both-fail is fail-closed, no-fallback-configured is fail-closed, provenance recorded
+- Review caps (2): max_output_tokens enforced, custom caps from config
+- Budget cap (5): oversized review blocked, normal review allowed, cost estimation, actual cost, unknown model allowed
+- Transient error detection (10): 429/500/502/503/504/timeout/unreachable are transient; 401/400/parse errors are not
 - Artifact scan (3): simulated outputs scanned for secret patterns
-- Type tests (3): construction and serialization
+- Type tests (6): construction and serialization incl. ReviewFallbackConfig, ReviewCapsConfig
 
 ## Recent Changes
+
+- **Cost-Optimize Review Gate + Fallback + Budget Caps** (2026-02-16):
+  - **Review model**: Switched from `gpt-4o` to `gpt-4o-mini` (code-specialized, cheaper)
+  - **Review caps**: `max_output_tokens: 600`, `temperature: 0` enforced on all review calls — prevents expensive runaway responses
+  - **Review fallback**: Mistral `codestral-2501` as fallback reviewer when OpenAI returns 429/5xx/timeout — not single-vendor fragile
+  - **MistralProvider**: New provider (`src/llm/mistral_provider.py`) — OpenAI-compatible API at api.mistral.ai, `MISTRAL_API_KEY` env var
+  - **Budget enforcement**: `maxUsdPerReview: $0.50`, `maxUsdPerRun: $5.00` — pre-call cost estimation, fail-closed if over cap
+  - **Cost telemetry**: Per-call JSONL at `<artifact_dir>/cost_telemetry.jsonl` — model, provider, usage, estimated/actual cost
+  - **Non-critical routing**: `defaults.general` changed to `gpt-4o-mini` (cheaper than gpt-4o for non-review ops)
+  - **Config expanded**: `reviewFallback`, `budget`, `reviewCaps` sections in `config/llm.json` with strict schema validation
+  - **Transient error detection**: Only 429/500-504/timeout/unreachable trigger fallback; auth/config errors fail-closed immediately
+  - **Provenance**: Verdict `meta` records `fallback_used`, `cost_usd`, `simulated: false`; pre-push hook accepts any provider
+  - **Tests**: 103 hermetic tests (was 56) — review pinning, fallback, both-fail, budget cap, review caps, transient detection, Mistral provider
+  - **Docs**: Updated LLM Providers & Routing section with fallback behavior, budget caps, cost tracking
 
 - **LLM Provider Abstraction + Fail-Closed Router** (2026-02-16):
   - **Provider interface**: `BaseProvider` ABC with `generate_text()`, `is_configured()`, `health_check()`, `get_status()`

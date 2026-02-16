@@ -10,6 +10,14 @@ Tests verify:
   6. Provider instantiation and status (mocked — no real API calls)
   7. Ollama localhost-only enforcement
   8. Router fallback behavior for non-review purposes
+  9. Review uses gpt-4o-mini by default
+  10. max_output_tokens enforced on review calls
+  11. OpenAI quota error triggers Codestral fallback
+  12. Both reviewers fail => fail-closed
+  13. Budget cap blocks oversized call
+  14. Provenance recorded (primary + fallback)
+  15. Mistral provider instantiation and status
+  16. Config validates reviewFallback, budget, reviewCaps
 
 All tests are HERMETIC — no network calls, no real secrets, no side effects.
 """
@@ -30,16 +38,25 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.llm.types import LLMConfig, PurposeRoute, ProviderConfig, LLMRequest
+from src.llm.types import (
+    LLMConfig, PurposeRoute, ProviderConfig, LLMRequest, LLMResponse,
+    ReviewFallbackConfig, ReviewCapsConfig,
+)
 from src.llm.config import validate_llm_config, load_llm_config, LLMConfigError
-from src.llm.router import ModelRouter, reset_router
+from src.llm.router import ModelRouter, reset_router, _is_transient_error
 from src.llm.provider import BaseProvider, redact_for_log
 from src.llm.openai_provider import OpenAIProvider, CODEX_REVIEW_MODEL, _mask_key
+from src.llm.mistral_provider import MistralProvider
 from src.llm.moonshot_provider import MoonshotProvider
 from src.llm.ollama_provider import OllamaProvider
+from src.llm.budget import (
+    BudgetConfig, estimate_cost, check_budget, actual_cost,
+    DEFAULT_MAX_USD_PER_REVIEW,
+)
 
 FAKE_OPENAI_KEY = "sk-test-FAKE-000000000000000000000000000000000000"
 FAKE_MOONSHOT_KEY = "msk-test-FAKE-0000000000000000000000000000000000"
+FAKE_MISTRAL_KEY = "mist-test-FAKE-00000000000000000000000000000000"
 
 
 # ---------------------------------------------------------------------------
@@ -60,13 +77,35 @@ def _good_config() -> dict:
     return {
         "enabledProviders": ["openai"],
         "defaults": {
-            "general": {"provider": "openai", "model": "gpt-4o"},
-            "review": {"provider": "openai", "model": "gpt-4o"},
+            "general": {"provider": "openai", "model": "gpt-4o-mini"},
+            "review": {"provider": "openai", "model": "gpt-4o-mini"},
+        },
+        "reviewFallback": {
+            "provider": "mistral",
+            "model": "codestral-2501",
+        },
+        "budget": {
+            "maxUsdPerReview": 0.50,
+            "maxUsdPerRun": 5.00,
+            "pricing": {
+                "gpt-4o-mini": {"inputPer1M": 1.50, "outputPer1M": 6.00},
+                "gpt-4o": {"inputPer1M": 2.50, "outputPer1M": 10.00},
+                "codestral-2501": {"inputPer1M": 0.30, "outputPer1M": 0.90},
+            },
+        },
+        "reviewCaps": {
+            "maxOutputTokens": 600,
+            "temperature": 0,
         },
         "providers": {
             "openai": {
                 "apiBase": "https://api.openai.com/v1",
                 "keySource": "existing_secret_store",
+            },
+            "mistral": {
+                "apiBase": "https://api.mistral.ai/v1",
+                "keyEnv": "MISTRAL_API_KEY",
+                "enabled": False,
             },
             "moonshot": {
                 "apiBase": "https://api.moonshot.cn/v1",
@@ -87,6 +126,28 @@ def _make_config(overrides: dict | None = None) -> LLMConfig:
     if overrides:
         data.update(overrides)
     return LLMConfig.from_dict(data)
+
+
+def _fake_openai_response(content: str = '{"verdict":"APPROVED","blockers":[],"non_blocking":[]}') -> LLMResponse:
+    """Create a fake LLMResponse as if from OpenAI."""
+    return LLMResponse(
+        content=content,
+        model="gpt-4o-mini",
+        provider="openai",
+        usage={"prompt_tokens": 500, "completion_tokens": 100, "total_tokens": 600},
+        trace_id="test",
+    )
+
+
+def _fake_mistral_response(content: str = '{"verdict":"APPROVED","blockers":[],"non_blocking":[]}') -> LLMResponse:
+    """Create a fake LLMResponse as if from Mistral."""
+    return LLMResponse(
+        content=content,
+        model="codestral-2501",
+        provider="mistral",
+        usage={"prompt_tokens": 500, "completion_tokens": 100, "total_tokens": 600},
+        trace_id="test",
+    )
 
 
 # ===========================================================================
@@ -111,7 +172,7 @@ class TestReviewPinning:
             "enabledProviders": ["openai", "moonshot"],
             "defaults": {
                 "general": {"provider": "moonshot", "model": "moonshot-v1-8k"},
-                "review": {"provider": "openai", "model": "gpt-4o"},
+                "review": {"provider": "openai", "model": "gpt-4o-mini"},
             },
         })
         with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_OPENAI_KEY}):
@@ -126,7 +187,7 @@ class TestReviewPinning:
             "enabledProviders": ["openai", "ollama"],
             "defaults": {
                 "general": {"provider": "ollama", "model": "llama3"},
-                "review": {"provider": "openai", "model": "gpt-4o"},
+                "review": {"provider": "openai", "model": "gpt-4o-mini"},
             },
         })
         with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_OPENAI_KEY}):
@@ -141,12 +202,25 @@ class TestReviewPinning:
             "OPENAI_API_KEY": FAKE_OPENAI_KEY,
             "OPENCLAW_REVIEW_MODEL": "gpt-5.3-codex",
         }):
-            # Need to reload the module to pick up the env var change
             import src.llm.openai_provider as oai_mod
             importlib.reload(oai_mod)
             assert oai_mod.CODEX_REVIEW_MODEL == "gpt-5.3-codex"
         # Restore default
-        with mock.patch.dict(os.environ, {"OPENCLAW_REVIEW_MODEL": "gpt-4o"}):
+        with mock.patch.dict(os.environ, {"OPENCLAW_REVIEW_MODEL": "gpt-4o-mini"}):
+            importlib.reload(oai_mod)
+
+    def test_review_default_model_is_4o_mini(self):
+        """Default review model should be gpt-4o-mini (cost-optimized)."""
+        with mock.patch.dict(os.environ, {}, clear=False):
+            # Remove any override
+            env = dict(os.environ)
+            env.pop("OPENCLAW_REVIEW_MODEL", None)
+            with mock.patch.dict(os.environ, env, clear=True):
+                import src.llm.openai_provider as oai_mod
+                importlib.reload(oai_mod)
+                assert oai_mod.CODEX_REVIEW_MODEL == "gpt-4o-mini"
+        # Restore
+        with mock.patch.dict(os.environ, {"OPENCLAW_REVIEW_MODEL": "gpt-4o-mini"}):
             importlib.reload(oai_mod)
 
 
@@ -285,6 +359,92 @@ class TestConfigValidation:
         errors = validate_llm_config(data)
         assert not any("localhost" in e for e in errors)
 
+    # --- reviewFallback validation ---
+
+    def test_review_fallback_openai_rejected(self):
+        """reviewFallback.provider must NOT be openai."""
+        data = _good_config()
+        data["reviewFallback"] = {"provider": "openai", "model": "gpt-4o"}
+        errors = validate_llm_config(data)
+        assert any("reviewFallback" in e and "openai" in e.lower() for e in errors)
+
+    def test_review_fallback_valid_mistral(self):
+        """Mistral as review fallback should pass validation."""
+        data = _good_config()
+        data["reviewFallback"] = {"provider": "mistral", "model": "codestral-2501"}
+        errors = validate_llm_config(data)
+        assert not any("reviewFallback" in e for e in errors)
+
+    def test_review_fallback_empty_model_rejected(self):
+        data = _good_config()
+        data["reviewFallback"] = {"provider": "mistral", "model": ""}
+        errors = validate_llm_config(data)
+        assert any("reviewFallback" in e and "model" in e for e in errors)
+
+    def test_review_fallback_unknown_provider_rejected(self):
+        data = _good_config()
+        data["reviewFallback"] = {"provider": "unknown_vendor", "model": "x"}
+        errors = validate_llm_config(data)
+        assert any("reviewFallback" in e and "unknown_vendor" in e for e in errors)
+
+    # --- budget validation ---
+
+    def test_budget_valid(self):
+        data = _good_config()
+        errors = validate_llm_config(data)
+        assert not any("budget" in e for e in errors)
+
+    def test_budget_negative_cap_rejected(self):
+        data = _good_config()
+        data["budget"]["maxUsdPerReview"] = -1.0
+        errors = validate_llm_config(data)
+        assert any("maxUsdPerReview" in e and "positive" in e for e in errors)
+
+    def test_budget_zero_cap_rejected(self):
+        data = _good_config()
+        data["budget"]["maxUsdPerRun"] = 0
+        errors = validate_llm_config(data)
+        assert any("maxUsdPerRun" in e and "positive" in e for e in errors)
+
+    def test_budget_negative_pricing_rejected(self):
+        data = _good_config()
+        data["budget"]["pricing"]["gpt-4o"]["inputPer1M"] = -5
+        errors = validate_llm_config(data)
+        assert any("inputPer1M" in e and "non-negative" in e for e in errors)
+
+    # --- reviewCaps validation ---
+
+    def test_review_caps_valid(self):
+        data = _good_config()
+        errors = validate_llm_config(data)
+        assert not any("reviewCaps" in e for e in errors)
+
+    def test_review_caps_too_low_rejected(self):
+        data = _good_config()
+        data["reviewCaps"]["maxOutputTokens"] = 50
+        errors = validate_llm_config(data)
+        assert any("maxOutputTokens" in e and "100" in e for e in errors)
+
+    def test_review_caps_too_high_rejected(self):
+        data = _good_config()
+        data["reviewCaps"]["maxOutputTokens"] = 10000
+        errors = validate_llm_config(data)
+        assert any("maxOutputTokens" in e and "4096" in e for e in errors)
+
+    def test_review_caps_bad_temperature(self):
+        data = _good_config()
+        data["reviewCaps"]["temperature"] = 2.0
+        errors = validate_llm_config(data)
+        assert any("temperature" in e for e in errors)
+
+    # --- mistral provider in config ---
+
+    def test_mistral_in_enabled_providers(self):
+        data = _good_config()
+        data["enabledProviders"] = ["openai", "mistral"]
+        errors = validate_llm_config(data)
+        assert not any("mistral" in e for e in errors)
+
 
 class TestConfigLoading:
     """Test config file loading (with temp files)."""
@@ -321,6 +481,31 @@ class TestConfigLoading:
             config = load_llm_config(repo_config)
             assert "openai" in config.enabled_providers
             assert config.defaults["review"].provider == "openai"
+
+    def test_load_config_with_review_fallback(self, tmp_path):
+        """Config with reviewFallback should load correctly."""
+        config_file = tmp_path / "llm.json"
+        config_file.write_text(json.dumps(_good_config()))
+        config = load_llm_config(config_file)
+        assert config.review_fallback is not None
+        assert config.review_fallback.provider == "mistral"
+        assert config.review_fallback.model == "codestral-2501"
+
+    def test_load_config_with_review_caps(self, tmp_path):
+        """Config with reviewCaps should load correctly."""
+        config_file = tmp_path / "llm.json"
+        config_file.write_text(json.dumps(_good_config()))
+        config = load_llm_config(config_file)
+        assert config.review_caps.max_output_tokens == 600
+        assert config.review_caps.temperature == 0
+
+    def test_load_config_with_budget(self, tmp_path):
+        """Config with budget should load correctly."""
+        config_file = tmp_path / "llm.json"
+        config_file.write_text(json.dumps(_good_config()))
+        config = load_llm_config(config_file)
+        assert config.budget_config.get("maxUsdPerReview") == 0.50
+        assert config.budget_config.get("maxUsdPerRun") == 5.00
 
 
 # ===========================================================================
@@ -364,7 +549,6 @@ class TestSecretRedaction:
             status = provider.get_status()
             status_str = json.dumps(status)
             assert FAKE_OPENAI_KEY not in status_str
-            # Fingerprint should be present but masked
             assert status["fingerprint"] is not None
             assert "…" in status["fingerprint"]
 
@@ -383,6 +567,16 @@ class TestSecretRedaction:
             status = provider.get_status()
             status_str = json.dumps(status)
             assert FAKE_MOONSHOT_KEY not in status_str
+
+    def test_mistral_status_never_exposes_key(self):
+        """Mistral provider status must mask the key."""
+        with mock.patch.dict(os.environ, {"MISTRAL_API_KEY": FAKE_MISTRAL_KEY}):
+            provider = MistralProvider()
+            status = provider.get_status()
+            status_str = json.dumps(status)
+            assert FAKE_MISTRAL_KEY not in status_str
+            assert status["fingerprint"] is not None
+            assert "…" in status["fingerprint"]
 
     def test_error_messages_redacted(self):
         """Error messages from API failures must be redacted."""
@@ -412,6 +606,17 @@ class TestProviders:
             ):
                 p = OpenAIProvider()
                 assert not p.is_configured()
+
+    def test_mistral_configured_with_key(self):
+        with mock.patch.dict(os.environ, {"MISTRAL_API_KEY": FAKE_MISTRAL_KEY}):
+            p = MistralProvider()
+            assert p.is_configured()
+            assert p.provider_name == "mistral"
+
+    def test_mistral_not_configured_without_key(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            p = MistralProvider()
+            assert not p.is_configured()
 
     def test_moonshot_configured_with_key(self):
         with mock.patch.dict(os.environ, {"MOONSHOT_API_KEY": FAKE_MOONSHOT_KEY}):
@@ -458,14 +663,14 @@ class TestRouterBehavior:
             router = ModelRouter(config=config)
             provider, model = router.resolve("general")
         assert provider.provider_name == "openai"
-        assert model == "gpt-4o"
+        assert model == "gpt-4o-mini"
 
     def test_general_routes_to_moonshot_when_enabled(self):
         config = LLMConfig.from_dict({
             "enabledProviders": ["openai", "moonshot"],
             "defaults": {
                 "general": {"provider": "moonshot", "model": "moonshot-v1-8k"},
-                "review": {"provider": "openai", "model": "gpt-4o"},
+                "review": {"provider": "openai", "model": "gpt-4o-mini"},
             },
             "providers": {
                 "openai": {"apiBase": "https://api.openai.com/v1"},
@@ -484,7 +689,7 @@ class TestRouterBehavior:
             "enabledProviders": ["openai"],
             "defaults": {
                 "general": {"provider": "moonshot", "model": "moonshot-v1-8k"},
-                "review": {"provider": "openai", "model": "gpt-4o"},
+                "review": {"provider": "openai", "model": "gpt-4o-mini"},
             },
             "providers": {
                 "openai": {"apiBase": "https://api.openai.com/v1"},
@@ -509,6 +714,7 @@ class TestRouterBehavior:
             statuses = router.get_all_status()
         names = [s["name"] for s in statuses]
         assert "OpenAI" in names
+        assert "Mistral (Codestral)" in names
         assert "Moonshot (Kimi)" in names
         assert "Ollama (Local)" in names
 
@@ -534,7 +740,354 @@ class TestRouterBehavior:
 
 
 # ===========================================================================
-# 7. Artifact/log secret scan (post-run simulation)
+# 7. Review fallback — OpenAI quota triggers Codestral fallback
+# ===========================================================================
+
+
+class TestReviewFallback:
+    """Review gate fallback: OpenAI transient error -> Mistral Codestral."""
+
+    def test_openai_quota_triggers_codestral_fallback(self):
+        """HTTP 429 from OpenAI should trigger Mistral fallback."""
+        config = _make_config()
+        with mock.patch.dict(os.environ, {
+            "OPENAI_API_KEY": FAKE_OPENAI_KEY,
+            "MISTRAL_API_KEY": FAKE_MISTRAL_KEY,
+        }):
+            router = ModelRouter(config=config)
+
+            # Mock OpenAI to raise quota error, Mistral to succeed
+            with mock.patch.object(
+                router._providers["openai"], "generate_text",
+                side_effect=RuntimeError("OpenAI API error: HTTP 429 — rate limited"),
+            ):
+                with mock.patch.object(
+                    router._providers["mistral"], "generate_text",
+                    return_value=_fake_mistral_response(),
+                ):
+                    response = router.generate(LLMRequest(
+                        model="", messages=[{"role": "user", "content": "test"}],
+                        purpose="review", trace_id="test",
+                    ))
+
+            assert response.provider == "mistral"
+            assert response.model == "codestral-2501"
+
+    def test_openai_5xx_triggers_fallback(self):
+        """HTTP 500/502/503 from OpenAI should trigger fallback."""
+        config = _make_config()
+        with mock.patch.dict(os.environ, {
+            "OPENAI_API_KEY": FAKE_OPENAI_KEY,
+            "MISTRAL_API_KEY": FAKE_MISTRAL_KEY,
+        }):
+            router = ModelRouter(config=config)
+
+            for code in [500, 502, 503, 504]:
+                with mock.patch.object(
+                    router._providers["openai"], "generate_text",
+                    side_effect=RuntimeError(f"OpenAI API error: HTTP {code} — server error"),
+                ):
+                    with mock.patch.object(
+                        router._providers["mistral"], "generate_text",
+                        return_value=_fake_mistral_response(),
+                    ):
+                        response = router.generate(LLMRequest(
+                            model="", messages=[{"role": "user", "content": "test"}],
+                            purpose="review", trace_id="test",
+                        ))
+                        assert response.provider == "mistral"
+
+    def test_openai_timeout_triggers_fallback(self):
+        """Timeout from OpenAI should trigger fallback."""
+        config = _make_config()
+        with mock.patch.dict(os.environ, {
+            "OPENAI_API_KEY": FAKE_OPENAI_KEY,
+            "MISTRAL_API_KEY": FAKE_MISTRAL_KEY,
+        }):
+            router = ModelRouter(config=config)
+
+            with mock.patch.object(
+                router._providers["openai"], "generate_text",
+                side_effect=RuntimeError("OpenAI API unreachable: timed out"),
+            ):
+                with mock.patch.object(
+                    router._providers["mistral"], "generate_text",
+                    return_value=_fake_mistral_response(),
+                ):
+                    response = router.generate(LLMRequest(
+                        model="", messages=[{"role": "user", "content": "test"}],
+                        purpose="review", trace_id="test",
+                    ))
+                    assert response.provider == "mistral"
+
+    def test_openai_auth_error_does_not_trigger_fallback(self):
+        """Non-transient errors (auth, 401) should NOT trigger fallback — fail-closed."""
+        config = _make_config()
+        with mock.patch.dict(os.environ, {
+            "OPENAI_API_KEY": FAKE_OPENAI_KEY,
+            "MISTRAL_API_KEY": FAKE_MISTRAL_KEY,
+        }):
+            router = ModelRouter(config=config)
+
+            with mock.patch.object(
+                router._providers["openai"], "generate_text",
+                side_effect=RuntimeError("OpenAI API error: HTTP 401 — unauthorized"),
+            ):
+                with pytest.raises(RuntimeError, match="HTTP 401"):
+                    router.generate(LLMRequest(
+                        model="", messages=[{"role": "user", "content": "test"}],
+                        purpose="review", trace_id="test",
+                    ))
+
+    def test_both_reviewers_fail_is_fail_closed(self):
+        """If both OpenAI and Mistral fail, review must fail-closed."""
+        config = _make_config()
+        with mock.patch.dict(os.environ, {
+            "OPENAI_API_KEY": FAKE_OPENAI_KEY,
+            "MISTRAL_API_KEY": FAKE_MISTRAL_KEY,
+        }):
+            router = ModelRouter(config=config)
+
+            with mock.patch.object(
+                router._providers["openai"], "generate_text",
+                side_effect=RuntimeError("OpenAI API error: HTTP 429 — rate limited"),
+            ):
+                with mock.patch.object(
+                    router._providers["mistral"], "generate_text",
+                    side_effect=RuntimeError("Mistral API error: HTTP 500 — server error"),
+                ):
+                    with pytest.raises(RuntimeError, match="FAILED.*fail-closed"):
+                        router.generate(LLMRequest(
+                            model="", messages=[{"role": "user", "content": "test"}],
+                            purpose="review", trace_id="test",
+                        ))
+
+    def test_no_fallback_configured_fails_closed(self):
+        """If no fallback configured, transient error fails closed with clear message."""
+        data = _good_config()
+        del data["reviewFallback"]
+        config = LLMConfig.from_dict(data)
+        with mock.patch.dict(os.environ, {
+            "OPENAI_API_KEY": FAKE_OPENAI_KEY,
+        }):
+            router = ModelRouter(config=config)
+
+            with mock.patch.object(
+                router._providers["openai"], "generate_text",
+                side_effect=RuntimeError("OpenAI API error: HTTP 429 — rate limited"),
+            ):
+                with pytest.raises(RuntimeError, match="No fallback reviewer"):
+                    router.generate(LLMRequest(
+                        model="", messages=[{"role": "user", "content": "test"}],
+                        purpose="review", trace_id="test",
+                    ))
+
+    def test_fallback_provenance_recorded(self):
+        """Response from fallback must have correct provider metadata."""
+        config = _make_config()
+        with mock.patch.dict(os.environ, {
+            "OPENAI_API_KEY": FAKE_OPENAI_KEY,
+            "MISTRAL_API_KEY": FAKE_MISTRAL_KEY,
+        }):
+            router = ModelRouter(config=config)
+
+            with mock.patch.object(
+                router._providers["openai"], "generate_text",
+                side_effect=RuntimeError("OpenAI API error: HTTP 429 — rate limited"),
+            ):
+                with mock.patch.object(
+                    router._providers["mistral"], "generate_text",
+                    return_value=_fake_mistral_response(),
+                ):
+                    response = router.generate(LLMRequest(
+                        model="", messages=[{"role": "user", "content": "test"}],
+                        purpose="review", trace_id="test",
+                    ))
+
+            # Verify provenance
+            assert response.provider == "mistral"
+            assert response.model == "codestral-2501"
+
+
+# ===========================================================================
+# 8. Review caps enforcement
+# ===========================================================================
+
+
+class TestReviewCaps:
+    """max_output_tokens and temperature are enforced on review calls."""
+
+    def test_max_output_tokens_enforced(self):
+        """Review calls must use max_output_tokens from reviewCaps config."""
+        config = _make_config()
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_OPENAI_KEY}):
+            router = ModelRouter(config=config)
+
+            captured_request = {}
+
+            def capture_request(req: LLMRequest) -> LLMResponse:
+                captured_request["max_tokens"] = req.max_tokens
+                captured_request["temperature"] = req.temperature
+                return _fake_openai_response()
+
+            with mock.patch.object(
+                router._providers["openai"], "generate_text",
+                side_effect=capture_request,
+            ):
+                router.generate(LLMRequest(
+                    model="", messages=[{"role": "user", "content": "test"}],
+                    purpose="review", trace_id="test",
+                    max_tokens=4096,  # Caller requests more
+                    temperature=0.5,  # Caller requests higher
+                ))
+
+            # Router should enforce caps, not caller values
+            assert captured_request["max_tokens"] == 600
+            assert captured_request["temperature"] == 0
+
+    def test_custom_caps_from_config(self):
+        """Custom reviewCaps values should be used."""
+        data = _good_config()
+        data["reviewCaps"] = {"maxOutputTokens": 400, "temperature": 0}
+        config = LLMConfig.from_dict(data)
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_OPENAI_KEY}):
+            router = ModelRouter(config=config)
+
+            captured = {}
+
+            def capture(req):
+                captured["max_tokens"] = req.max_tokens
+                return _fake_openai_response()
+
+            with mock.patch.object(
+                router._providers["openai"], "generate_text",
+                side_effect=capture,
+            ):
+                router.generate(LLMRequest(
+                    model="", messages=[{"role": "user", "content": "test"}],
+                    purpose="review", trace_id="test",
+                ))
+
+            assert captured["max_tokens"] == 400
+
+
+# ===========================================================================
+# 9. Budget cap enforcement
+# ===========================================================================
+
+
+class TestBudgetCap:
+    """Budget cap blocks oversized review calls (fail-closed)."""
+
+    def test_budget_blocks_oversized_review(self):
+        """If estimated cost exceeds maxUsdPerReview, review is refused."""
+        data = _good_config()
+        data["budget"]["maxUsdPerReview"] = 0.001  # Very low cap
+        config = LLMConfig.from_dict(data)
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_OPENAI_KEY}):
+            router = ModelRouter(config=config)
+
+            # Large bundle that would blow the budget
+            big_content = "x" * 500_000  # ~125K tokens estimated
+            with pytest.raises(RuntimeError, match="BUDGET EXCEEDED"):
+                router.generate(LLMRequest(
+                    model="",
+                    messages=[{"role": "user", "content": big_content}],
+                    purpose="review", trace_id="test",
+                ))
+
+    def test_budget_allows_normal_review(self):
+        """Normal-sized review should pass budget check."""
+        config = _make_config()
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_OPENAI_KEY}):
+            router = ModelRouter(config=config)
+
+            with mock.patch.object(
+                router._providers["openai"], "generate_text",
+                return_value=_fake_openai_response(),
+            ):
+                # Small bundle — well within budget
+                response = router.generate(LLMRequest(
+                    model="",
+                    messages=[{"role": "user", "content": "small diff"}],
+                    purpose="review", trace_id="test",
+                ))
+                assert response.content
+
+    def test_budget_estimate_cost_function(self):
+        """estimate_cost should calculate reasonable estimates."""
+        est = estimate_cost(
+            model="gpt-4o-mini",
+            prompt_text="a" * 4000,  # ~1000 tokens
+            max_output_tokens=600,
+        )
+        assert est.pricing_found
+        assert est.estimated_input_tokens == 1000
+        assert est.input_cost_usd > 0
+        assert est.output_cost_usd > 0
+        assert est.estimated_cost_usd == est.input_cost_usd + est.output_cost_usd
+
+    def test_budget_actual_cost_function(self):
+        """actual_cost should calculate from real usage."""
+        cost = actual_cost(
+            model="gpt-4o-mini",
+            usage={"prompt_tokens": 1000, "completion_tokens": 200},
+        )
+        assert cost > 0
+
+    def test_budget_unknown_model_allowed(self):
+        """Unknown models should be allowed (no pricing data = no cap enforcement)."""
+        est = estimate_cost(
+            model="some-unknown-model",
+            prompt_text="test",
+            max_output_tokens=600,
+        )
+        assert not est.pricing_found
+        allowed, _ = check_budget(est, 0.50, "review")
+        assert allowed  # Unknown model = allowed by default
+
+
+# ===========================================================================
+# 10. Transient error detection
+# ===========================================================================
+
+
+class TestTransientErrorDetection:
+    """Test _is_transient_error correctly classifies errors."""
+
+    def test_429_is_transient(self):
+        assert _is_transient_error(RuntimeError("OpenAI API error: HTTP 429 — rate limited"))
+
+    def test_500_is_transient(self):
+        assert _is_transient_error(RuntimeError("OpenAI API error: HTTP 500 — server error"))
+
+    def test_502_is_transient(self):
+        assert _is_transient_error(RuntimeError("OpenAI API error: HTTP 502 — bad gateway"))
+
+    def test_503_is_transient(self):
+        assert _is_transient_error(RuntimeError("OpenAI API error: HTTP 503 — service unavailable"))
+
+    def test_504_is_transient(self):
+        assert _is_transient_error(RuntimeError("OpenAI API error: HTTP 504 — gateway timeout"))
+
+    def test_timeout_is_transient(self):
+        assert _is_transient_error(RuntimeError("OpenAI API unreachable: timed out"))
+
+    def test_unreachable_is_transient(self):
+        assert _is_transient_error(RuntimeError("OpenAI API unreachable: connection refused"))
+
+    def test_401_is_not_transient(self):
+        assert not _is_transient_error(RuntimeError("OpenAI API error: HTTP 401 — unauthorized"))
+
+    def test_400_is_not_transient(self):
+        assert not _is_transient_error(RuntimeError("OpenAI API error: HTTP 400 — bad request"))
+
+    def test_parse_error_is_not_transient(self):
+        assert not _is_transient_error(RuntimeError("Response parsing failed: invalid JSON"))
+
+
+# ===========================================================================
+# 11. Artifact/log secret scan (post-run simulation)
 # ===========================================================================
 
 
@@ -544,11 +1097,10 @@ class TestArtifactSecretScan:
     SECRET_PATTERNS = [
         re.compile(r"sk-[A-Za-z0-9_-]{20,}"),          # OpenAI keys
         re.compile(r"Bearer\s+sk-[A-Za-z0-9_-]{10,}"), # Bearer + OpenAI
-        re.compile(r"MOONSHOT_API_KEY=[^[\s]{8,}"),     # Moonshot real values (not [REDACTED])
+        re.compile(r"MOONSHOT_API_KEY=[^[\s]{8,}"),     # Moonshot real values
     ]
 
     def _scan_for_secrets(self, text: str) -> list[str]:
-        """Return list of secret pattern matches found in text."""
         findings = []
         for pattern in self.SECRET_PATTERNS:
             matches = pattern.findall(text)
@@ -560,6 +1112,7 @@ class TestArtifactSecretScan:
         with mock.patch.dict(os.environ, {
             "OPENAI_API_KEY": FAKE_OPENAI_KEY,
             "MOONSHOT_API_KEY": FAKE_MOONSHOT_KEY,
+            "MISTRAL_API_KEY": FAKE_MISTRAL_KEY,
         }):
             config = _make_config({"enabledProviders": ["openai", "moonshot"]})
             router = ModelRouter(config=config)
@@ -569,7 +1122,6 @@ class TestArtifactSecretScan:
             assert findings == [], f"Secrets found in status output: {findings}"
 
     def test_error_output_no_secrets(self):
-        """Simulated error output must not contain secrets."""
         error_msgs = [
             redact_for_log(f"OpenAI API error: Bearer {FAKE_OPENAI_KEY}"),
             redact_for_log(f"Failed with key {FAKE_OPENAI_KEY}"),
@@ -580,7 +1132,6 @@ class TestArtifactSecretScan:
             assert findings == [], f"Secret found in error output: {findings}"
 
     def test_stderr_capture_no_secrets(self):
-        """Capture stderr during router operations and check for secrets."""
         config = _make_config()
         captured = io.StringIO()
         with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_OPENAI_KEY}):
@@ -595,7 +1146,7 @@ class TestArtifactSecretScan:
 
 
 # ===========================================================================
-# 8. Types
+# 12. Types
 # ===========================================================================
 
 
@@ -620,3 +1171,18 @@ class TestTypes:
         pr = PurposeRoute.from_dict({"provider": "openai", "model": "gpt-4o"})
         assert pr.provider == "openai"
         assert pr.model == "gpt-4o"
+
+    def test_review_fallback_config_from_dict(self):
+        rfc = ReviewFallbackConfig.from_dict({"provider": "mistral", "model": "codestral-2501"})
+        assert rfc.provider == "mistral"
+        assert rfc.model == "codestral-2501"
+
+    def test_review_caps_config_from_dict(self):
+        rcc = ReviewCapsConfig.from_dict({"maxOutputTokens": 400, "temperature": 0})
+        assert rcc.max_output_tokens == 400
+        assert rcc.temperature == 0
+
+    def test_review_caps_defaults(self):
+        rcc = ReviewCapsConfig()
+        assert rcc.max_output_tokens == 600
+        assert rcc.temperature == 0.0

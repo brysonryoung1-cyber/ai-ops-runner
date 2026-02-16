@@ -46,12 +46,45 @@ class PurposeRoute:
 
 
 @dataclass
+class ReviewFallbackConfig:
+    """Fallback reviewer config (used when OpenAI returns quota/rate/5xx)."""
+
+    provider: str = ""
+    model: str = ""
+
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> "ReviewFallbackConfig":
+        return ReviewFallbackConfig(
+            provider=data.get("provider", ""),
+            model=data.get("model", ""),
+        )
+
+
+@dataclass
+class ReviewCapsConfig:
+    """Strict caps for review gate API calls."""
+
+    max_output_tokens: int = 600
+    temperature: float = 0.0
+
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> "ReviewCapsConfig":
+        return ReviewCapsConfig(
+            max_output_tokens=data.get("maxOutputTokens", 600),
+            temperature=data.get("temperature", 0.0),
+        )
+
+
+@dataclass
 class LLMConfig:
     """Top-level LLM configuration (loaded from config/llm.json)."""
 
     enabled_providers: list[str] = field(default_factory=lambda: ["openai"])
     defaults: dict[str, PurposeRoute] = field(default_factory=dict)
     providers: dict[str, ProviderConfig] = field(default_factory=dict)
+    review_fallback: ReviewFallbackConfig | None = None
+    review_caps: ReviewCapsConfig = field(default_factory=ReviewCapsConfig)
+    budget_config: dict[str, Any] = field(default_factory=dict)
 
     @staticmethod
     def from_dict(data: dict[str, Any]) -> "LLMConfig":
@@ -63,10 +96,21 @@ class LLMConfig:
         for pname, pdata in data.get("providers", {}).items():
             providers[pname] = ProviderConfig.from_dict(pname, pdata)
 
+        review_fallback = None
+        if "reviewFallback" in data:
+            review_fallback = ReviewFallbackConfig.from_dict(data["reviewFallback"])
+
+        review_caps = ReviewCapsConfig()
+        if "reviewCaps" in data:
+            review_caps = ReviewCapsConfig.from_dict(data["reviewCaps"])
+
         return LLMConfig(
             enabled_providers=data.get("enabledProviders", ["openai"]),
             defaults=defaults,
             providers=providers,
+            review_fallback=review_fallback,
+            review_caps=review_caps,
+            budget_config=data.get("budget", {}),
         )
 
 

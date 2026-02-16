@@ -3,7 +3,12 @@
 
 This module is callable from both Python and the shell review pipeline.
 It ALWAYS uses the ModelRouter with purpose="review", which is hard-pinned
-to OpenAI + CODEX_REVIEW_MODEL. No fallback, no override.
+to OpenAI + CODEX_REVIEW_MODEL (primary), with Mistral Codestral as fallback
+on transient errors. Both fail => fail-closed.
+
+Review caps (max_output_tokens, temperature) are enforced by the router.
+Budget cap is checked before each call (fail-closed).
+Cost telemetry is written to artifacts.
 
 CLI usage (from openclaw_codex_review.sh):
   python3 -m src.llm.review_gate <verdict_file> <bundle_file>
@@ -27,6 +32,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from src.llm.router import get_router
 from src.llm.types import LLMRequest
+from src.llm.budget import actual_cost, write_cost_telemetry
 
 
 REVIEW_SYSTEM_PROMPT = """You are a security-focused code reviewer for the ai-ops-runner repository (OpenClaw control plane).
@@ -53,14 +59,16 @@ BLOCK only for:
 - Interactive prompts in runtime paths
 - Non-idempotent operations that could cause drift
 
-If no blocking issues, verdict MUST be "APPROVED"."""
+If no blocking issues, verdict MUST be "APPROVED".
+Be concise — max 600 tokens total."""
 
 
 def run_review(bundle_path: str, verdict_path: str) -> str:
     """Submit bundle for review via the LLM router. Returns verdict value.
 
-    Always uses purpose="review" which is hard-pinned to OpenAI.
-    Writes structured verdict JSON to verdict_path.
+    Uses purpose="review" which resolves to OpenAI (primary) with Mistral
+    fallback on transient errors. Router enforces review caps and budget.
+    Writes structured verdict JSON + cost telemetry to verdict_path dir.
     Raises RuntimeError on any failure (fail-closed).
     """
     with open(bundle_path) as f:
@@ -102,18 +110,49 @@ def run_review(bundle_path: str, verdict_path: str) -> str:
     if verdict["verdict"] not in ["APPROVED", "BLOCKED"]:
         raise RuntimeError(f"Invalid verdict value: {verdict['verdict']}")
 
-    # Add metadata
+    # Calculate actual cost
+    cost_usd = actual_cost(
+        model=response.model,
+        usage=response.usage,
+        pricing=router.budget.pricing,
+    )
+
+    # Add metadata with full provenance
     verdict["meta"] = {
         "model": response.model,
         "provider": response.provider,
         "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
         "type": "codex_diff_review",
         "routed_via": "llm_router",
+        "simulated": False,
         "usage": response.usage,
+        "cost_usd": round(cost_usd, 6),
     }
+
+    # Record if this was a fallback response
+    if response.provider != "openai":
+        verdict["meta"]["fallback_used"] = True
+        verdict["meta"]["fallback_reason"] = "primary_transient_error"
 
     with open(verdict_path, "w") as f:
         json.dump(verdict, f, indent=2)
+
+    # Write cost telemetry to artifact dir
+    artifact_dir = str(Path(verdict_path).parent)
+    write_cost_telemetry(
+        artifact_dir=artifact_dir,
+        model=response.model,
+        provider=response.provider,
+        usage=response.usage,
+        estimated_cost_usd=0.0,  # pre-call estimate is in router logs
+        actual_cost_usd=cost_usd,
+        purpose="review",
+        trace_id=request.trace_id,
+        extra={
+            "fallback_used": response.provider != "openai",
+            "verdict": verdict["verdict"],
+        },
+    )
 
     return verdict["verdict"]
 
