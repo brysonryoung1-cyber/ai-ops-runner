@@ -1,10 +1,17 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import StatusCard from "@/components/StatusCard";
 import CollapsibleOutput from "@/components/CollapsibleOutput";
 import { useExec, ExecResult } from "@/lib/hooks";
 import { useToken } from "@/lib/token-context";
+import {
+  GlassCard,
+  GlassButton,
+  Pill,
+  StatusDot,
+} from "@/components/glass";
 
 type CardStatus = "pass" | "fail" | "loading" | "idle" | "warn";
 
@@ -161,6 +168,14 @@ export default function OverviewPage() {
     step_failed: string | null;
     artifact_dir: string | null;
   } | null>(null);
+  const [recentRuns, setRecentRuns] = useState<{
+    run_id: string;
+    project_id: string;
+    action: string;
+    status: "success" | "failure" | "error";
+    finished_at: string;
+    duration_ms: number;
+  }[]>([]);
 
   // Check connectivity on mount
   useEffect(() => {
@@ -229,6 +244,20 @@ export default function OverviewPage() {
     }
   }, [token]);
 
+  // Recent runs (last 5)
+  const fetchRecentRuns = useCallback(async () => {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) headers["X-OpenClaw-Token"] = token;
+      const res = await fetch("/api/runs?limit=5", { headers });
+      const data = await res.json();
+      if (data?.ok && Array.isArray(data.runs)) setRecentRuns(data.runs);
+      else setRecentRuns([]);
+    } catch {
+      setRecentRuns([]);
+    }
+  }, [token]);
+
   // Last deploy result (proof bundle)
   const fetchDeployLast = useCallback(async () => {
     try {
@@ -281,6 +310,7 @@ export default function OverviewPage() {
     fetchProjectState();
     fetchAuthContext();
     fetchDeployLast();
+    fetchRecentRuns();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
 
@@ -301,195 +331,215 @@ export default function OverviewPage() {
   const dockerStatus = doctorResult ? parseDockerStatus(doctorResult.stdout) : "";
   const guardLogLines = journalResult ? lastNLines(journalResult.stdout, 20) : "";
 
+  const doctorStatus = deriveStatus(doctorResult, loading === "doctor");
+  const guardPass = timerStatus.includes("Active");
+  const llmOk = llmStatus?.config.valid ?? false;
+
   return (
     <div>
       {/* Page header */}
       <div className="mb-8">
-        <h2 className="text-2xl font-bold text-apple-text tracking-tight">
-          Overview
+        <h2 className="text-2xl font-bold text-white/95 tracking-tight">
+          Control Center
         </h2>
-        <p className="text-sm text-apple-muted mt-1">
+        <p className="text-sm text-white/60 mt-1">
           OpenClaw HQ — System health for aiops-1 via Tailscale SSH
         </p>
       </div>
 
       {/* Connection banner */}
       {connected === false && (
-        <div className="mb-6 p-4 rounded-apple bg-red-50 border border-red-200">
-          <p className="text-sm font-semibold text-apple-red">
-            SSH Connection Failed
-          </p>
-          <p className="text-xs text-red-600 mt-1">{connError}</p>
-          <p className="text-xs text-apple-muted mt-2">
-            Ensure Tailscale is running and you can reach aiops-1.
-          </p>
+        <div className="mb-6 p-4 rounded-2xl glass-surface border border-red-500/20">
+          <p className="text-sm font-semibold text-red-300">SSH Connection Failed</p>
+          <p className="text-xs text-red-200/80 mt-1">{connError}</p>
+          <p className="text-xs text-white/50 mt-2">Ensure Tailscale is running and you can reach aiops-1.</p>
         </div>
       )}
 
       {connected === null && (
-        <div className="mb-6 p-4 rounded-apple bg-blue-50 border border-blue-200">
-          <p className="text-sm text-apple-blue font-medium">
-            Checking SSH connectivity…
-          </p>
+        <div className="mb-6 p-4 rounded-2xl glass-surface border border-blue-500/20">
+          <p className="text-sm text-blue-300 font-medium">Checking SSH connectivity…</p>
         </div>
+      )}
+
+      {/* Hero: Overall status (Doctor, Guard, LLM) */}
+      {connected === true && (
+        <GlassCard className="mb-6 p-6">
+          <div className="flex flex-wrap items-center gap-6">
+            <div className="flex items-center gap-2">
+              <StatusDot variant={doctorStatus === "pass" ? "pass" : doctorStatus === "fail" ? "fail" : doctorStatus === "loading" ? "loading" : "idle"} />
+              <span className="text-sm font-medium text-white/90">Doctor</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <StatusDot variant={loading === "timer" ? "loading" : guardPass ? "pass" : timerResult ? "warn" : "idle"} />
+              <span className="text-sm font-medium text-white/90">Guard</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <StatusDot variant={llmOk ? "pass" : llmStatus ? "warn" : "idle"} />
+              <span className="text-sm font-medium text-white/90">LLM</span>
+            </div>
+          </div>
+        </GlassCard>
       )}
 
       {/* Project Brain panel */}
       {projectState && (
-        <div className="mb-6 bg-apple-card rounded-apple border border-apple-border shadow-apple overflow-hidden">
-          <div className="px-5 py-3 bg-gradient-to-r from-slate-50 to-slate-100 border-b border-apple-border flex items-center justify-between">
-            <span className="text-sm font-semibold text-apple-text">
-              Project Brain
-            </span>
-            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
-              Canonical state
-            </span>
+        <GlassCard className="mb-6">
+          <div className="px-5 py-3 border-b border-white/10 flex items-center justify-between">
+            <span className="text-sm font-semibold text-white/95">Project Brain</span>
+            <Pill variant="info">Canonical state</Pill>
           </div>
           <div className="p-5">
-            <p className="text-sm text-apple-text mb-3">
-              {projectState.goal_summary || "—"}
-            </p>
+            <p className="text-sm text-white/90 mb-3">{projectState.goal_summary || "—"}</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <div>
-                <span className="text-apple-muted uppercase tracking-wider">Phase</span>
-                <p className="text-apple-text font-medium mt-0.5">
-                  Zane agent Phase {projectState.zane_agent_phase ?? 0}
-                </p>
+                <span className="text-white/50 uppercase tracking-wider">Phase</span>
+                <p className="text-white/90 font-medium mt-0.5">Zane agent Phase {projectState.zane_agent_phase ?? 0}</p>
               </div>
               <div>
-                <span className="text-apple-muted uppercase tracking-wider">Next action</span>
-                <p className="text-apple-text font-medium mt-0.5">
-                  {projectState.next_action_text || "—"}
-                </p>
+                <span className="text-white/50 uppercase tracking-wider">Next action</span>
+                <p className="text-white/90 font-medium mt-0.5">{projectState.next_action_text || "—"}</p>
               </div>
               <div>
-                <span className="text-apple-muted uppercase tracking-wider">Last deploy</span>
-                <p className="text-apple-text mt-0.5">{projectState.last_deploy_timestamp || "—"}</p>
+                <span className="text-white/50 uppercase tracking-wider">Last deploy</span>
+                <p className="text-white/90 mt-0.5">{projectState.last_deploy_timestamp || "—"}</p>
               </div>
               <div>
-                <span className="text-apple-muted uppercase tracking-wider">Last guard / doctor</span>
-                <p className="text-apple-text mt-0.5">
+                <span className="text-white/50 uppercase tracking-wider">Last guard / doctor</span>
+                <p className="text-white/90 mt-0.5">
                   {projectState.last_guard_result ?? "—"} / {projectState.last_doctor_result ?? "—"}
                 </p>
               </div>
               <div>
-                <span className="text-apple-muted uppercase tracking-wider">LLM primary</span>
-                <p className="text-apple-text mt-0.5">
+                <span className="text-white/50 uppercase tracking-wider">LLM primary</span>
+                <p className="text-white/90 mt-0.5">
                   {projectState.llm_primary_provider ?? "—"} / {projectState.llm_primary_model ?? "—"}
                 </p>
               </div>
               <div>
-                <span className="text-apple-muted uppercase tracking-wider">LLM fallback</span>
-                <p className="text-apple-text mt-0.5">
+                <span className="text-white/50 uppercase tracking-wider">LLM fallback</span>
+                <p className="text-white/90 mt-0.5">
                   {projectState.llm_fallback_provider ?? "—"} / {projectState.llm_fallback_model ?? "—"}
                 </p>
               </div>
             </div>
-            <div className="mt-4 pt-4 border-t border-apple-border flex flex-wrap gap-2">
+            <div className="mt-4 pt-4 border-t border-white/10 flex flex-wrap gap-2">
               {DOC_NAMES.map(({ key, label }) => (
-                <button
+                <GlassButton
                   key={key}
-                  type="button"
+                  variant="secondary"
+                  size="sm"
                   onClick={() => openDoc(key, label)}
-                  className="px-3 py-1.5 text-xs font-medium text-apple-blue bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
                 >
                   {label}
-                </button>
+                </GlassButton>
               ))}
             </div>
           </div>
-        </div>
+        </GlassCard>
       )}
 
       {/* Deploy+Verify (admin only) */}
       {isAdmin && (
-        <div className="mb-6 bg-apple-card rounded-apple border border-apple-border shadow-apple overflow-hidden">
-          <div className="px-5 py-3 bg-gradient-to-r from-amber-50 to-orange-50 border-b border-apple-border flex items-center justify-between flex-wrap gap-2">
-            <span className="text-sm font-semibold text-apple-text">
-              Deploy+Verify
-            </span>
-            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-200 text-amber-800">
-              Pull, build, verify, update project state
-            </span>
+        <GlassCard className="mb-6">
+          <div className="px-5 py-3 border-b border-white/10 flex items-center justify-between flex-wrap gap-2">
+            <span className="text-sm font-semibold text-white/95">Quick Actions</span>
+            <Pill variant="warn">Admin only</Pill>
           </div>
           <div className="p-5">
-            <p className="text-xs text-apple-muted mb-3">
+            <p className="text-xs text-white/60 mb-3">
               Pull origin/main → rebuild → verify production → update Project Brain. Proof in artifacts/deploy/&lt;run_id&gt;/.
             </p>
             <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="button"
+              <GlassButton
+                variant="primary"
                 onClick={() => {
-                  if (
-                    window.confirm(
-                      "Run Deploy+Verify on aiops-1? (Pull, build, verify, update state.)"
-                    )
-                  ) {
+                  if (window.confirm("Run Deploy+Verify on aiops-1? (Pull, build, verify, update state.)")) {
                     exec("deploy_and_verify");
                   }
                 }}
                 disabled={loading !== null && loading !== "deploy_and_verify"}
-                className="px-4 py-2 text-sm font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {loading === "deploy_and_verify" ? "Running…" : "Deploy+Verify"}
-              </button>
+              </GlassButton>
               {deployLast && (
                 <div className="flex items-center gap-2 text-xs">
-                  <span
-                    className={`w-2.5 h-2.5 rounded-full ${
-                      deployLast.overall === "PASS" ? "bg-apple-green" : "bg-apple-red"
-                    }`}
-                  />
-                  <span className="text-apple-text font-medium">
-                    Last: {deployLast.overall ?? "—"}
-                  </span>
+                  <StatusDot variant={deployLast.overall === "PASS" ? "pass" : "fail"} />
+                  <span className="text-white/90 font-medium">Last: {deployLast.overall ?? "—"}</span>
                   {deployLast.step_failed && (
-                    <span className="text-apple-muted">
-                      (failed at: {deployLast.step_failed})
-                    </span>
+                    <span className="text-white/50">(failed at: {deployLast.step_failed})</span>
                   )}
                   {deployLast.artifact_dir && (
-                    <span className="text-apple-muted" title="Artifact path">
-                      • {deployLast.artifact_dir}
-                    </span>
+                    <span className="text-white/50" title="Artifact path">• {deployLast.artifact_dir}</span>
                   )}
                 </div>
               )}
             </div>
           </div>
-        </div>
+        </GlassCard>
+      )}
+
+      {/* Recent Runs */}
+      {recentRuns.length > 0 && (
+        <GlassCard className="mb-6">
+          <div className="px-5 py-3 border-b border-white/10 flex items-center justify-between">
+            <span className="text-sm font-semibold text-white/95">Recent Runs</span>
+            <Link href="/runs" className="text-xs font-medium text-blue-300 hover:text-blue-200 transition-colors">
+              View all
+            </Link>
+          </div>
+          <ul className="divide-y divide-white/5">
+            {recentRuns.map((run) => (
+              <li key={run.run_id}>
+                <Link
+                  href="/runs"
+                  className="flex items-center justify-between px-5 py-3 hover:bg-white/5 transition-colors"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <StatusDot variant={run.status === "success" ? "pass" : run.status === "failure" ? "fail" : "warn"} />
+                    <div>
+                      <span className="text-sm font-medium text-white/90">{run.action}</span>
+                      <span className="text-[10px] text-white/50 ml-2">{run.project_id}</span>
+                    </div>
+                  </div>
+                  <Pill variant={run.status === "success" ? "success" : run.status === "failure" ? "fail" : "warn"}>
+                    {run.status}
+                  </Pill>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </GlassCard>
       )}
 
       {/* Doc modal */}
       {docModal && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
           onClick={() => setDocModal(null)}
           role="dialog"
           aria-modal="true"
           aria-label={`View ${docModal.label}`}
         >
           <div
-            className="bg-white rounded-apple shadow-apple max-w-2xl w-full max-h-[80vh] flex flex-col mx-4"
+            className="glass-surface rounded-2xl max-w-2xl w-full max-h-[80vh] flex flex-col mx-4"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-5 py-3 border-b border-apple-border flex justify-between items-center">
-              <span className="text-sm font-semibold text-apple-text">{docModal.label}</span>
+            <div className="px-5 py-3 border-b border-white/10 flex justify-between items-center">
+              <span className="text-sm font-semibold text-white/95">{docModal.label}</span>
               <button
                 type="button"
                 onClick={() => setDocModal(null)}
-                className="text-apple-muted hover:text-apple-text text-lg leading-none"
+                className="text-white/50 hover:text-white text-lg leading-none"
               >
                 ×
               </button>
             </div>
             <div className="p-5 overflow-auto flex-1">
               {docContent === null ? (
-                <p className="text-sm text-apple-muted">Loading…</p>
+                <p className="text-sm text-white/60">Loading…</p>
               ) : (
-                <pre className="whitespace-pre-wrap text-sm text-apple-text font-sans">
-                  {docContent}
-                </pre>
+                <pre className="whitespace-pre-wrap text-sm text-white/90 font-sans">{docContent}</pre>
               )}
             </div>
           </div>
@@ -577,19 +627,13 @@ export default function OverviewPage() {
       {/* Guard log lines (last 20) */}
       {(guardLogLines || loading === "journal") && (
         <div className="mt-6">
-          <div className="bg-apple-card rounded-apple border border-apple-border shadow-apple overflow-hidden">
-            <div className="px-5 py-3 bg-gray-50 border-b border-apple-border flex items-center justify-between">
+          <GlassCard>
+            <div className="px-5 py-3 border-b border-white/10 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${loading === "journal" ? "bg-apple-blue animate-pulse-dot" : journalResult?.ok ? "bg-apple-green" : "bg-apple-border"}`} />
-                <span className="text-sm font-semibold text-apple-text">
-                  Guard Log (last 20 lines)
-                </span>
+                <StatusDot variant={loading === "journal" ? "loading" : journalResult?.ok ? "pass" : "idle"} />
+                <span className="text-sm font-semibold text-white/95">Guard Log (last 20 lines)</span>
               </div>
-              {journalResult && (
-                <span className="text-xs text-apple-muted">
-                  {journalResult.durationMs}ms
-                </span>
-              )}
+              {journalResult && <span className="text-xs text-white/50">{journalResult.durationMs}ms</span>}
             </div>
             {guardLogLines ? (
               <div className="output-block rounded-none border-0 max-h-[300px]">
@@ -597,136 +641,86 @@ export default function OverviewPage() {
               </div>
             ) : loading === "journal" ? (
               <div className="px-5 py-4">
-                <p className="text-xs text-apple-muted">Loading guard logs…</p>
+                <p className="text-xs text-white/50">Loading guard logs…</p>
               </div>
             ) : null}
-          </div>
+          </GlassCard>
         </div>
       )}
 
       {/* AI Connections Status Panel */}
       {aiStatus && (
         <div className="mt-6">
-          <div className="bg-apple-card rounded-apple border border-apple-border shadow-apple overflow-hidden">
-            <div className="px-5 py-3 bg-gray-50 border-b border-apple-border">
-              <span className="text-sm font-semibold text-apple-text">
-                AI Connections
-              </span>
+          <GlassCard>
+            <div className="px-5 py-3 border-b border-white/10">
+              <span className="text-sm font-semibold text-white/95">AI Connections</span>
             </div>
             <div className="p-5">
-              {/* Providers */}
               <div className="space-y-3">
                 {aiStatus.providers.map((provider) => (
                   <div key={provider.name} className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <span
-                        className={`w-2.5 h-2.5 rounded-full ${
-                          provider.status === "active"
-                            ? "bg-apple-green"
-                            : provider.status === "inactive"
-                              ? "bg-apple-red"
-                              : "bg-apple-orange"
-                        }`}
-                      />
+                      <StatusDot variant={provider.status === "active" ? "pass" : provider.status === "inactive" ? "fail" : "warn"} />
                       <div>
-                        <p className="text-sm font-medium text-apple-text">
-                          {provider.name}
-                        </p>
-                        <p className="text-[10px] text-apple-muted">
-                          {provider.configured
-                            ? `Configured · ${provider.fingerprint || "key present"}`
-                            : "Not configured"}
+                        <p className="text-sm font-medium text-white/90">{provider.name}</p>
+                        <p className="text-[10px] text-white/50">
+                          {provider.configured ? `Configured · ${provider.fingerprint || "key present"}` : "Not configured"}
                         </p>
                       </div>
                     </div>
-                    <span
-                      className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
-                        provider.status === "active"
-                          ? "bg-green-100 text-green-700"
-                          : provider.status === "inactive"
-                            ? "bg-red-100 text-red-700"
-                            : "bg-gray-100 text-gray-600"
-                      }`}
-                    >
-                      {provider.status === "active"
-                        ? "Active"
-                        : provider.status === "inactive"
-                          ? "Inactive"
-                          : "Unknown"}
-                    </span>
+                    <Pill variant={provider.status === "active" ? "success" : provider.status === "inactive" ? "fail" : "warn"}>
+                      {provider.status === "active" ? "Active" : provider.status === "inactive" ? "Inactive" : "Unknown"}
+                    </Pill>
                   </div>
                 ))}
               </div>
 
-              {/* Review Engine */}
-              <div className="mt-4 pt-4 border-t border-apple-border">
+              <div className="mt-4 pt-4 border-t border-white/10">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-xs font-semibold text-apple-muted uppercase tracking-wider">
-                      Review Engine
-                    </p>
-                    <p className="text-sm text-apple-text mt-0.5">
-                      {aiStatus.review_engine.mode}
-                    </p>
+                    <p className="text-xs font-semibold text-white/50 uppercase tracking-wider">Review Engine</p>
+                    <p className="text-sm text-white/90 mt-0.5">{aiStatus.review_engine.mode}</p>
                     {aiStatus.review_engine.last_review && (
-                      <p className="text-[10px] text-apple-muted mt-0.5">
+                      <p className="text-[10px] text-white/50 mt-0.5">
                         Last review: {new Date(aiStatus.review_engine.last_review).toLocaleString()}
                       </p>
                     )}
                   </div>
-                  <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                    {aiStatus.review_engine.gate_status}
-                  </span>
+                  <Pill variant="info">{aiStatus.review_engine.gate_status}</Pill>
                 </div>
               </div>
 
-              {/* Security note */}
-              <p className="text-[10px] text-apple-muted mt-3 pt-3 border-t border-apple-border">
+              <p className="text-[10px] text-white/50 mt-3 pt-3 border-t border-white/10">
                 Keys are never displayed. Only masked fingerprints are shown.
               </p>
             </div>
-          </div>
+          </GlassCard>
         </div>
       )}
 
       {/* LLM Providers Panel */}
       {llmStatus && (
         <div className="mt-6">
-          <div className="bg-apple-card rounded-apple border border-apple-border shadow-apple overflow-hidden">
-            <div className="px-5 py-3 bg-gray-50 border-b border-apple-border flex items-center justify-between">
-              <span className="text-sm font-semibold text-apple-text">
-                LLM Providers
-              </span>
-              <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
-                llmStatus.config.valid
-                  ? "bg-green-100 text-green-700"
-                  : "bg-red-100 text-red-700"
-              }`}>
+          <GlassCard>
+            <div className="px-5 py-3 border-b border-white/10 flex items-center justify-between">
+              <span className="text-sm font-semibold text-white/95">LLM Providers</span>
+              <Pill variant={llmStatus.config.valid ? "success" : "fail"}>
                 {llmStatus.config.valid ? "Config Valid" : "Config Error"}
-              </span>
+              </Pill>
             </div>
             <div className="p-5">
-              {/* Provider rows */}
               <div className="space-y-3">
                 {llmStatus.providers.map((provider) => (
                   <div key={provider.name} className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <span
-                        className={`w-2.5 h-2.5 rounded-full ${
-                          provider.status === "active"
-                            ? "bg-apple-green"
-                            : provider.status === "disabled"
-                              ? "bg-gray-300"
-                              : provider.status === "inactive"
-                                ? "bg-apple-red"
-                                : "bg-apple-orange"
-                        }`}
+                      <StatusDot
+                        variant={
+                          provider.status === "active" ? "pass" : provider.status === "disabled" ? "idle" : provider.status === "inactive" ? "fail" : "warn"
+                        }
                       />
                       <div>
-                        <p className="text-sm font-medium text-apple-text">
-                          {provider.name}
-                        </p>
-                        <p className="text-[10px] text-apple-muted">
+                        <p className="text-sm font-medium text-white/90">{provider.name}</p>
+                        <p className="text-[10px] text-white/50">
                           {provider.enabled
                             ? provider.configured
                               ? `Enabled · ${provider.fingerprint || "configured"}`
@@ -735,104 +729,91 @@ export default function OverviewPage() {
                         </p>
                       </div>
                     </div>
-                    <span
-                      className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
-                        provider.status === "active"
-                          ? "bg-green-100 text-green-700"
-                          : provider.status === "disabled"
-                            ? "bg-gray-100 text-gray-500"
-                            : provider.status === "inactive"
-                              ? "bg-red-100 text-red-700"
-                              : "bg-yellow-100 text-yellow-700"
-                      }`}
+                    <Pill
+                      variant={
+                        provider.status === "active" ? "success" : provider.status === "disabled" ? "default" : provider.status === "inactive" ? "fail" : "warn"
+                      }
                     >
                       {provider.enabled ? (provider.configured ? "Active" : "No Key") : "Disabled"}
-                    </span>
+                    </Pill>
                   </div>
                 ))}
               </div>
 
-              {/* Router info */}
-              <div className="mt-4 pt-4 border-t border-apple-border">
+              <div className="mt-4 pt-4 border-t border-white/10">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-xs font-semibold text-apple-muted uppercase tracking-wider">
-                      Review Gate
-                    </p>
-                    <p className="text-sm text-apple-text mt-0.5">
+                    <p className="text-xs font-semibold text-white/50 uppercase tracking-wider">Review Gate</p>
+                    <p className="text-sm text-white/90 mt-0.5">
                       {llmStatus.router.review_provider} · {llmStatus.router.review_model}
                     </p>
                   </div>
-                  <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                    {llmStatus.router.review_gate}
-                  </span>
+                  <Pill variant="info">{llmStatus.router.review_gate}</Pill>
                 </div>
                 {llmStatus.router.review_guard === "fail" && (
-                  <p className="text-xs text-amber-600 mt-2">
+                  <p className="text-xs text-amber-300 mt-2">
                     Cost guard: review model is gpt-4o without OPENCLAW_ALLOW_EXPENSIVE_REVIEW=1
                   </p>
                 )}
               </div>
 
-              {/* Provider doctor (preflight) */}
               {llmStatus.doctor && (
-                <div className="mt-4 pt-4 border-t border-apple-border">
-                  <p className="text-xs font-semibold text-apple-muted uppercase tracking-wider">
+                <div className="mt-4 pt-4 border-t border-white/10">
+                  <p className="text-xs font-semibold text-white/50 uppercase tracking-wider">
                     Provider Doctor
                   </p>
-                  <p className="text-[10px] text-apple-muted mt-0.5">
+                  <p className="text-[10px] text-white/50 mt-0.5">
                     Last run: {llmStatus.doctor.last_timestamp ?? "—"}
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {llmStatus.doctor.providers.openai && (
-                      <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
-                        llmStatus.doctor.providers.openai.state === "OK"
-                          ? "bg-green-100 text-green-700"
-                          : llmStatus.doctor.providers.openai.state === "DEGRADED"
-                            ? "bg-yellow-100 text-yellow-700"
-                            : "bg-red-100 text-red-700"
-                      }`}>
+                      <Pill
+                        variant={
+                          llmStatus.doctor.providers.openai.state === "OK"
+                            ? "success"
+                            : llmStatus.doctor.providers.openai.state === "DEGRADED"
+                              ? "warn"
+                              : "fail"
+                        }
+                      >
                         OpenAI: {llmStatus.doctor.providers.openai.state}
                         {llmStatus.doctor.providers.openai.last_error_class ? ` (${llmStatus.doctor.providers.openai.last_error_class})` : ""}
-                      </span>
+                      </Pill>
                     )}
                     {llmStatus.doctor.providers.mistral && (
-                      <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
-                        llmStatus.doctor.providers.mistral.state === "OK"
-                          ? "bg-green-100 text-green-700"
-                          : llmStatus.doctor.providers.mistral.state === "DEGRADED"
-                            ? "bg-yellow-100 text-yellow-700"
-                            : "bg-red-100 text-red-700"
-                      }`}>
+                      <Pill
+                        variant={
+                          llmStatus.doctor.providers.mistral.state === "OK"
+                            ? "success"
+                            : llmStatus.doctor.providers.mistral.state === "DEGRADED"
+                              ? "warn"
+                              : "fail"
+                        }
+                      >
                         Mistral: {llmStatus.doctor.providers.mistral.state}
                         {llmStatus.doctor.providers.mistral.last_error_class ? ` (${llmStatus.doctor.providers.mistral.last_error_class})` : ""}
-                      </span>
+                      </Pill>
                     )}
                   </div>
                 </div>
               )}
 
-              {/* Config error */}
               {llmStatus.config.error && (
-                <div className="mt-3 p-2 rounded bg-red-50 border border-red-200">
-                  <p className="text-[10px] text-red-600">
-                    {llmStatus.config.error}
-                  </p>
+                <div className="mt-3 p-2 rounded-lg bg-red-500/10 border border-red-500/20">
+                  <p className="text-[10px] text-red-300">{llmStatus.config.error}</p>
                 </div>
               )}
 
-              {/* Security note */}
-              <p className="text-[10px] text-apple-muted mt-3 pt-3 border-t border-apple-border">
+              <p className="text-[10px] text-white/50 mt-3 pt-3 border-t border-white/10">
                 Review gate always uses OpenAI Codex (fail-closed). Keys are never displayed — only masked fingerprints.
               </p>
             </div>
-          </div>
+          </GlassCard>
         </div>
       )}
 
-      {/* Refresh button */}
       <div className="mt-6 flex justify-end">
-        <button
+        <GlassButton
           onClick={() => {
             exec("doctor");
             exec("ports");
@@ -840,12 +821,12 @@ export default function OverviewPage() {
             exec("journal");
             fetchAIStatus();
             fetchProjectState();
+            fetchRecentRuns();
           }}
           disabled={!!loading}
-          className="px-4 py-2 text-xs font-medium text-apple-blue bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors disabled:opacity-50"
         >
           {loading ? "Refreshing…" : "Refresh All"}
-        </button>
+        </GlassButton>
       </div>
     </div>
   );

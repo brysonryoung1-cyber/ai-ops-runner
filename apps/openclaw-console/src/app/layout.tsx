@@ -3,7 +3,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import "./globals.css";
-import Sidebar from "@/components/Sidebar";
+import Shell from "@/components/Shell";
 import { TokenProvider } from "@/lib/token-context";
 import { TargetProvider, type TargetInfo } from "@/lib/target-context";
 
@@ -43,15 +43,10 @@ export default function RootLayout({
 
   return (
     <html lang="en">
-      <body className="font-sans antialiased bg-apple-bg">
+      <body className="font-sans antialiased">
         <TokenProvider token={token}>
           <TargetProvider target={target}>
-            <div className="flex min-h-screen">
-              <Sidebar />
-              <main className="flex-1 overflow-auto">
-                <div className="max-w-5xl mx-auto px-8 py-8">{children}</div>
-              </main>
-            </div>
+            <Shell>{children}</Shell>
           </TargetProvider>
         </TokenProvider>
       </body>

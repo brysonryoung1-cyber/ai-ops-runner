@@ -23,7 +23,7 @@ export default function CollapsibleOutput({
     <div className="mt-3">
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 text-xs text-apple-muted hover:text-apple-text transition-colors"
+        className="flex items-center gap-1.5 text-xs text-white/50 hover:text-white/90 transition-colors"
       >
         <svg
           className={`w-3 h-3 transition-transform duration-200 ${

@@ -2,6 +2,8 @@
 
 import { useEffect } from "react";
 import { useExec } from "@/lib/hooks";
+import { GlassCard, GlassButton } from "@/components/glass";
+import { EmptyArtifacts } from "@/components/glass";
 
 interface ArtifactDir {
   name: string;
@@ -60,64 +62,43 @@ export default function ArtifactsPage() {
     <div>
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h2 className="text-2xl font-bold text-apple-text tracking-tight">
-            Artifacts
-          </h2>
-          <p className="text-sm text-apple-muted mt-1">
-            Latest job artifact directories on aiops-1
-          </p>
+          <h2 className="text-2xl font-bold text-white/95 tracking-tight">Artifacts</h2>
+          <p className="text-sm text-white/60 mt-1">Latest job artifact directories on aiops-1</p>
         </div>
-        <button
-          onClick={() => exec("artifacts")}
-          disabled={loading === "artifacts"}
-          className="px-4 py-2 text-xs font-medium text-apple-blue bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors disabled:opacity-50"
-        >
+        <GlassButton onClick={() => exec("artifacts")} disabled={loading === "artifacts"} size="sm">
           {loading === "artifacts" ? "Loading…" : "Refresh"}
-        </button>
+        </GlassButton>
       </div>
 
-      {/* Error state */}
       {artifactsResult && !artifactsResult.ok && artifactsResult.error && (
-        <div className="p-4 rounded-apple bg-red-50 border border-red-200 mb-4">
-          <p className="text-sm font-semibold text-apple-red">Error</p>
-          <p className="text-xs text-red-600 mt-1">
-            {artifactsResult.error}
-          </p>
+        <div className="p-4 rounded-2xl glass-surface border border-red-500/20 mb-4">
+          <p className="text-sm font-semibold text-red-300">Error</p>
+          <p className="text-xs text-red-200/80 mt-1">{artifactsResult.error}</p>
         </div>
       )}
 
-      {/* Loading */}
       {loading === "artifacts" && !artifactsResult && (
-        <div className="p-8 text-center">
-          <div className="inline-block w-6 h-6 border-2 border-apple-blue border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-apple-muted mt-3">
-            Listing artifacts on aiops-1…
-          </p>
+        <div className="glass-surface rounded-2xl p-12 text-center">
+          <div className="inline-block w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+          <p className="text-sm text-white/60 mt-3">Listing artifacts on aiops-1…</p>
         </div>
       )}
 
-      {/* Artifact list */}
       {parsed && parsed.dirs.length > 0 && (
-        <div className="bg-apple-card rounded-apple border border-apple-border shadow-apple overflow-hidden">
-          <div className="px-4 py-2.5 bg-gray-50 border-b border-apple-border flex items-center justify-between">
-            <span className="text-xs text-apple-muted">
-              {parsed.dirs.length} directories (most recent first)
-            </span>
+        <GlassCard>
+          <div className="px-4 py-2.5 border-b border-white/10 flex items-center justify-between">
+            <span className="text-xs text-white/50">{parsed.dirs.length} directories (most recent first)</span>
             {artifactsResult && (
-              <span className="text-xs text-apple-muted">
+              <span className="text-xs text-white/50">
                 Fetched in {artifactsResult.durationMs}ms
               </span>
             )}
           </div>
-          <ul className="divide-y divide-apple-border">
+          <ul className="divide-y divide-white/5">
             {parsed.dirs.map((dir, i) => (
-              <li
-                key={i}
-                className="flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors"
-              >
+              <li key={i} className="flex items-center justify-between px-5 py-3 hover:bg-white/5 transition-colors">
                 <div className="flex items-center gap-3">
-                  <svg
-                    className="w-4 h-4 text-apple-muted flex-shrink-0"
+                  <svg className="w-4 h-4 text-white/40 flex-shrink-0"
                     fill="none"
                     viewBox="0 0 24 24"
                     strokeWidth={1.5}
@@ -129,35 +110,25 @@ export default function ArtifactsPage() {
                       d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"
                     />
                   </svg>
-                  <span className="text-sm font-mono text-apple-text">
-                    {dir.name}
-                  </span>
+                  <span className="text-sm font-mono text-white/90">{dir.name}</span>
                 </div>
                 {dir.size && (
-                  <span className="text-xs text-apple-muted font-mono">
+                  <span className="text-xs text-white/50 font-mono">
                     {dir.size}
                   </span>
                 )}
               </li>
             ))}
           </ul>
-        </div>
+        </GlassCard>
       )}
 
-      {/* Empty state */}
-      {parsed && parsed.dirs.length === 0 && (
-        <div className="p-8 text-center bg-apple-card rounded-apple border border-apple-border">
-          <p className="text-sm text-apple-muted">
-            No artifact directories found.
-          </p>
-        </div>
-      )}
+      {parsed && parsed.dirs.length === 0 && <EmptyArtifacts />}
 
-      {/* Raw output collapsible */}
       {artifactsResult && artifactsResult.stdout && (
         <div className="mt-4">
           <details className="group">
-            <summary className="text-xs text-apple-muted cursor-pointer hover:text-apple-text transition-colors">
+            <summary className="text-xs text-white/50 cursor-pointer hover:text-white/90 transition-colors">
               Show raw output
             </summary>
             <div className="output-block mt-2">

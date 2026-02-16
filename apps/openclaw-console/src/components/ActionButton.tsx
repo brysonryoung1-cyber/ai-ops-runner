@@ -10,12 +10,9 @@ interface ActionButtonProps {
 }
 
 const VARIANT_STYLES = {
-  primary:
-    "bg-apple-blue text-white hover:bg-blue-700 active:bg-blue-800",
-  secondary:
-    "bg-apple-card text-apple-text border border-apple-border hover:bg-gray-50 active:bg-gray-100",
-  danger:
-    "bg-apple-red text-white hover:bg-red-700 active:bg-red-800",
+  primary: "bg-white/20 text-white hover:bg-white/30 border-white/20 backdrop-blur-md",
+  secondary: "bg-white/10 text-white/90 border-white/10 hover:bg-white/15 backdrop-blur-md",
+  danger: "bg-red-500/20 text-red-200 hover:bg-red-500/30 border-red-500/30 backdrop-blur-md",
 };
 
 export default function ActionButton({
@@ -30,7 +27,7 @@ export default function ActionButton({
     <button
       onClick={onClick}
       disabled={loading || disabled}
-      className={`w-full text-left rounded-apple p-4 transition-all duration-150 shadow-apple
+      className={`w-full text-left rounded-2xl p-4 transition-all duration-150 border
         ${VARIANT_STYLES[variant]}
         ${loading || disabled ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}
       `}
@@ -38,11 +35,7 @@ export default function ActionButton({
       <div className="flex items-center justify-between">
         <div>
           <p className="text-sm font-semibold">{label}</p>
-          <p
-            className={`text-xs mt-0.5 ${
-              variant === "secondary" ? "text-apple-muted" : "text-white/70"
-            }`}
-          >
+          <p className="text-xs mt-0.5 text-white/60">
             {description}
           </p>
         </div>

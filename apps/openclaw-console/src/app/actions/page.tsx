@@ -4,6 +4,7 @@ import { useState } from "react";
 import ActionButton from "@/components/ActionButton";
 import CollapsibleOutput from "@/components/CollapsibleOutput";
 import { useExec, ExecResult } from "@/lib/hooks";
+import { GlassCard, StatusDot, Pill } from "@/components/glass";
 
 interface ActionDef {
   action: string;
@@ -75,12 +76,8 @@ export default function ActionsPage() {
   return (
     <div>
       <div className="mb-8">
-        <h2 className="text-2xl font-bold text-apple-text tracking-tight">
-          Actions
-        </h2>
-        <p className="text-sm text-apple-muted mt-1">
-          Execute allowlisted operations on aiops-1 via Tailscale SSH
-        </p>
+        <h2 className="text-2xl font-bold text-white/95 tracking-tight">Actions</h2>
+        <p className="text-sm text-white/60 mt-1">Execute allowlisted operations on aiops-1 via Tailscale SSH</p>
       </div>
 
       {/* Action buttons */}
@@ -98,51 +95,31 @@ export default function ActionsPage() {
         ))}
       </div>
 
-      {/* Last result */}
       {lastResult && (
         <div className="mt-8">
-          <div className="bg-apple-card rounded-apple border border-apple-border shadow-apple overflow-hidden">
-            {/* Result header */}
-            <div className="px-5 py-3 bg-gray-50 border-b border-apple-border flex items-center justify-between">
+          <GlassCard>
+            <div className="px-5 py-3 border-b border-white/10 flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <span
-                  className={`w-2.5 h-2.5 rounded-full ${
-                    lastResult.ok ? "bg-apple-green" : "bg-apple-red"
-                  }`}
-                />
-                <span className="text-sm font-semibold text-apple-text">
-                  {lastResult.action}
-                </span>
-                <span
-                  className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                    lastResult.ok
-                      ? "bg-green-100 text-green-700"
-                      : "bg-red-100 text-red-700"
-                  }`}
-                >
-                  {lastResult.ok
-                    ? "Success"
-                    : lastResult.error
-                      ? "Error"
-                      : `Exit ${lastResult.exitCode}`}
-                </span>
+                <StatusDot variant={lastResult.ok ? "pass" : "fail"} />
+                <span className="text-sm font-semibold text-white/95">{lastResult.action}</span>
+                <Pill variant={lastResult.ok ? "success" : "fail"}>
+                  {lastResult.ok ? "Success" : lastResult.error ? "Error" : `Exit ${lastResult.exitCode}`}
+                </Pill>
               </div>
-              <span className="text-xs text-apple-muted">
+              <span className="text-xs text-white/50">
                 {lastResult.durationMs}ms
               </span>
             </div>
 
-            {/* Error message */}
             {lastResult.error && (
-              <div className="px-5 py-3 bg-red-50 border-b border-red-200">
-                <p className="text-xs text-red-700">{lastResult.error}</p>
+              <div className="px-5 py-3 bg-red-500/10 border-b border-red-500/20">
+                <p className="text-xs text-red-200">{lastResult.error}</p>
               </div>
             )}
 
-            {/* stdout */}
             {lastResult.stdout && (
               <div className="px-5 pt-3 pb-1">
-                <p className="text-xs font-medium text-apple-muted mb-2">
+                <p className="text-xs font-medium text-white/50 mb-2">
                   Output
                 </p>
                 <div className="output-block">
@@ -161,21 +138,19 @@ export default function ActionsPage() {
               </div>
             )}
 
-            {/* Empty output */}
             {!lastResult.stdout && !lastResult.stderr && !lastResult.error && (
               <div className="px-5 py-4">
-                <p className="text-xs text-apple-muted">
+                <p className="text-xs text-white/50">
                   Command produced no output.
                 </p>
               </div>
             )}
-          </div>
+          </GlassCard>
         </div>
       )}
 
-      {/* Security note */}
-      <div className="mt-8 p-4 rounded-apple bg-gray-50 border border-apple-border">
-        <p className="text-xs text-apple-muted">
+      <div className="mt-8 p-4 rounded-2xl glass-surface">
+        <p className="text-xs text-white/60">
           <span className="font-semibold">Security:</span> Only allowlisted
           commands are executed. No arbitrary command execution. All traffic goes
           over Tailscale SSH. The console binds to 127.0.0.1 only. API requires

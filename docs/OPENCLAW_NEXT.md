@@ -1,3 +1,3 @@
 # Next Action
 
-Single next action: Create soma_kajabi project skeleton (Phase 0 read-only actions + artifacts).
+Single next action: Phase 0 Zane (read-only skeleton) — create soma_kajabi project skeleton (Phase 0 read-only actions + artifacts).

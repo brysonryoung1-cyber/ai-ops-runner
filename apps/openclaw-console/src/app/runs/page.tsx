@@ -21,13 +21,13 @@ interface RunData {
 function statusBadge(status: string): { bg: string; text: string; label: string } {
   switch (status) {
     case "success":
-      return { bg: "bg-green-100", text: "text-green-700", label: "Success" };
+      return { bg: "bg-emerald-500/15", text: "text-emerald-200", label: "Success" };
     case "failure":
-      return { bg: "bg-red-100", text: "text-red-700", label: "Failure" };
+      return { bg: "bg-red-500/15", text: "text-red-200", label: "Failure" };
     case "error":
-      return { bg: "bg-orange-100", text: "text-orange-700", label: "Error" };
+      return { bg: "bg-amber-500/15", text: "text-amber-200", label: "Error" };
     default:
-      return { bg: "bg-gray-100", text: "text-gray-700", label: status };
+      return { bg: "bg-white/10", text: "text-white/70", label: status };
   }
 }
 
@@ -116,10 +116,8 @@ function RunsContent() {
       {/* Page header */}
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h2 className="text-2xl font-bold text-apple-text tracking-tight">
-            Runs
-          </h2>
-          <p className="text-sm text-apple-muted mt-1">
+          <h2 className="text-2xl font-bold text-white/95 tracking-tight">Runs</h2>
+          <p className="text-sm text-white/60 mt-1">
             {projectFilter
               ? `Run history for ${projectFilter}`
               : "Timeline of runs across all projects"}
@@ -129,7 +127,7 @@ function RunsContent() {
           {projectFilter && (
             <a
               href="/runs"
-              className="px-3 py-1.5 text-xs font-medium text-apple-muted bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+              className="text-xs font-medium text-white/60 hover:text-white/90"
             >
               Clear filter
             </a>
@@ -137,7 +135,7 @@ function RunsContent() {
           <button
             onClick={fetchRuns}
             disabled={loading}
-            className="px-4 py-2 text-xs font-medium text-apple-blue bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors disabled:opacity-50"
+            className="px-4 py-2 text-xs font-medium rounded-xl bg-white/10 hover:bg-white/15 text-white/90 border border-white/10 disabled:opacity-50"
           >
             {loading ? "Loading…" : "Refresh"}
           </button>
@@ -146,17 +144,17 @@ function RunsContent() {
 
       {/* Error banner */}
       {error && (
-        <div className="mb-6 p-4 rounded-apple bg-red-50 border border-red-200">
-          <p className="text-sm font-semibold text-apple-red">Error</p>
-          <p className="text-xs text-red-600 mt-1">{error}</p>
+        <div className="mb-6 p-4 rounded-2xl glass-surface border border-red-500/20">
+          <p className="text-sm font-semibold text-red-300">Error</p>
+          <p className="text-xs text-red-200/80 mt-1">{error}</p>
         </div>
       )}
 
       {/* Loading */}
       {loading && runs.length === 0 && (
-        <div className="p-8 text-center">
-          <div className="inline-block w-6 h-6 border-2 border-apple-blue border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-apple-muted mt-3">Loading runs…</p>
+        <div className="glass-surface rounded-2xl p-8 text-center">
+          <div className="inline-block w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+          <p className="text-sm text-white/60 mt-3">Loading runs…</p>
         </div>
       )}
 
@@ -166,11 +164,11 @@ function RunsContent() {
         <div className={`${selectedRun ? "w-1/2" : "w-full"} transition-all duration-200`}>
           {Object.entries(runsByDate).map(([date, dateRuns]) => (
             <div key={date} className="mb-6">
-              <h3 className="text-xs font-semibold text-apple-muted uppercase tracking-wider mb-2 px-1">
+              <h3 className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-2 px-1">
                 {date}
               </h3>
-              <div className="bg-apple-card rounded-apple border border-apple-border shadow-apple overflow-hidden">
-                <ul className="divide-y divide-apple-border">
+              <div className="glass-surface rounded-2xl overflow-hidden">
+                <ul className="divide-y divide-white/5">
                   {dateRuns.map((run) => {
                     const badge = statusBadge(run.status);
                     const isSelected = selectedRun?.run_id === run.run_id;
@@ -178,25 +176,21 @@ function RunsContent() {
                       <li
                         key={run.run_id}
                         onClick={() => setSelectedRun(isSelected ? null : run)}
-                        className={`flex items-center justify-between px-4 py-3 cursor-pointer transition-colors ${
-                          isSelected
-                            ? "bg-blue-50"
-                            : "hover:bg-gray-50"
-                        }`}
+                        className={`flex items-center justify-between px-4 py-3 cursor-pointer transition-colors ${isSelected ? "bg-white/10" : "hover:bg-white/5"}`}
                       >
                         <div className="flex items-center gap-3 min-w-0 flex-1">
                           <span
                             className={`w-2 h-2 rounded-full flex-shrink-0 ${
                               run.status === "success"
-                                ? "bg-apple-green"
+                                ? "bg-emerald-500"
                                 : run.status === "failure"
-                                  ? "bg-apple-red"
-                                  : "bg-apple-orange"
+                                  ? "bg-red-500"
+                                  : "bg-amber-500"
                             }`}
                           />
                           <div className="min-w-0">
                             <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium text-apple-text">
+                              <span className="text-sm font-medium text-white/90">
                                 {run.action}
                               </span>
                               <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${badge.bg} ${badge.text}`}>
@@ -204,17 +198,15 @@ function RunsContent() {
                               </span>
                             </div>
                             <div className="flex items-center gap-2 mt-0.5">
-                              <span className="text-[10px] text-apple-muted">
-                                {run.project_id}
-                              </span>
-                              <span className="text-[10px] text-apple-muted">·</span>
-                              <span className="text-[10px] text-apple-muted">
+                              <span className="text-[10px] text-white/50">{run.project_id}</span>
+                              <span className="text-[10px] text-white/50">·</span>
+                              <span className="text-[10px] text-white/50">
                                 {formatDuration(run.duration_ms)}
                               </span>
                             </div>
                           </div>
                         </div>
-                        <span className="text-[11px] text-apple-muted flex-shrink-0 ml-3">
+                        <span className="text-[11px] text-white/50 flex-shrink-0 ml-3">
                           {formatRelativeTime(run.finished_at)}
                         </span>
                       </li>
@@ -229,23 +221,20 @@ function RunsContent() {
         {/* Detail panel */}
         {selectedRun && (
           <div className="w-1/2 sticky top-8">
-            <div className="bg-apple-card rounded-apple border border-apple-border shadow-apple overflow-hidden">
-              {/* Detail header */}
-              <div className="px-5 py-4 bg-gray-50 border-b border-apple-border">
+            <div className="glass-surface rounded-2xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-white/10">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h3 className="text-sm font-semibold text-apple-text">
-                      {selectedRun.action}
-                    </h3>
-                    <p className="text-xs text-apple-muted mt-0.5">
+                    <h3 className="text-sm font-semibold text-white/95">{selectedRun.action}</h3>
+                    <p className="text-xs text-white/50 mt-0.5">
                       Run {selectedRun.run_id}
                     </p>
                   </div>
                   <button
                     onClick={() => setSelectedRun(null)}
-                    className="p-1 rounded-lg hover:bg-gray-200 transition-colors"
+                    className="p-1 rounded-lg hover:bg-white/10 transition-colors"
                   >
-                    <svg className="w-4 h-4 text-apple-muted" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                    <svg className="w-4 h-4 text-white/50" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                     </svg>
                   </button>
@@ -258,16 +247,16 @@ function RunsContent() {
                 <div className="flex items-center gap-3">
                   <span className={`w-3 h-3 rounded-full ${
                     selectedRun.status === "success"
-                      ? "bg-apple-green"
+                      ? "bg-emerald-500"
                       : selectedRun.status === "failure"
-                        ? "bg-apple-red"
-                        : "bg-apple-orange"
+                        ? "bg-red-500"
+                        : "bg-amber-500"
                   }`} />
-                  <span className="text-sm font-medium text-apple-text capitalize">
+                  <span className="text-sm font-medium text-white/90 capitalize">
                     {selectedRun.status}
                   </span>
                   {selectedRun.exit_code !== null && (
-                    <span className="text-xs text-apple-muted">
+                    <span className="text-xs text-white/50">
                       Exit code: {selectedRun.exit_code}
                     </span>
                   )}
@@ -276,34 +265,34 @@ function RunsContent() {
                 {/* Metadata grid */}
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <p className="text-[10px] font-semibold text-apple-muted uppercase tracking-wider">
+                    <p className="text-[10px] font-semibold text-white/50 uppercase tracking-wider">
                       Project
                     </p>
-                    <p className="text-xs text-apple-text mt-0.5 font-mono">
+                    <p className="text-xs text-white/90 mt-0.5 font-mono">
                       {selectedRun.project_id}
                     </p>
                   </div>
                   <div>
-                    <p className="text-[10px] font-semibold text-apple-muted uppercase tracking-wider">
+                    <p className="text-[10px] font-semibold text-white/50 uppercase tracking-wider">
                       Duration
                     </p>
-                    <p className="text-xs text-apple-text mt-0.5">
+                    <p className="text-xs text-white/90 mt-0.5">
                       {formatDuration(selectedRun.duration_ms)}
                     </p>
                   </div>
                   <div>
-                    <p className="text-[10px] font-semibold text-apple-muted uppercase tracking-wider">
+                    <p className="text-[10px] font-semibold text-white/50 uppercase tracking-wider">
                       Started
                     </p>
-                    <p className="text-xs text-apple-text mt-0.5">
+                    <p className="text-xs text-white/90 mt-0.5">
                       {formatTimestamp(selectedRun.started_at)}
                     </p>
                   </div>
                   <div>
-                    <p className="text-[10px] font-semibold text-apple-muted uppercase tracking-wider">
+                    <p className="text-[10px] font-semibold text-white/50 uppercase tracking-wider">
                       Finished
                     </p>
-                    <p className="text-xs text-apple-text mt-0.5">
+                    <p className="text-xs text-white/90 mt-0.5">
                       {formatTimestamp(selectedRun.finished_at)}
                     </p>
                   </div>
@@ -311,11 +300,11 @@ function RunsContent() {
 
                 {/* Error summary */}
                 {selectedRun.error_summary && (
-                  <div className="p-3 rounded-lg bg-red-50 border border-red-100">
-                    <p className="text-[10px] font-semibold text-apple-red uppercase tracking-wider mb-1">
+                  <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+                    <p className="text-[10px] font-semibold text-red-300 uppercase tracking-wider mb-1">
                       Error
                     </p>
-                    <p className="text-xs text-red-600 font-mono whitespace-pre-wrap">
+                    <p className="text-xs text-red-200 font-mono whitespace-pre-wrap">
                       {selectedRun.error_summary}
                     </p>
                   </div>
@@ -324,12 +313,12 @@ function RunsContent() {
                 {/* Artifact paths */}
                 {selectedRun.artifact_paths.length > 0 && (
                   <div>
-                    <p className="text-[10px] font-semibold text-apple-muted uppercase tracking-wider mb-1">
+                    <p className="text-[10px] font-semibold text-white/50 uppercase tracking-wider mb-1">
                       Artifacts
                     </p>
                     <ul className="space-y-1">
                       {selectedRun.artifact_paths.map((path, i) => (
-                        <li key={i} className="text-xs text-apple-text font-mono bg-gray-50 rounded px-2 py-1">
+                        <li key={i} className="text-xs text-white/90 font-mono bg-white/5 rounded px-2 py-1">
                           {path}
                         </li>
                       ))}
@@ -344,8 +333,8 @@ function RunsContent() {
 
       {/* Empty state */}
       {!loading && runs.length === 0 && !error && (
-        <div className="p-8 text-center bg-apple-card rounded-apple border border-apple-border">
-          <p className="text-sm text-apple-muted">
+        <div className="glass-surface rounded-2xl p-12 text-center">
+          <p className="text-sm text-white/70">
             {projectFilter
               ? `No runs found for project "${projectFilter}".`
               : "No runs recorded yet. Execute an action to see run history."}
@@ -355,27 +344,27 @@ function RunsContent() {
 
       {/* Stats footer */}
       {runs.length > 0 && (
-        <div className="mt-6 p-4 rounded-apple bg-gray-50 border border-apple-border">
+        <div className="mt-6 p-4 rounded-2xl glass-surface">
           <div className="flex items-center gap-6">
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-apple-green" />
-              <span className="text-xs text-apple-muted">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              <span className="text-xs text-white/60">
                 {runs.filter((r) => r.status === "success").length} successful
               </span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-apple-red" />
-              <span className="text-xs text-apple-muted">
+              <span className="w-2 h-2 rounded-full bg-red-500" />
+              <span className="text-xs text-white/60">
                 {runs.filter((r) => r.status === "failure").length} failed
               </span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-apple-orange" />
-              <span className="text-xs text-apple-muted">
+              <span className="w-2 h-2 rounded-full bg-amber-500" />
+              <span className="text-xs text-white/60">
                 {runs.filter((r) => r.status === "error").length} errors
               </span>
             </div>
-            <span className="text-xs text-apple-muted ml-auto">
+            <span className="text-xs text-white/60 ml-auto">
               Showing {runs.length} runs
             </span>
           </div>
@@ -389,8 +378,8 @@ export default function RunsPage() {
   return (
     <Suspense fallback={
       <div className="p-8 text-center">
-        <div className="inline-block w-6 h-6 border-2 border-apple-blue border-t-transparent rounded-full animate-spin" />
-        <p className="text-sm text-apple-muted mt-3">Loading…</p>
+        <div className="inline-block w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+        <p className="text-sm text-white/60 mt-3">Loading…</p>
       </div>
     }>
       <RunsContent />
