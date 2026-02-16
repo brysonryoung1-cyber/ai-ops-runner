@@ -1053,6 +1053,92 @@ def test_doctor_returns_redacted_status(tmp_path):
     assert FAKE_OPENAI_KEY not in status_file.read_text() and FAKE_MISTRAL_KEY not in status_file.read_text()
 
 
+def test_doctor_missing_mistral_key_reports_missing_key(tmp_path):
+    """When Mistral key is missing, doctor reports Mistral DOWN with last_error_class=missing_key."""
+    from src.llm.doctor import run_provider_doctor
+    config = _make_config()
+    with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_OPENAI_KEY}, clear=False):
+        # Ensure MISTRAL_API_KEY is not set (and not in env)
+        env_copy = dict(os.environ)
+        env_copy.pop("MISTRAL_API_KEY", None)
+        with mock.patch.dict(os.environ, env_copy, clear=False):
+            with mock.patch("src.llm.doctor.get_router") as m_gr:
+                router = ModelRouter(config=config)
+                m_gr.return_value = router
+                router._providers["openai"].generate_text = mock.Mock(return_value=_fake_openai_response())
+                result = run_provider_doctor(str(tmp_path))
+    assert result["providers"]["mistral"]["state"] == "DOWN"
+    assert result["providers"]["mistral"]["last_error_class"] == "missing_key"
+
+
+def test_missing_mistral_key_configured_false():
+    """When Mistral key is missing, get_all_status shows Mistral configured=false."""
+    config = _make_config()
+    with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_OPENAI_KEY}):
+        env_copy = dict(os.environ)
+        env_copy.pop("MISTRAL_API_KEY", None)
+        with mock.patch.dict(os.environ, env_copy, clear=False):
+            router = ModelRouter(config=config)
+            statuses = router.get_all_status()
+    mistral_status = next(s for s in statuses if "Mistral" in s.get("name", ""))
+    assert mistral_status["configured"] is False
+    assert mistral_status["status"] == "inactive"
+
+
+def test_transient_openai_triggers_exactly_one_mistral_attempt():
+    """Transient OpenAI failure triggers exactly one Mistral fallback attempt."""
+    config = _make_config()
+    with mock.patch.dict(os.environ, {
+        "OPENAI_API_KEY": FAKE_OPENAI_KEY,
+        "MISTRAL_API_KEY": FAKE_MISTRAL_KEY,
+    }):
+        router = ModelRouter(config=config)
+        mistral_generate = mock.Mock(return_value=_fake_mistral_response())
+        router._providers["mistral"].generate_text = mistral_generate
+        router._providers["openai"].generate_text = mock.Mock(
+            side_effect=RuntimeError("OpenAI API error: HTTP 429 — rate limited"),
+        )
+        router.generate(LLMRequest(
+            model="", messages=[{"role": "user", "content": "test"}],
+            purpose="review", trace_id="test",
+        ))
+        assert mistral_generate.call_count == 1
+
+
+def test_non_transient_openai_does_not_fallback():
+    """Non-transient OpenAI failure (e.g. 401) does NOT trigger Mistral fallback."""
+    config = _make_config()
+    with mock.patch.dict(os.environ, {
+        "OPENAI_API_KEY": FAKE_OPENAI_KEY,
+        "MISTRAL_API_KEY": FAKE_MISTRAL_KEY,
+    }):
+        router = ModelRouter(config=config)
+        mistral_generate = mock.Mock(return_value=_fake_mistral_response())
+        router._providers["mistral"].generate_text = mistral_generate
+        router._providers["openai"].generate_text = mock.Mock(
+            side_effect=RuntimeError("OpenAI API error: HTTP 401 — unauthorized"),
+        )
+        with pytest.raises(RuntimeError, match="401"):
+            router.generate(LLMRequest(
+                model="", messages=[{"role": "user", "content": "test"}],
+                purpose="review", trace_id="test",
+            ))
+        mistral_generate.assert_not_called()
+
+
+def test_status_json_and_artifacts_no_secrets():
+    """get_all_status must never contain raw keys. Artifacts covered by test_review_gate_writes_fail_closed_artifact."""
+    config = _make_config()
+    with mock.patch.dict(os.environ, {
+        "OPENAI_API_KEY": FAKE_OPENAI_KEY,
+        "MISTRAL_API_KEY": FAKE_MISTRAL_KEY,
+    }):
+        router = ModelRouter(config=config)
+        statuses = router.get_all_status()
+    status_json = json.dumps(statuses)
+    assert FAKE_OPENAI_KEY not in status_json and FAKE_MISTRAL_KEY not in status_json
+
+
 # ===========================================================================
 # 8. Review caps enforcement
 # ===========================================================================

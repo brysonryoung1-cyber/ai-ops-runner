@@ -1,23 +1,50 @@
 {
   "$schema": "./llm.schema.json",
-  "enabledProviders": ["openai"],
+  "enabledProviders": [
+    "openai"
+  ],
   "defaults": {
-    "general": { "provider": "openai", "model": "gpt-4o-mini" },
-    "review":  { "provider": "openai", "model": "gpt-4o-mini" },
-    "vision":  { "provider": "openai", "model": "gpt-4o" }
+    "general": {
+      "provider": "openai",
+      "model": "gpt-4o-mini"
+    },
+    "review": {
+      "provider": "openai",
+      "model": "gpt-4o-mini"
+    },
+    "vision": {
+      "provider": "openai",
+      "model": "gpt-4o"
+    }
   },
   "reviewFallback": {
     "provider": "mistral",
-    "model": "codestral-2508"
+    "model": "labs-devstral-small-2512"
   },
   "budget": {
-    "maxUsdPerReview": 0.50,
-    "maxUsdPerRun": 5.00,
+    "maxUsdPerReview": 0.5,
+    "maxUsdPerRun": 5.0,
     "pricing": {
-      "gpt-4o-mini": { "inputPer1M": 0.15, "outputPer1M": 0.60 },
-      "gpt-4o": { "inputPer1M": 2.50, "outputPer1M": 10.00 },
-      "codestral-2501": { "inputPer1M": 0.30, "outputPer1M": 0.90 },
-      "codestral-2508": { "inputPer1M": 0.30, "outputPer1M": 0.90 }
+      "gpt-4o-mini": {
+        "inputPer1M": 0.15,
+        "outputPer1M": 0.6
+      },
+      "gpt-4o": {
+        "inputPer1M": 2.5,
+        "outputPer1M": 10.0
+      },
+      "codestral-2501": {
+        "inputPer1M": 0.3,
+        "outputPer1M": 0.9
+      },
+      "codestral-2508": {
+        "inputPer1M": 0.3,
+        "outputPer1M": 0.9
+      },
+      "labs-devstral-small-2512": {
+        "inputPer1M": 0.1,
+        "outputPer1M": 0.3
+      }
     }
   },
   "reviewCaps": {

@@ -107,7 +107,7 @@ The following are **out of scope** for this repository:
 
 OpenClaw uses a provider abstraction layer (`src/llm/`) with a fail-closed model router. The router selects provider + model by "purpose" (review, general, vision) using `config/llm.json`.
 
-**Review gate invariant (NON-NEGOTIABLE):** `purpose=review` resolves to `OpenAIProvider` + `gpt-4o-mini` (primary). If OpenAI returns a transient error (429/5xx/timeout), the router falls back to `MistralProvider` + `codestral-2501`. Both fail → fail-closed. Missing OpenAI key → fail-closed (no silent downgrade).
+**Review gate invariant (NON-NEGOTIABLE):** `purpose=review` resolves to `OpenAIProvider` + `gpt-4o-mini` (primary). If OpenAI returns a transient error (429/5xx/timeout), the router falls back to `MistralProvider` + Devstral Small 2 (`labs-devstral-small-2512`) by default. Both fail → fail-closed. Missing OpenAI key → fail-closed (no silent downgrade).
 
 **Cost optimization:** Review gate uses `gpt-4o-mini` (code-specialized, cheaper than gpt-4o). Strict caps: `max_output_tokens: 600`, `temperature: 0`. Budget cap enforced before each call (fail-closed). Non-critical ops route to `gpt-4o-mini`.
 
@@ -116,7 +116,7 @@ OpenClaw uses a provider abstraction layer (`src/llm/`) with a fail-closed model
 | Provider | Status | Key Source | Purpose |
 |----------|--------|------------|---------|
 | **OpenAI** | Always enabled | env → Keychain → Linux file (existing hardened flow) | Review primary, general, vision |
-| **Mistral (Codestral)** | Review fallback | `MISTRAL_API_KEY` env var | Review fallback (transient errors only) |
+| **Mistral (Devstral Small 2 / Codestral)** | Review fallback | env → Keychain → `/opt/ai-ops-runner/secrets/mistral_api_key` (`ops/mistral_key.py`) | Review fallback (transient errors only) |
 | **Moonshot (Kimi)** | Disabled by default | `MOONSHOT_API_KEY` env var | General tasks only (NEVER review) |
 | **Ollama** | Disabled by default | None (local, no key needed) | General tasks only (NEVER review) |
 
@@ -127,7 +127,7 @@ OpenClaw uses a provider abstraction layer (`src/llm/`) with a fail-closed model
    - Primary: `OpenAIProvider` + `gpt-4o-mini` (env `OPENCLAW_REVIEW_MODEL`)
    - Budget check: estimated cost must be ≤ `maxUsdPerReview` (fail-closed)
    - Caps: `max_output_tokens=600`, `temperature=0` enforced on every call
-   - On transient error (429/500-504/timeout): try `MistralProvider` + `codestral-2501`
+   - On transient error (429/500-504/timeout): try `MistralProvider` + default `labs-devstral-small-2512` (Devstral Small 2; Codestral optional in config)
    - Both fail → fail-closed (`RuntimeError`)
    - Non-transient errors (401, config) → immediate fail-closed (no fallback)
 3. For `purpose=general`: routes to `gpt-4o-mini` (cheap) via config defaults
@@ -139,10 +139,11 @@ OpenClaw uses a provider abstraction layer (`src/llm/`) with a fail-closed model
 
 The `reviewFallback` config section defines the fallback reviewer:
 ```json
-"reviewFallback": { "provider": "mistral", "model": "codestral-2508" }
+"reviewFallback": { "provider": "mistral", "model": "labs-devstral-small-2512" }
 ```
-(Model is configurable; default is `codestral-2508`.)
+**Default model**: `labs-devstral-small-2512` (Devstral Small 2) — SWE-agent aligned, cheaper than Codestral. Codestral (`codestral-2501`, `codestral-2508`) remains an optional alternative in config.
 
+- **Configured/available**: In `GET /api/llm/status` and provider-doctor, "configured" means the key is available from an approved source (env, Keychain, or Linux secrets file). If the key is missing, provider state is DOWN with `last_error_class: "missing_key"`.
 - **Trigger**: Only on **transient** errors from OpenAI. Transient classification (exact):
   - **HTTP 429** → `transient_quota` (fallback tried)
   - **HTTP 500–504** → `transient_server` (fallback tried)
@@ -155,8 +156,8 @@ The `reviewFallback` config section defines the fallback reviewer:
 - **No fallback configured**: If `reviewFallback` is missing or Mistral key is not set, transient errors fail-closed with clear message
 
 **Configuring Mistral (review fallback):**
-- Set `MISTRAL_API_KEY` in environment (or existing secret store pattern). Keys are never printed; only redacted fingerprints in status.
-- Ensure `config/llm.json` has `reviewFallback: { "provider": "mistral", "model": "codestral-2508" }` and `providers.mistral.apiBase` (default `https://api.mistral.ai/v1`).
+- **Key management**: First-class tooling in `ops/mistral_key.py` (parallel to `ops/openai_key.py`). Resolution: env `MISTRAL_API_KEY` → macOS Keychain (service `ai-ops-runner`, account `MISTRAL_API_KEY`) → Linux `/opt/ai-ops-runner/secrets/mistral_api_key` (0600, never committed). CLI: `set`, `doctor`, `print-source`, `status`, `delete`. Doctor runs a lightweight authenticated call and reports PASS/FAIL without leaking the key.
+- Ensure `config/llm.json` has `reviewFallback: { "provider": "mistral", "model": "labs-devstral-small-2512" }` (or `codestral-2501`/`codestral-2508` if preferred) and `providers.mistral.apiBase` (default `https://api.mistral.ai/v1`).
 
 ### Budget & Cost Tracking
 
@@ -230,14 +231,14 @@ To enable:
 ### Provider Doctor (preflight)
 
 - **Purpose**: Visibility into quota/rate/availability **before** gating. Run to populate `GET /api/llm/status` doctor section and HQ panel.
-- **Action**: `llm_doctor` (Console allowlist) or `python3 -m src.llm.doctor [artifact_dir]`. Writes `artifacts/doctor/providers/<run_id>/provider_status.json` with `openai` and `mistral` `state` (OK/DEGRADED/DOWN) and `last_error_class` (redacted).
+- **Action**: `llm_doctor` (Console allowlist) or `python3 -m src.llm.doctor [artifact_dir]`. Writes `artifacts/doctor/providers/<run_id>/provider_status.json` with `openai` and `mistral` `state` (OK/DEGRADED/DOWN) and `last_error_class` (e.g. `missing_key` when key not available, or transient/non_transient; redacted, no secrets).
 - **When to run**: Manually from HQ or before a review-heavy batch. Does **not** run automatically with infra doctor.
 
 ### Review Gate Statement
 
 **The review gate is fail-closed with multi-vendor resilience:**
 1. **Primary**: OpenAI `gpt-4o-mini` (code-specialized, cost-efficient)
-2. **Fallback**: Mistral Codestral (configurable model, e.g. `codestral-2508`) — **only** on transient errors (429, 500–504, timeout/network)
+2. **Fallback**: Mistral Devstral Small 2 (`labs-devstral-small-2512`) by default — **only** on transient errors (429, 500–504, timeout/network). Codestral optional in config.
 3. **Fail-closed**: Both fail → `ReviewFailClosedError` → artifact `review_fail_closed.json` + `RuntimeError`; non-transient (401/403/config) → immediate failure, no fallback
 4. **Budget**: Pre-call cost estimate checked against `maxUsdPerReview` cap
 5. **Caps**: `max_output_tokens: 600`, `temperature: 0` enforced on all review calls
@@ -270,7 +271,7 @@ config/
 
 ### Tests
 
-103 hermetic tests in `ops/tests/test_llm_router.py`:
+121+ hermetic tests: `ops/tests/test_llm_router.py` (LLM router, fallback, doctor, status) and `ops/tests/test_mistral_key.py` (Mistral key CLI/source/doctor). In `test_llm_router.py`:
 - Review pinning (5): review always selects OpenAI even with moonshot/ollama defaults, default model is gpt-4o-mini
 - Fail-closed (3): missing key → RuntimeError with clear instructions
 - Config validation (22): good config passes, bad configs rejected (unknown fields, missing fields, wrong provider, non-localhost ollama, reviewFallback/budget/reviewCaps validation)
@@ -285,6 +286,13 @@ config/
 - Type tests (6): construction and serialization incl. ReviewFallbackConfig, ReviewCapsConfig
 
 ## Recent Changes
+
+- **Mistral fallback real, safe, cost-optimal** (2026-02-16):
+  - **Mistral key management**: `ops/mistral_key.py` — subcommands `set`, `doctor`, `print-source`, `status`, `delete`. macOS: Keychain (service `ai-ops-runner`, account `MISTRAL_API_KEY`). Linux (VPS): `/opt/ai-ops-runner/secrets/mistral_api_key` (0600, never committed). Env `MISTRAL_API_KEY` overrides. Doctor does lightweight auth call, reports PASS/FAIL without leaking key.
+  - **Provider configured/available**: In `/api/llm/status` and provider-doctor, "configured" = key available from approved source. Missing key → provider state DOWN, `last_error_class: "missing_key"`.
+  - **Default fallback model**: Devstral Small 2 (`labs-devstral-small-2512`) — SWE-agent aligned, cheaper than Codestral. Codestral remains optional in config. Pricing in `config/llm.json` and `src/llm/budget.py`.
+  - **MistralProvider**: Loads key via `ops/mistral_key` (env → Keychain → Linux file) when available.
+  - **Tests**: Hermetic tests for missing Mistral key → configured=false, doctor reports `missing_key`; transient OpenAI → exactly one Mistral attempt; non-transient → no fallback; no secrets in status/artifacts. `ops/tests/test_mistral_key.py` for CLI/source/doctor.
 
 - **Cost-Optimize Review Gate + Fallback + Budget Caps** (2026-02-16):
   - **Review model**: Switched from `gpt-4o` to `gpt-4o-mini` (code-specialized, cheaper)
@@ -537,6 +545,7 @@ src/llm/                         # LLM Provider abstraction + fail-closed router
 
 ops/
 ├── openai_key.py             # Secure OpenAI key manager (get/set/delete/status; never prints raw key)
+├── mistral_key.py            # Secure Mistral key manager (set, doctor, print-source, status; Keychain/Linux /opt/ai-ops-runner/secrets/)
 ├── ensure_openai_key.sh      # Shell wrapper — source before Codex calls
 ├── review_bundle.sh          # Generate bounded diff bundle (exit 6 = size cap → packet mode)
 ├── review_auto.sh            # One-command Codex review (writes meta provenance, npx fallback)

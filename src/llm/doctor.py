@@ -39,7 +39,7 @@ def _check_provider_direct(
     """
     provider = router._providers.get(provider_name)
     if not provider or not provider.is_configured():
-        return "DOWN", None
+        return "DOWN", "missing_key"
     request = LLMRequest(
         model=model,
         messages=[{"role": "user", "content": DOCTOR_PROMPT}],

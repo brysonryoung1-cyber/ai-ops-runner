@@ -3,15 +3,17 @@
 Uses the Mistral API at api.mistral.ai/v1 (OpenAI-compatible chat completions).
 Primary use case: fallback reviewer when OpenAI returns quota/rate/5xx/timeout.
 
-Key loading: MISTRAL_API_KEY env var only.
-To enable as review fallback: set "mistral" in config/llm.json enabledProviders
-and configure reviewFallback in config.
+Key loading: env MISTRAL_API_KEY → Keychain (ops/mistral_key) → Linux
+/opt/ai-ops-runner/secrets/mistral_api_key. Use ops/mistral_key.py set for storage.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import sys
+from pathlib import Path
+
 import urllib.error
 import urllib.request
 
@@ -23,8 +25,27 @@ DEFAULT_REVIEW_MODEL = "codestral-2501"
 
 
 def _load_mistral_key() -> str | None:
-    """Load Mistral API key from environment. NEVER logs the key."""
-    return os.environ.get("MISTRAL_API_KEY", "").strip() or None
+    """Load Mistral API key: env → ops.mistral_key (Keychain/Linux file). NEVER logs the key."""
+    env_key = os.environ.get("MISTRAL_API_KEY", "").strip()
+    if env_key:
+        return env_key
+    try:
+        ops_dir = Path(__file__).resolve().parent.parent.parent / "ops"
+        if ops_dir.is_dir():
+            sys.path.insert(0, str(ops_dir.parent))
+            try:
+                from ops.mistral_key import resolve_key
+                key = resolve_key()
+                if key:
+                    return key
+            except ImportError:
+                pass
+            finally:
+                if str(ops_dir.parent) in sys.path:
+                    sys.path.remove(str(ops_dir.parent))
+    except Exception:
+        pass
+    return None
 
 
 def _mask_key(key: str) -> str:
@@ -58,7 +79,7 @@ class MistralProvider(BaseProvider):
         api_key = _load_mistral_key()
         if not api_key:
             raise RuntimeError(
-                "Mistral API key not found. Set MISTRAL_API_KEY env var."
+                "Mistral API key not found. Set MISTRAL_API_KEY or run: python3 ops/mistral_key.py set"
             )
 
         _log(
@@ -146,7 +167,7 @@ class MistralProvider(BaseProvider):
             "name": "Mistral (Codestral)",
             "enabled": False,
             "configured": configured,
-            "status": "active" if configured else "disabled",
+            "status": "active" if configured else "inactive",
             "fingerprint": _mask_key(key) if configured and key else None,
             "api_base": self._api_base,
         }

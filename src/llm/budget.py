@@ -24,7 +24,7 @@ DEFAULT_MAX_USD_PER_RUN = 5.00
 DEFAULT_PRICING: dict[str, dict[str, float]] = {
     "gpt-4o-mini": {"input_per_1m": 0.15, "output_per_1m": 0.60},
     "gpt-4o": {"input_per_1m": 2.50, "output_per_1m": 10.00},
-    "gpt-4o-mini": {"input_per_1m": 0.15, "output_per_1m": 0.60},
+    "labs-devstral-small-2512": {"input_per_1m": 0.10, "output_per_1m": 0.30},
     "codestral-2501": {"input_per_1m": 0.30, "output_per_1m": 0.90},
 }
 
