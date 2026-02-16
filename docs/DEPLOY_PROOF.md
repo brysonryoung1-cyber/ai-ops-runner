@@ -27,12 +27,16 @@
 | aiops-1 pull-only (assert_production_pull_only) | In deploy_pipeline; PASS when no push creds |
 | No public ports (doctor audit) | Unchanged; verify_production enforces |
 
-## Next Step for Full PASS
+## Production PASS (2026-02-16)
 
-Run **Deploy+Verify** from HQ on aiops-1 (with `OPENCLAW_ADMIN_TOKEN` set). That will:
+Real Deploy+Verify executed on aiops-1:
 
-1. Run `ops/deploy_pipeline.sh` on the host  
-2. Pass assert_production_pull_only (no credential helper / write keys on VPS)  
-3. Update `/project/state` and write PASS artifacts under `artifacts/deploy/<run_id>/`
+- **Run ID**: `20260216_231100-00005df1`
+- **Artifact path**: `artifacts/deploy/20260216_231100-00005df1/`
+- **deploy_result.json**: overall PASS, git_head b727567
+- **verify_production.json**: ok true, all checks pass (api_ai_status, api_llm_status, api_project_state, doctor, guard, no_public_ports)
+- **project/state**: last_deploy_timestamp set, last_doctor_result PASS, last_guard_result PASS, last_verified_vps_head b727567
 
-No secrets in any artifact; verdict/IDs redacted where used.
+Admin configured: true (token from /etc/ai-ops-runner/secrets/openclaw_admin_token).
+
+No secrets in any artifact.
