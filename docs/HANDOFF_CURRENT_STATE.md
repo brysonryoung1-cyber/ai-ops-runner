@@ -116,7 +116,7 @@ OpenClaw uses a provider abstraction layer (`src/llm/`) with a fail-closed model
 | Provider | Status | Key Source | Purpose |
 |----------|--------|------------|---------|
 | **OpenAI** | Always enabled | env → Keychain → Linux file (existing hardened flow) | Review primary, general, vision |
-| **Mistral (Devstral Small 2 / Codestral)** | Review fallback | env → Keychain → `/opt/ai-ops-runner/secrets/mistral_api_key` (`ops/mistral_key.py`) | Review fallback (transient errors only) |
+| **Mistral (Devstral Small 2)** | Review fallback | env → Keychain → `/etc/ai-ops-runner/secrets/mistral_api_key` (`ops/mistral_key.py`); container mount `/run/openclaw_secrets` | Review fallback (transient errors only) |
 | **Moonshot (Kimi)** | Disabled by default | `MOONSHOT_API_KEY` env var | General tasks only (NEVER review) |
 | **Ollama** | Disabled by default | None (local, no key needed) | General tasks only (NEVER review) |
 
@@ -156,7 +156,7 @@ The `reviewFallback` config section defines the fallback reviewer:
 - **No fallback configured**: If `reviewFallback` is missing or Mistral key is not set, transient errors fail-closed with clear message
 
 **Configuring Mistral (review fallback):**
-- **Key management**: First-class tooling in `ops/mistral_key.py` (parallel to `ops/openai_key.py`). Resolution: env `MISTRAL_API_KEY` → macOS Keychain (service `ai-ops-runner`, account `MISTRAL_API_KEY`) → Linux `/opt/ai-ops-runner/secrets/mistral_api_key` (0600, never committed). CLI: `set`, `doctor`, `print-source`, `status`, `delete`. Doctor runs a lightweight authenticated call and reports PASS/FAIL without leaking the key.
+- **Key management**: First-class tooling in `ops/mistral_key.py` (parallel to `ops/openai_key.py`). Resolution: env `MISTRAL_API_KEY` → macOS Keychain → Linux `/etc/ai-ops-runner/secrets/mistral_api_key` (0640, owner 1000:1000 for container mount). Containers mount host `/etc/ai-ops-runner/secrets` → `/run/openclaw_secrets`. CLI: `set`, `doctor`, `print-source`, `status`, `delete`. One-time migration from legacy `/opt`: run `./ops/migrate_mistral_key_to_etc.sh` on the VPS.
 - Ensure `config/llm.json` has `reviewFallback: { "provider": "mistral", "model": "labs-devstral-small-2512" }` (or `codestral-2501`/`codestral-2508` if preferred) and `providers.mistral.apiBase` (default `https://api.mistral.ai/v1`).
 
 ### Budget & Cost Tracking
@@ -288,7 +288,7 @@ config/
 ## Recent Changes
 
 - **Mistral fallback real, safe, cost-optimal** (2026-02-16):
-  - **Mistral key management**: `ops/mistral_key.py` — subcommands `set`, `doctor`, `print-source`, `status`, `delete`. macOS: Keychain (service `ai-ops-runner`, account `MISTRAL_API_KEY`). Linux (VPS): `/opt/ai-ops-runner/secrets/mistral_api_key` (0600, never committed). Env `MISTRAL_API_KEY` overrides. Doctor does lightweight auth call, reports PASS/FAIL without leaking key.
+  - **Mistral key management**: `ops/mistral_key.py` — subcommands `set`, `doctor`, `print-source`, `status`, `delete`. macOS: Keychain. Linux (VPS): `/etc/ai-ops-runner/secrets/mistral_api_key` (0640, 1000:1000); containers see it at `/run/openclaw_secrets`. One-time migration from `/opt`: `./ops/migrate_mistral_key_to_etc.sh`. Doctor does lightweight auth call, reports PASS/FAIL without leaking key.
   - **Provider configured/available**: In `/api/llm/status` and provider-doctor, "configured" = key available from approved source. Missing key → provider state DOWN, `last_error_class: "missing_key"`.
   - **Default fallback model**: Devstral Small 2 (`labs-devstral-small-2512`) — SWE-agent aligned, cheaper than Codestral. Codestral remains optional in config. Pricing in `config/llm.json` and `src/llm/budget.py`.
   - **MistralProvider**: Loads key via `ops/mistral_key` (env → Keychain → Linux file) when available.
@@ -545,7 +545,9 @@ src/llm/                         # LLM Provider abstraction + fail-closed router
 
 ops/
 ├── openai_key.py             # Secure OpenAI key manager (get/set/delete/status; never prints raw key)
-├── mistral_key.py            # Secure Mistral key manager (set, doctor, print-source, status; Keychain/Linux /opt/ai-ops-runner/secrets/)
+├── mistral_key.py            # Secure Mistral key manager (set, doctor, print-source, status; Keychain/Linux /etc/ai-ops-runner/secrets/)
+├── migrate_mistral_key_to_etc.sh  # One-time VPS: copy key from /opt to /etc for container mount
+├── check_fail_closed_push.sh # Enforce no --no-verify in ops/.githooks; optional CHECK_VERDICT=1
 ├── ensure_openai_key.sh      # Shell wrapper — source before Codex calls
 ├── review_bundle.sh          # Generate bounded diff bundle (exit 6 = size cap → packet mode)
 ├── review_auto.sh            # One-command Codex review (writes meta provenance, npx fallback)

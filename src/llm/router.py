@@ -3,7 +3,7 @@
 Review gate (HARD-PINNED, NON-NEGOTIABLE):
   purpose="review" ALWAYS resolves to OpenAIProvider + CODEX_REVIEW_MODEL (primary).
   If OpenAI returns quota/rate/5xx/timeout, falls back to the configured
-  reviewFallback provider (e.g., Mistral Codestral).
+  reviewFallback provider (e.g., Mistral Devstral Small 2).
   Both fail => fail-closed (RuntimeError with clear message).
   Missing OpenAI key => fail-closed (no silent downgrade to fallback-only).
 
@@ -460,7 +460,7 @@ class ModelRouter:
                 status = {
                     "name": {
                         "openai": "OpenAI",
-                        "mistral": "Mistral (Codestral)",
+                        "mistral": "Mistral",
                         "moonshot": "Moonshot (Kimi)",
                         "ollama": "Ollama (Local)",
                     }.get(pname, pname),

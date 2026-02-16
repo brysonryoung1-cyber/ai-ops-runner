@@ -117,6 +117,7 @@ EOF
 echo "==> Committed baseline advance"
 
 # --- push (pre-push gate validates the verdict with baseline-advance allowance) ---
+# FORBIDDEN: git push --no-verify (would bypass the gate). Use normal push only.
 echo "==> Pushing to origin..."
 git push origin HEAD
 echo "==> Push complete."

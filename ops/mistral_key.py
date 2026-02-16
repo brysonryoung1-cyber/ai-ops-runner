@@ -4,7 +4,7 @@
 Resolution order (for key retrieval):
   1. Environment variable MISTRAL_API_KEY (already set) — use immediately.
   2. Python keyring (macOS Keychain backend / Linux SecretService).
-  3. Linux secrets file (/opt/ai-ops-runner/secrets/mistral_api_key).
+  3. Linux secrets file (/etc/ai-ops-runner/secrets/mistral_api_key).
   — Never prompts interactively.  Use ``set`` subcommand to store a key. —
 
 Public API (importable):
@@ -50,7 +50,9 @@ import urllib.request
 
 SERVICE_NAME = "ai-ops-runner"
 ACCOUNT_NAME = "MISTRAL_API_KEY"
-LINUX_SECRET_PATH = "/opt/ai-ops-runner/secrets/mistral_api_key"
+# Canonical host path (containers mount /etc/ai-ops-runner/secrets → /run/openclaw_secrets)
+LINUX_SECRET_PATH = "/etc/ai-ops-runner/secrets/mistral_api_key"
+LEGACY_SECRET_PATH = "/opt/ai-ops-runner/secrets/mistral_api_key"
 # Container mount on VPS: host /etc/ai-ops-runner/secrets → /run/openclaw_secrets (docker-compose)
 OPENCLAW_SECRETS_PATH = "/run/openclaw_secrets/mistral_api_key"
 _KEYRING_TIMEOUT = 5  # seconds
@@ -149,8 +151,35 @@ def _delete_from_keyring() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Source 3: Linux secrets file (/opt/ai-ops-runner/secrets/)
+# Source 3: Linux secrets file (/etc/ai-ops-runner/secrets/)
 # ---------------------------------------------------------------------------
+
+
+def _migrate_legacy_to_etc() -> None:
+    """Idempotent: if key exists at legacy /opt path but not at /etc, copy to /etc.
+    Ensures perms 0640 and owner 1000:1000 when possible (container expectations).
+    """
+    if os.path.isfile(LINUX_SECRET_PATH):
+        return
+    if not os.path.isfile(LEGACY_SECRET_PATH):
+        return
+    try:
+        with open(LEGACY_SECRET_PATH, "r") as fh:
+            key = fh.read().strip()
+        if not key:
+            return
+        secret_dir = os.path.dirname(LINUX_SECRET_PATH)
+        os.makedirs(secret_dir, mode=0o750, exist_ok=True)
+        with open(LINUX_SECRET_PATH, "w") as fh:
+            fh.write(key + "\n")
+        os.chmod(LINUX_SECRET_PATH, 0o640)
+        try:
+            os.chown(LINUX_SECRET_PATH, 1000, 1000)
+        except (PermissionError, OSError):
+            pass
+        _info(f"Migrated Mistral key from {LEGACY_SECRET_PATH} to {LINUX_SECRET_PATH}")
+    except (PermissionError, OSError):
+        pass
 
 
 def get_from_openclaw_secrets() -> "str | None":
@@ -166,7 +195,8 @@ def get_from_openclaw_secrets() -> "str | None":
 
 
 def get_from_linux_file() -> "str | None":
-    """Read from /opt/ai-ops-runner/secrets/mistral_api_key (root-readable 0600)."""
+    """Read from /etc/ai-ops-runner/secrets/mistral_api_key. Migrates from /opt if present."""
+    _migrate_legacy_to_etc()
     if not os.path.isfile(LINUX_SECRET_PATH):
         return None
     try:
@@ -187,10 +217,14 @@ def get_from_linux_file() -> "str | None":
 def _write_linux_file(key: str) -> bool:
     try:
         secret_dir = os.path.dirname(LINUX_SECRET_PATH)
-        os.makedirs(secret_dir, mode=0o700, exist_ok=True)
+        os.makedirs(secret_dir, mode=0o750, exist_ok=True)
         with open(LINUX_SECRET_PATH, "w") as fh:
             fh.write(key + "\n")
-        os.chmod(LINUX_SECRET_PATH, 0o600)
+        os.chmod(LINUX_SECRET_PATH, 0o640)
+        try:
+            os.chown(LINUX_SECRET_PATH, 1000, 1000)
+        except (PermissionError, OSError):
+            pass
         _info(f"Key stored in {LINUX_SECRET_PATH}")
         return True
     except PermissionError:
@@ -202,17 +236,20 @@ def _write_linux_file(key: str) -> bool:
 
 
 def _delete_linux_file() -> bool:
-    if not os.path.isfile(LINUX_SECRET_PATH):
-        return True
-    try:
-        os.remove(LINUX_SECRET_PATH)
-        return True
-    except PermissionError:
-        _err(f"Cannot remove {LINUX_SECRET_PATH} -- run with sudo")
-        return False
-    except OSError as exc:
-        _err(f"Cannot remove {LINUX_SECRET_PATH}: {exc}")
-        return False
+    ok = True
+    for path in (LINUX_SECRET_PATH, LEGACY_SECRET_PATH):
+        if not os.path.isfile(path):
+            continue
+        try:
+            os.remove(path)
+            _info(f"Removed {path}")
+        except PermissionError:
+            _err(f"Cannot remove {path} -- run with sudo")
+            ok = False
+        except OSError as exc:
+            _err(f"Cannot remove {path}: {exc}")
+            ok = False
+    return ok
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +378,7 @@ def set_mistral_api_key(key: str) -> bool:
 
     _err("No available backend to store the key.")
     _err("  macOS: install 'keyring' package (pip install keyring)")
-    _err("  Linux: run with sudo to write to " + LINUX_SECRET_PATH)
+    _err("  Linux: run with sudo to write to " + LINUX_SECRET_PATH + " (or run migration from /opt)")
     return False
 
 
@@ -356,9 +393,8 @@ def delete_mistral_api_key() -> bool:
             deleted_any = True
         except Exception:
             pass
-    if os.path.isfile(LINUX_SECRET_PATH):
+    if os.path.isfile(LINUX_SECRET_PATH) or os.path.isfile(LEGACY_SECRET_PATH):
         if _delete_linux_file():
-            _info(f"Key removed from {LINUX_SECRET_PATH}")
             deleted_any = True
         else:
             success = False

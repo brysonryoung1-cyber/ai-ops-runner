@@ -1,7 +1,8 @@
 {
   "$schema": "./llm.schema.json",
   "enabledProviders": [
-    "openai"
+    "openai",
+    "mistral"
   ],
   "defaults": {
     "general": {
@@ -59,7 +60,7 @@
     "mistral": {
       "apiBase": "https://api.mistral.ai/v1",
       "keyEnv": "MISTRAL_API_KEY",
-      "enabled": false
+      "enabled": true
     },
     "moonshot": {
       "apiBase": "https://api.moonshot.cn/v1",

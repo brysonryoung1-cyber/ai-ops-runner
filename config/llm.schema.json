@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "OpenClaw LLM Provider Configuration",
-  "description": "Configuration for LLM providers, routing, budget caps, and review fallback. Review gate primary is always OpenAI (fail-closed); Mistral Codestral is the fallback reviewer.",
+  "description": "Configuration for LLM providers, routing, budget caps, and review fallback. Review gate primary is always OpenAI (fail-closed); Mistral (e.g. Devstral Small 2) is the optional fallback reviewer.",
   "type": "object",
   "required": ["enabledProviders", "defaults", "providers"],
   "additionalProperties": false,

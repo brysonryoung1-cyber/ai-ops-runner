@@ -1,10 +1,12 @@
-"""Mistral/Codestral provider — review fallback when OpenAI is unavailable.
+"""Mistral provider — review fallback when OpenAI is unavailable.
 
 Uses the Mistral API at api.mistral.ai/v1 (OpenAI-compatible chat completions).
 Primary use case: fallback reviewer when OpenAI returns quota/rate/5xx/timeout.
+Model: labs-devstral-small-2512 (Devstral Small 2) or Codestral if configured.
 
 Key loading: env MISTRAL_API_KEY → Keychain (ops/mistral_key) → Linux
-/opt/ai-ops-runner/secrets/mistral_api_key. Use ops/mistral_key.py set for storage.
+/etc/ai-ops-runner/secrets/mistral_api_key (container mount: /run/openclaw_secrets).
+Use ops/mistral_key.py set for storage. One-time migration from /opt: ops/migrate_mistral_key_to_etc.sh.
 """
 
 from __future__ import annotations
@@ -164,7 +166,7 @@ class MistralProvider(BaseProvider):
         configured = key is not None and len(key) > 0
 
         return {
-            "name": "Mistral (Codestral)",
+            "name": "Mistral",
             "enabled": False,
             "configured": configured,
             "status": "active" if configured else "inactive",

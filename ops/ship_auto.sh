@@ -138,6 +138,8 @@ while [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; do
     echo "==> APPROVED on attempt $ATTEMPT"
 
     if [ "$NO_PUSH" -eq 0 ]; then
+      echo "==> Fail-closed check (no --no-verify)..."
+      "$SCRIPT_DIR/check_fail_closed_push.sh" || { echo "ERROR: check_fail_closed_push failed" >&2; exit 1; }
       echo "==> Advancing baseline and pushing..."
       "$SCRIPT_DIR/review_finish.sh"
       echo ""

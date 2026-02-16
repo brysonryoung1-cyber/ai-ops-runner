@@ -12,7 +12,7 @@ Tests verify:
   8. Router fallback behavior for non-review purposes
   9. Review uses gpt-4o-mini by default
   10. max_output_tokens enforced on review calls
-  11. OpenAI quota error triggers Codestral fallback
+  11. OpenAI quota error triggers Mistral fallback
   12. Both reviewers fail => fail-closed
   13. Budget cap blocks oversized call
   14. Provenance recorded (primary + fallback)
@@ -788,7 +788,7 @@ class TestRouterBehavior:
             statuses = router.get_all_status()
         names = [s["name"] for s in statuses]
         assert "OpenAI" in names
-        assert "Mistral (Codestral)" in names
+        assert "Mistral" in names
         assert "Moonshot (Kimi)" in names
         assert "Ollama (Local)" in names
 
@@ -814,12 +814,12 @@ class TestRouterBehavior:
 
 
 # ===========================================================================
-# 7. Review fallback — OpenAI quota triggers Codestral fallback
+# 7. Review fallback — OpenAI quota triggers Mistral fallback
 # ===========================================================================
 
 
 class TestReviewFallback:
-    """Review gate fallback: OpenAI transient error -> Mistral Codestral."""
+    """Review gate fallback: OpenAI transient error -> Mistral (e.g. Devstral)."""
 
     def test_openai_quota_triggers_codestral_fallback(self):
         """HTTP 429 from OpenAI should trigger Mistral fallback."""
