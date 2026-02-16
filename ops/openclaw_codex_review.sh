@@ -156,7 +156,10 @@ if not api_key:
 import urllib.request
 import urllib.error
 
-model = os.environ.get("OPENCLAW_REVIEW_MODEL", "gpt-4o")
+model = os.environ.get("OPENCLAW_REVIEW_MODEL", "gpt-4o-mini")
+if model == "gpt-4o" and os.environ.get("OPENCLAW_ALLOW_EXPENSIVE_REVIEW") != "1":
+    print("ERROR: Review gate is set to gpt-4o (expensive). Set OPENCLAW_ALLOW_EXPENSIVE_REVIEW=1 to allow, or use gpt-4o-mini (default). Fail-closed.", file=sys.stderr)
+    sys.exit(1)
 
 payload = {
     "model": model,

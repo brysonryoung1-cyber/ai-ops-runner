@@ -34,6 +34,8 @@ interface LLMStatusResponse {
     review_provider: string;
     review_model: string;
     review_gate: "fail-closed";
+    expensive_review_override: boolean;
+    review_guard: "pass" | "fail";
   };
   config: {
     valid: boolean;
@@ -48,17 +50,21 @@ function getLLMStatus(): LLMStatusResponse {
     const repoRoot = process.cwd();
     const result = execSync(
       `python3 -c "
-import sys, json
+import sys, json, os
 sys.path.insert(0, '.')
 try:
     from src.llm.router import get_router
     from src.llm.openai_provider import CODEX_REVIEW_MODEL
     router = get_router()
     statuses = router.get_all_status()
+    allow_expensive = os.environ.get('OPENCLAW_ALLOW_EXPENSIVE_REVIEW') == '1'
+    review_guard_pass = not (CODEX_REVIEW_MODEL == 'gpt-4o' and not allow_expensive)
     print(json.dumps({
         'ok': True,
         'providers': statuses,
         'review_model': CODEX_REVIEW_MODEL,
+        'allow_expensive_review': allow_expensive,
+        'review_guard_pass': review_guard_pass,
         'init_error': router.init_error
     }))
 except Exception as e:
@@ -92,8 +98,10 @@ except Exception as e:
         providers,
         router: {
           review_provider: "OpenAI",
-          review_model: data.review_model || "gpt-4o",
+          review_model: data.review_model || "gpt-4o-mini",
           review_gate: "fail-closed",
+          expensive_review_override: !!data.allow_expensive_review,
+          review_guard: data.review_guard_pass ? "pass" : "fail",
         },
         config: {
           valid: !data.init_error,
@@ -165,13 +173,19 @@ function getFallbackStatus(): LLMStatusResponse {
     fingerprint: null,
   });
 
+  const reviewModel = process.env.OPENCLAW_REVIEW_MODEL || "gpt-4o-mini";
+  const allowExpensive = process.env.OPENCLAW_ALLOW_EXPENSIVE_REVIEW === "1";
+  const reviewGuardPass = !(reviewModel === "gpt-4o" && !allowExpensive);
+
   return {
     ok: true,
     providers,
     router: {
       review_provider: "OpenAI",
-      review_model: process.env.OPENCLAW_REVIEW_MODEL || "gpt-4o",
+      review_model: reviewModel,
       review_gate: "fail-closed",
+      expensive_review_override: allowExpensive,
+      review_guard: reviewGuardPass ? "pass" : "fail",
     },
     config: {
       valid: configValid,

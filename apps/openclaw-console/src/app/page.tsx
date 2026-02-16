@@ -47,6 +47,8 @@ interface LLMStatus {
     review_provider: string;
     review_model: string;
     review_gate: string;
+    expensive_review_override?: boolean;
+    review_guard?: "pass" | "fail";
   };
   config: {
     valid: boolean;
@@ -486,6 +488,11 @@ export default function OverviewPage() {
                     {llmStatus.router.review_gate}
                   </span>
                 </div>
+                {llmStatus.router.review_guard === "fail" && (
+                  <p className="text-xs text-amber-600 mt-2">
+                    Cost guard: review model is gpt-4o without OPENCLAW_ALLOW_EXPENSIVE_REVIEW=1
+                  </p>
+                )}
               </div>
 
               {/* Config error */}

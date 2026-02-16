@@ -270,6 +270,79 @@ class TestReviewFailClosed:
 
 
 # ===========================================================================
+# 2b. Review model cost guard (gpt-4o only with explicit override)
+# ===========================================================================
+
+
+class TestReviewCostGuard:
+    """Review gate must not use gpt-4o unless OPENCLAW_ALLOW_EXPENSIVE_REVIEW=1."""
+
+    def test_gpt4o_without_override_fails_closed(self):
+        """Using gpt-4o without OPENCLAW_ALLOW_EXPENSIVE_REVIEW=1 must raise."""
+        config = _make_config()
+        env = {"OPENCLAW_REVIEW_MODEL": "gpt-4o"}
+        env.pop("OPENCLAW_ALLOW_EXPENSIVE_REVIEW", None)
+        with mock.patch.dict(os.environ, env, clear=False):
+            with mock.patch(
+                "src.llm.openai_provider._load_openai_key",
+                return_value=FAKE_OPENAI_KEY,
+            ):
+                import src.llm.openai_provider as oai_mod
+                import src.llm.router as router_mod
+                importlib.reload(oai_mod)
+                importlib.reload(router_mod)
+                assert oai_mod.CODEX_REVIEW_MODEL == "gpt-4o"
+                router = router_mod.ModelRouter(config=config)
+                with pytest.raises(
+                    RuntimeError,
+                    match="gpt-4o|OPENCLAW_ALLOW_EXPENSIVE_REVIEW|expensive|Fail-closed",
+                ):
+                    router.resolve("review")
+        with mock.patch.dict(os.environ, {"OPENCLAW_REVIEW_MODEL": "gpt-4o-mini"}):
+            importlib.reload(oai_mod)
+            importlib.reload(router_mod)
+
+    def test_gpt4o_with_override_succeeds(self):
+        """With OPENCLAW_ALLOW_EXPENSIVE_REVIEW=1, gpt-4o is allowed."""
+        config = _make_config()
+        env = {
+            "OPENCLAW_REVIEW_MODEL": "gpt-4o",
+            "OPENCLAW_ALLOW_EXPENSIVE_REVIEW": "1",
+            "OPENAI_API_KEY": FAKE_OPENAI_KEY,
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            with mock.patch(
+                "src.llm.openai_provider._load_openai_key",
+                return_value=FAKE_OPENAI_KEY,
+            ):
+                import src.llm.openai_provider as oai_mod
+                import src.llm.router as router_mod
+                importlib.reload(oai_mod)
+                importlib.reload(router_mod)
+                assert oai_mod.CODEX_REVIEW_MODEL == "gpt-4o"
+                router = router_mod.ModelRouter(config=config)
+                provider, model = router.resolve("review")
+                assert model == "gpt-4o"
+                assert provider.provider_name == "openai"
+        with mock.patch.dict(os.environ, {"OPENCLAW_REVIEW_MODEL": "gpt-4o-mini"}):
+            importlib.reload(oai_mod)
+            importlib.reload(router_mod)
+
+    def test_default_review_model_is_not_gpt4o(self):
+        """Default review model must not be gpt-4o (cost-safe default)."""
+        with mock.patch.dict(os.environ, {}, clear=False):
+            env = dict(os.environ)
+            env.pop("OPENCLAW_REVIEW_MODEL", None)
+            with mock.patch.dict(os.environ, env, clear=True):
+                import src.llm.openai_provider as oai_mod
+                importlib.reload(oai_mod)
+                assert oai_mod.CODEX_REVIEW_MODEL != "gpt-4o"
+                assert oai_mod.CODEX_REVIEW_MODEL == "gpt-4o-mini"
+        with mock.patch.dict(os.environ, {"OPENCLAW_REVIEW_MODEL": "gpt-4o-mini"}):
+            importlib.reload(oai_mod)
+
+
+# ===========================================================================
 # 3. Config schema validation
 # ===========================================================================
 

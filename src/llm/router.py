@@ -17,6 +17,7 @@ For non-review purposes:
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import Any
 
@@ -185,6 +186,12 @@ class ModelRouter:
                     "FATAL: OpenAI API key not found. "
                     "Review gate requires OpenAI API key (fail-closed). "
                     "Set OPENAI_API_KEY or run: python3 ops/openai_key.py set"
+                )
+            # Fail-closed: refuse gpt-4o unless explicit override (cost guard)
+            if CODEX_REVIEW_MODEL == "gpt-4o" and os.environ.get("OPENCLAW_ALLOW_EXPENSIVE_REVIEW") != "1":
+                raise RuntimeError(
+                    "Review gate is set to gpt-4o (expensive). "
+                    "Set OPENCLAW_ALLOW_EXPENSIVE_REVIEW=1 to allow, or use gpt-4o-mini (default). Fail-closed."
                 )
             return openai, CODEX_REVIEW_MODEL
 

@@ -389,7 +389,30 @@ else
   pass "Pushover token absent (optional; notifications disabled)"
 fi
 
-# --- 8. Console Bind Check ---
+# --- 8. Review model (cost guard) ---
+echo "--- Review Model (Cost Guard) ---"
+REVIEW_GUARD_RC=0
+REVIEW_GUARD_OUT="$(python3 -c "
+import os, sys
+sys.path.insert(0, \"$ROOT_DIR\")
+try:
+    from src.llm.openai_provider import CODEX_REVIEW_MODEL
+    allow = os.environ.get('OPENCLAW_ALLOW_EXPENSIVE_REVIEW') == '1'
+    if CODEX_REVIEW_MODEL == 'gpt-4o' and not allow:
+        print('FAIL')
+        sys.exit(1)
+    print('PASS', CODEX_REVIEW_MODEL)
+except Exception as e:
+    print('FAIL', str(e))
+    sys.exit(1)
+" 2>/dev/null)" || REVIEW_GUARD_RC=$?
+if [ "$REVIEW_GUARD_RC" -eq 0 ] && echo "$REVIEW_GUARD_OUT" | grep -q "PASS"; then
+  pass "Review model cost guard: $(echo "$REVIEW_GUARD_OUT" | awk '{print $2}') (not gpt-4o or override set)"
+else
+  fail "Review model is gpt-4o without OPENCLAW_ALLOW_EXPENSIVE_REVIEW=1 (fail-closed). Use gpt-4o-mini or set override."
+fi
+
+# --- 9. Console Bind Check ---
 echo "--- Console Bind Check ---"
 CONSOLE_PORT="${OPENCLAW_CONSOLE_PORT:-8787}"
 if command -v ss >/dev/null 2>&1; then
@@ -416,7 +439,7 @@ else
   pass "Port check unavailable (console bind check skipped)"
 fi
 
-# --- 9. Guard Timer Health ---
+# --- 10. Guard Timer Health ---
 echo "--- Guard Timer Health ---"
 if command -v systemctl >/dev/null 2>&1; then
   GUARD_TIMER_ACTIVE="$(systemctl is-active openclaw-guard.timer 2>/dev/null || echo "inactive")"
