@@ -31,8 +31,9 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from src.llm.router import get_router
-from src.llm.types import LLMRequest
+from src.llm.types import LLMRequest, ReviewFailClosedError
 from src.llm.budget import actual_cost, write_cost_telemetry
+from src.llm.provider import redact_for_log
 
 
 REVIEW_SYSTEM_PROMPT = """You are a security-focused code reviewer for the ai-ops-runner repository (OpenClaw control plane).
@@ -90,7 +91,20 @@ def run_review(bundle_path: str, verdict_path: str) -> str:
         response_format={"type": "json_object"},
     )
 
-    response = router.generate(request)
+    try:
+        response = router.generate(request)
+    except ReviewFailClosedError as exc:
+        artifact_dir = str(Path(verdict_path).parent)
+        fail_closed_path = Path(artifact_dir) / "review_fail_closed.json"
+        fail_closed_data = {
+            "primary_error": exc.primary_error,
+            "fallback_error": exc.fallback_error,
+            "primary_transient_class": exc.primary_transient_class,
+            "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+        with open(fail_closed_path, "w") as f:
+            json.dump(fail_closed_data, f, indent=2)
+        raise RuntimeError(redact_for_log(str(exc))) from exc
 
     # Parse and validate verdict
     try:
@@ -133,6 +147,8 @@ def run_review(bundle_path: str, verdict_path: str) -> str:
     if response.provider != "openai":
         verdict["meta"]["fallback_used"] = True
         verdict["meta"]["fallback_reason"] = "primary_transient_error"
+        if getattr(response, "primary_transient_class", None):
+            verdict["meta"]["transient_class"] = response.primary_transient_class
 
     with open(verdict_path, "w") as f:
         json.dump(verdict, f, indent=2)

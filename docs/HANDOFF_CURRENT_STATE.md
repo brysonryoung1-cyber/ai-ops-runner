@@ -139,14 +139,24 @@ OpenClaw uses a provider abstraction layer (`src/llm/`) with a fail-closed model
 
 The `reviewFallback` config section defines the fallback reviewer:
 ```json
-"reviewFallback": { "provider": "mistral", "model": "codestral-2501" }
+"reviewFallback": { "provider": "mistral", "model": "codestral-2508" }
 ```
+(Model is configurable; default is `codestral-2508`.)
 
-- **Trigger**: Only on transient/quota errors from OpenAI (HTTP 429, 500-504, timeout, unreachable)
-- **NOT triggered**: Auth errors (401), bad requests (400), config errors, parse errors
-- **Provenance**: Response records `provider: "mistral"`, verdict `meta.fallback_used: true`
+- **Trigger**: Only on **transient** errors from OpenAI. Transient classification (exact):
+  - **HTTP 429** → `transient_quota` (fallback tried)
+  - **HTTP 500–504** → `transient_server` (fallback tried)
+  - **Connection/timeout** → `transient_network` (fallback tried)
+  - **Anything else** (401, 403, config, schema) → `non_transient` → **no fallback**, fail immediately
+- **NOT triggered**: Auth errors (401), forbidden (403), bad requests (400), config errors, parse errors
+- **Provenance**: Response records `provider: "mistral"`, verdict `meta.fallback_used: true`, `meta.transient_class` when fallback used
+- **Run artifacts**: On success, verdict JSON includes provider/model and (if fallback) `transient_class`. If **both** reviewers fail, `review_fail_closed.json` is written with redacted `primary_error`, `fallback_error`, `primary_transient_class`
 - **Pre-push hook**: Accepts any `provider` in provenance (openai, mistral, etc.)
 - **No fallback configured**: If `reviewFallback` is missing or Mistral key is not set, transient errors fail-closed with clear message
+
+**Configuring Mistral (review fallback):**
+- Set `MISTRAL_API_KEY` in environment (or existing secret store pattern). Keys are never printed; only redacted fingerprints in status.
+- Ensure `config/llm.json` has `reviewFallback: { "provider": "mistral", "model": "codestral-2508" }` and `providers.mistral.apiBase` (default `https://api.mistral.ai/v1`).
 
 ### Budget & Cost Tracking
 
@@ -212,17 +222,23 @@ To enable:
 
 ### HQ Visibility
 
-- `GET /api/llm/status` — full provider status (enabled/disabled, configured, masked fingerprint, router info, config validation)
+- `GET /api/llm/status` — full provider status (enabled/disabled, configured, masked fingerprint, router info, config validation). When provider doctor has been run, includes `doctor.last_timestamp` and `doctor.providers` (openai/mistral `state`: OK/DEGRADED/DOWN, `last_error_class`) — no secrets.
 - `GET /api/ai-status` — backward-compatible (now includes all LLM providers)
-- Overview page "LLM Providers" panel — status lights, review gate badge, config health
+- Overview page "LLM Providers" panel — status lights, review gate badge, config health, **Provider Doctor** (last run timestamp, OpenAI/Mistral state and last_error_class)
 - Cost telemetry: `artifacts/codex_review/<timestamp>/cost_telemetry.jsonl`
+
+### Provider Doctor (preflight)
+
+- **Purpose**: Visibility into quota/rate/availability **before** gating. Run to populate `GET /api/llm/status` doctor section and HQ panel.
+- **Action**: `llm_doctor` (Console allowlist) or `python3 -m src.llm.doctor [artifact_dir]`. Writes `artifacts/doctor/providers/<run_id>/provider_status.json` with `openai` and `mistral` `state` (OK/DEGRADED/DOWN) and `last_error_class` (redacted).
+- **When to run**: Manually from HQ or before a review-heavy batch. Does **not** run automatically with infra doctor.
 
 ### Review Gate Statement
 
 **The review gate is fail-closed with multi-vendor resilience:**
 1. **Primary**: OpenAI `gpt-4o-mini` (code-specialized, cost-efficient)
-2. **Fallback**: Mistral `codestral-2501` (on transient errors only — 429/5xx/timeout)
-3. **Fail-closed**: Both fail → `RuntimeError`, non-transient errors → immediate failure
+2. **Fallback**: Mistral Codestral (configurable model, e.g. `codestral-2508`) — **only** on transient errors (429, 500–504, timeout/network)
+3. **Fail-closed**: Both fail → `ReviewFailClosedError` → artifact `review_fail_closed.json` + `RuntimeError`; non-transient (401/403/config) → immediate failure, no fallback
 4. **Budget**: Pre-call cost estimate checked against `maxUsdPerReview` cap
 5. **Caps**: `max_output_tokens: 600`, `temperature: 0` enforced on all review calls
 

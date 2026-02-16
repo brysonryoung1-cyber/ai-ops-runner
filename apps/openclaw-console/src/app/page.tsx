@@ -55,6 +55,13 @@ interface LLMStatus {
     path: string;
     error: string | null;
   };
+  doctor?: {
+    last_timestamp: string | null;
+    providers: {
+      openai?: { state: "OK" | "DEGRADED" | "DOWN"; last_error_class: string | null };
+      mistral?: { state: "OK" | "DEGRADED" | "DOWN"; last_error_class: string | null };
+    };
+  };
 }
 
 function deriveStatus(result?: ExecResult, loading?: boolean): CardStatus {
@@ -494,6 +501,44 @@ export default function OverviewPage() {
                   </p>
                 )}
               </div>
+
+              {/* Provider doctor (preflight) */}
+              {llmStatus.doctor && (
+                <div className="mt-4 pt-4 border-t border-apple-border">
+                  <p className="text-xs font-semibold text-apple-muted uppercase tracking-wider">
+                    Provider Doctor
+                  </p>
+                  <p className="text-[10px] text-apple-muted mt-0.5">
+                    Last run: {llmStatus.doctor.last_timestamp ?? "—"}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {llmStatus.doctor.providers.openai && (
+                      <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                        llmStatus.doctor.providers.openai.state === "OK"
+                          ? "bg-green-100 text-green-700"
+                          : llmStatus.doctor.providers.openai.state === "DEGRADED"
+                            ? "bg-yellow-100 text-yellow-700"
+                            : "bg-red-100 text-red-700"
+                      }`}>
+                        OpenAI: {llmStatus.doctor.providers.openai.state}
+                        {llmStatus.doctor.providers.openai.last_error_class ? ` (${llmStatus.doctor.providers.openai.last_error_class})` : ""}
+                      </span>
+                    )}
+                    {llmStatus.doctor.providers.mistral && (
+                      <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                        llmStatus.doctor.providers.mistral.state === "OK"
+                          ? "bg-green-100 text-green-700"
+                          : llmStatus.doctor.providers.mistral.state === "DEGRADED"
+                            ? "bg-yellow-100 text-yellow-700"
+                            : "bg-red-100 text-red-700"
+                      }`}>
+                        Mistral: {llmStatus.doctor.providers.mistral.state}
+                        {llmStatus.doctor.providers.mistral.last_error_class ? ` (${llmStatus.doctor.providers.mistral.last_error_class})` : ""}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Config error */}
               {llmStatus.config.error && (

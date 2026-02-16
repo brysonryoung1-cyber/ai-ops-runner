@@ -40,10 +40,10 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.llm.types import (
     LLMConfig, PurposeRoute, ProviderConfig, LLMRequest, LLMResponse,
-    ReviewFallbackConfig, ReviewCapsConfig,
+    ReviewFallbackConfig, ReviewCapsConfig, ReviewFailClosedError,
 )
 from src.llm.config import validate_llm_config, load_llm_config, LLMConfigError
-from src.llm.router import ModelRouter, reset_router, _is_transient_error
+from src.llm.router import ModelRouter, reset_router, _is_transient_error, _classify_transient
 from src.llm.provider import BaseProvider, redact_for_log
 from src.llm.openai_provider import OpenAIProvider, CODEX_REVIEW_MODEL, _mask_key
 from src.llm.mistral_provider import MistralProvider
@@ -53,6 +53,7 @@ from src.llm.budget import (
     BudgetConfig, estimate_cost, check_budget, actual_cost,
     DEFAULT_MAX_USD_PER_REVIEW,
 )
+from src.llm import review_gate
 
 FAKE_OPENAI_KEY = "sk-test-FAKE-000000000000000000000000000000000000"
 FAKE_MOONSHOT_KEY = "msk-test-FAKE-0000000000000000000000000000000000"
@@ -913,7 +914,7 @@ class TestReviewFallback:
                     ))
 
     def test_both_reviewers_fail_is_fail_closed(self):
-        """If both OpenAI and Mistral fail, review must fail-closed."""
+        """If both OpenAI and Mistral fail, review must fail-closed with ReviewFailClosedError."""
         config = _make_config()
         with mock.patch.dict(os.environ, {
             "OPENAI_API_KEY": FAKE_OPENAI_KEY,
@@ -929,11 +930,15 @@ class TestReviewFallback:
                     router._providers["mistral"], "generate_text",
                     side_effect=RuntimeError("Mistral API error: HTTP 500 — server error"),
                 ):
-                    with pytest.raises(RuntimeError, match="FAILED.*fail-closed"):
+                    with pytest.raises(ReviewFailClosedError, match="FAILED.*fail-closed") as exc_info:
                         router.generate(LLMRequest(
                             model="", messages=[{"role": "user", "content": "test"}],
                             purpose="review", trace_id="test",
                         ))
+                    exc = exc_info.value
+                    assert exc.primary_transient_class == "transient_quota"
+                    assert "429" in exc.primary_error or "rate" in exc.primary_error.lower()
+                    assert "500" in exc.fallback_error or "server" in exc.fallback_error.lower()
 
     def test_no_fallback_configured_fails_closed(self):
         """If no fallback configured, transient error fails closed with clear message."""
@@ -977,9 +982,75 @@ class TestReviewFallback:
                         purpose="review", trace_id="test",
                     ))
 
-            # Verify provenance
+            # Verify provenance and transient class
             assert response.provider == "mistral"
             assert response.model == "codestral-2501"
+            assert getattr(response, "primary_transient_class", None) == "transient_quota"
+
+    def test_transient_classification(self):
+        """_classify_transient returns exact classes: transient_quota, transient_server, transient_network, non_transient."""
+        assert _classify_transient(RuntimeError("OpenAI API error: HTTP 429 — rate limited")) == "transient_quota"
+        assert _classify_transient(RuntimeError("OpenAI API error: HTTP 500 — server error")) == "transient_server"
+        assert _classify_transient(RuntimeError("OpenAI API error: HTTP 503 — unavailable")) == "transient_server"
+        assert _classify_transient(RuntimeError("OpenAI API unreachable: timed out")) == "transient_network"
+        assert _classify_transient(RuntimeError("OpenAI API unreachable: connection refused")) == "transient_network"
+        assert _classify_transient(RuntimeError("OpenAI API error: HTTP 401 — unauthorized")) == "non_transient"
+        assert _classify_transient(RuntimeError("OpenAI API error: HTTP 403 — forbidden")) == "non_transient"
+        assert _classify_transient(RuntimeError("Config invalid")) == "non_transient"
+
+    def test_review_gate_writes_fail_closed_artifact(self, tmp_path):
+        """When both reviewers fail, review_gate writes review_fail_closed.json with redacted errors."""
+        bundle_path = tmp_path / "bundle.txt"
+        bundle_path.write_text("diff --git a/foo b/foo\n")
+        verdict_path = tmp_path / "verdict.json"
+        exc = ReviewFailClosedError(
+            "Review FAILED (fail-closed): primary error; fallback error",
+            primary_error="OpenAI API error: HTTP 429 — [REDACTED]",
+            fallback_error="Mistral API error: HTTP 500 — [REDACTED]",
+            primary_transient_class="transient_quota",
+        )
+        with mock.patch("src.llm.review_gate.get_router") as m_router:
+            m_router.return_value.generate.side_effect = exc
+            with pytest.raises(RuntimeError, match="FAILED.*fail-closed"):
+                review_gate.run_review(str(bundle_path), str(verdict_path))
+        artifact = tmp_path / "review_fail_closed.json"
+        assert artifact.exists()
+        data = json.loads(artifact.read_text())
+        assert data["primary_transient_class"] == "transient_quota"
+        assert "primary_error" in data and "fallback_error" in data
+        # No secrets in artifact
+        raw = artifact.read_text()
+        assert FAKE_OPENAI_KEY not in raw and FAKE_MISTRAL_KEY not in raw
+
+
+# ===========================================================================
+# 7b. Provider doctor — redacted status
+# ===========================================================================
+
+
+def test_doctor_returns_redacted_status(tmp_path):
+    """run_provider_doctor returns structure with provider_state and no secrets."""
+    from src.llm.doctor import run_provider_doctor
+    config = _make_config()
+    with mock.patch.dict(os.environ, {
+        "OPENAI_API_KEY": FAKE_OPENAI_KEY,
+        "MISTRAL_API_KEY": FAKE_MISTRAL_KEY,
+    }):
+        with mock.patch("src.llm.doctor.get_router") as m_gr:
+            router = ModelRouter(config=config)
+            m_gr.return_value = router
+            # Avoid real API calls: mock generate_text to succeed
+            router._providers["openai"].generate_text = mock.Mock(return_value=_fake_openai_response())
+            router._providers["mistral"].generate_text = mock.Mock(return_value=_fake_mistral_response())
+            result = run_provider_doctor(str(tmp_path))
+    assert "providers" in result and "timestamp" in result
+    assert result["providers"]["openai"]["state"] in ("OK", "DEGRADED", "DOWN")
+    assert result["providers"]["mistral"]["state"] in ("OK", "DEGRADED", "DOWN")
+    raw = json.dumps(result)
+    assert FAKE_OPENAI_KEY not in raw and FAKE_MISTRAL_KEY not in raw
+    status_file = tmp_path / "provider_status.json"
+    assert status_file.exists()
+    assert FAKE_OPENAI_KEY not in status_file.read_text() and FAKE_MISTRAL_KEY not in status_file.read_text()
 
 
 # ===========================================================================

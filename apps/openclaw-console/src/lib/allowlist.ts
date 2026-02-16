@@ -6,6 +6,7 @@
 
 export type ActionName =
   | "doctor"
+  | "llm_doctor"
   | "apply"
   | "guard"
   | "ports"
@@ -36,6 +37,14 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     description: "Run the OpenClaw doctor health check on aiops-1",
     remoteCommand:
       "cd /opt/ai-ops-runner && ./ops/openclaw_doctor.sh",
+    timeoutSec: 30,
+  },
+  llm_doctor: {
+    name: "llm_doctor",
+    label: "LLM Provider Doctor",
+    description: "Preflight check OpenAI + Mistral; writes artifacts/doctor/providers/<run_id>/",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && python3 -m src.llm.doctor",
     timeoutSec: 30,
   },
   apply: {

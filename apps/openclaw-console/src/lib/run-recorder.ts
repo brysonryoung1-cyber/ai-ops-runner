@@ -48,6 +48,7 @@ export function generateRunId(): string {
 const ACTION_PROJECT_MAP: Record<string, string> = {
   // infra_openclaw
   doctor: "infra_openclaw",
+  llm_doctor: "infra_openclaw",
   apply: "infra_openclaw",
   guard: "infra_openclaw",
   ports: "infra_openclaw",

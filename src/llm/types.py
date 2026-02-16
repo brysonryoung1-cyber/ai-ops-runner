@@ -137,6 +137,27 @@ class LLMResponse:
     usage: dict[str, int] = field(default_factory=dict)
     trace_id: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
+    # Set when review used fallback (primary failed with this transient class)
+    primary_transient_class: str | None = None
+
+
+class ReviewFailClosedError(RuntimeError):
+    """Raised when both primary and fallback reviewers fail (fail-closed).
+
+    Carries structured error info for artifact writing; never exposes secrets.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        primary_error: str,
+        fallback_error: str,
+        primary_transient_class: str,
+    ):
+        super().__init__(message)
+        self.primary_error = primary_error
+        self.fallback_error = fallback_error
+        self.primary_transient_class = primary_transient_class
 
 
 @dataclass

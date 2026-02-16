@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { execSync } from "child_process";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, readdirSync } from "fs";
 import { join } from "path";
 
 /**
@@ -27,6 +27,11 @@ interface LLMProviderStatus {
   review_model?: string;
 }
 
+interface ProviderDoctorState {
+  state: "OK" | "DEGRADED" | "DOWN";
+  last_error_class: string | null;
+}
+
 interface LLMStatusResponse {
   ok: boolean;
   providers: LLMProviderStatus[];
@@ -41,6 +46,13 @@ interface LLMStatusResponse {
     valid: boolean;
     path: string;
     error: string | null;
+  };
+  doctor?: {
+    last_timestamp: string | null;
+    providers: {
+      openai?: ProviderDoctorState;
+      mistral?: ProviderDoctorState;
+    };
   };
 }
 
@@ -93,7 +105,7 @@ except Exception as e:
         })
       );
 
-      return {
+      const status: LLMStatusResponse = {
         ok: true,
         providers,
         router: {
@@ -109,13 +121,55 @@ except Exception as e:
           error: data.init_error || null,
         },
       };
+      const doctorData = readLatestProviderDoctor(repoRoot);
+      if (doctorData) status.doctor = doctorData;
+      return status;
     }
   } catch {
     // Fall through to manual status check
   }
 
   // Fallback: read config/llm.json directly and check env vars
-  return getFallbackStatus();
+  const status = getFallbackStatus();
+  const repoRoot = process.cwd();
+  const doctorData = readLatestProviderDoctor(repoRoot);
+  if (doctorData) status.doctor = doctorData;
+  return status;
+}
+
+/** Read latest provider doctor result from artifacts/doctor/providers/<run_id>/provider_status.json. Redacted only. */
+function readLatestProviderDoctor(repoRoot: string): LLMStatusResponse["doctor"] | null {
+  const base = join(repoRoot, "artifacts", "doctor", "providers");
+  if (!existsSync(base)) return null;
+  let dirs: string[];
+  try {
+    dirs = readdirSync(base);
+  } catch {
+    return null;
+  }
+  if (dirs.length === 0) return null;
+  dirs.sort();
+  const latestRunId = dirs[dirs.length - 1];
+  const statusPath = join(base, latestRunId, "provider_status.json");
+  if (!existsSync(statusPath)) return null;
+  try {
+    const raw = readFileSync(statusPath, "utf-8");
+    const data = JSON.parse(raw) as {
+      timestamp?: string;
+      providers?: { openai?: { state: string; last_error_class: string | null }; mistral?: { state: string; last_error_class: string | null } };
+    };
+    const providers: NonNullable<LLMStatusResponse["doctor"]>["providers"] = {};
+    if (data.providers?.openai)
+      providers.openai = { state: data.providers.openai.state as "OK" | "DEGRADED" | "DOWN", last_error_class: data.providers.openai.last_error_class ?? null };
+    if (data.providers?.mistral)
+      providers.mistral = { state: data.providers.mistral.state as "OK" | "DEGRADED" | "DOWN", last_error_class: data.providers.mistral.last_error_class ?? null };
+    return {
+      last_timestamp: data.timestamp ?? null,
+      providers,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function getFallbackStatus(): LLMStatusResponse {
@@ -160,6 +214,17 @@ function getFallbackStatus(): LLMStatusResponse {
     configured: !!moonshotKey,
     status: moonshotEnabled && moonshotKey ? "active" : "disabled",
     fingerprint: moonshotKey ? maskKey(moonshotKey) : null,
+  });
+
+  // Mistral (review fallback)
+  const mistralKey = process.env.MISTRAL_API_KEY;
+  const hasReviewFallback = configData?.reviewFallback?.provider === "mistral";
+  providers.push({
+    name: "Mistral (Codestral)",
+    enabled: !!hasReviewFallback,
+    configured: !!mistralKey,
+    status: hasReviewFallback && mistralKey ? "active" : "disabled",
+    fingerprint: mistralKey ? maskKey(mistralKey) : null,
   });
 
   // Ollama

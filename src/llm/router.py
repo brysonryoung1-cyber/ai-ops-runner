@@ -27,7 +27,7 @@ from src.llm.mistral_provider import MistralProvider
 from src.llm.moonshot_provider import MoonshotProvider
 from src.llm.ollama_provider import OllamaProvider
 from src.llm.provider import BaseProvider, _log
-from src.llm.types import LLMConfig, LLMRequest, LLMResponse
+from src.llm.types import LLMConfig, LLMRequest, LLMResponse, ReviewFailClosedError
 from src.llm.budget import (
     BudgetConfig,
     estimate_cost,
@@ -42,6 +42,29 @@ _router_instance: ModelRouter | None = None
 # HTTP status codes that trigger review fallback (transient/quota errors)
 _REVIEW_FALLBACK_HTTP_CODES = {429, 500, 502, 503, 504}
 
+# Transient classification for artifacts and doctor (exact rules)
+TRANSIENT_QUOTA = "transient_quota"      # HTTP 429
+TRANSIENT_SERVER = "transient_server"    # HTTP 500-504
+TRANSIENT_NETWORK = "transient_network"  # connection/timeout
+NON_TRANSIENT = "non_transient"
+
+
+def _classify_transient(exc: RuntimeError) -> str:
+    """Classify provider error for fallback and artifacts.
+
+    Returns: transient_quota (429), transient_server (500-504),
+    transient_network (timeout/unreachable), or non_transient.
+    """
+    msg = str(exc).lower()
+    if "http 429" in msg:
+        return TRANSIENT_QUOTA
+    for code in (500, 502, 503, 504):
+        if f"http {code}" in msg:
+            return TRANSIENT_SERVER
+    if "timeout" in msg or "unreachable" in msg or "timed out" in msg:
+        return TRANSIENT_NETWORK
+    return NON_TRANSIENT
+
 
 def _is_transient_error(exc: RuntimeError) -> bool:
     """Check if a RuntimeError from a provider is a transient/quota error.
@@ -49,15 +72,7 @@ def _is_transient_error(exc: RuntimeError) -> bool:
     Returns True for HTTP 429, 5xx, timeout, and unreachable errors.
     These are the only errors that trigger the review fallback path.
     """
-    msg = str(exc).lower()
-    # HTTP status code checks
-    for code in _REVIEW_FALLBACK_HTTP_CODES:
-        if f"http {code}" in msg:
-            return True
-    # Timeout / unreachable
-    if "timeout" in msg or "unreachable" in msg or "timed out" in msg:
-        return True
-    return False
+    return _classify_transient(exc) != NON_TRANSIENT
 
 
 class ModelRouter:
@@ -347,19 +362,21 @@ class ModelRouter:
 
         # Try primary (OpenAI)
         primary_error: RuntimeError | None = None
+        primary_transient_class: str = NON_TRANSIENT
         try:
             response = primary_provider.generate_text(routed_request)
             return response
         except RuntimeError as exc:
             primary_error = exc
-            if not _is_transient_error(exc):
-                # Non-transient error (auth, config, etc.) -> fail-closed
+            primary_transient_class = _classify_transient(exc)
+            if primary_transient_class == NON_TRANSIENT:
+                # Auth, config, schema, etc. -> fail-closed immediately
                 raise
 
         # Primary failed with transient error -> try fallback
         _log(
-            f"Review primary (OpenAI) failed with transient error: "
-            f"{primary_error}. Trying fallback...",
+            f"Review primary (OpenAI) failed with transient error "
+            f"({primary_transient_class}). Trying fallback...",
             trace_id=request.trace_id,
         )
 
@@ -402,7 +419,8 @@ class ModelRouter:
 
         try:
             response = fallback_provider.generate_text(fb_request)
-            # Tag response with fallback provenance
+            # Tag response with fallback provenance and classification
+            response.primary_transient_class = primary_transient_class
             _log(
                 f"Review fallback ({fallback_provider.provider_name}/"
                 f"{fallback_model}) succeeded",
@@ -410,11 +428,17 @@ class ModelRouter:
             )
             return response
         except RuntimeError as fb_exc:
-            # Both failed -> fail-closed
-            raise RuntimeError(
+            # Both failed -> fail-closed with structured error for artifacts
+            from src.llm.provider import redact_for_log
+            primary_msg = redact_for_log(str(primary_error))
+            fallback_msg = redact_for_log(str(fb_exc))
+            raise ReviewFailClosedError(
                 f"Review FAILED (fail-closed): "
-                f"primary (OpenAI) error: {primary_error}; "
-                f"fallback ({fallback_provider.provider_name}) error: {fb_exc}"
+                f"primary (OpenAI) error: {primary_msg}; "
+                f"fallback ({fallback_provider.provider_name}) error: {fallback_msg}",
+                primary_error=primary_msg,
+                fallback_error=fallback_msg,
+                primary_transient_class=primary_transient_class,
             ) from fb_exc
 
     def get_all_status(self) -> list[dict[str, Any]]:

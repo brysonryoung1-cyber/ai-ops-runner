@@ -8,7 +8,7 @@
   },
   "reviewFallback": {
     "provider": "mistral",
-    "model": "codestral-2501"
+    "model": "codestral-2508"
   },
   "budget": {
     "maxUsdPerReview": 0.50,
@@ -16,7 +16,8 @@
     "pricing": {
       "gpt-4o-mini": { "inputPer1M": 0.15, "outputPer1M": 0.60 },
       "gpt-4o": { "inputPer1M": 2.50, "outputPer1M": 10.00 },
-      "codestral-2501": { "inputPer1M": 0.30, "outputPer1M": 0.90 }
+      "codestral-2501": { "inputPer1M": 0.30, "outputPer1M": 0.90 },
+      "codestral-2508": { "inputPer1M": 0.30, "outputPer1M": 0.90 }
     }
   },
   "reviewCaps": {
