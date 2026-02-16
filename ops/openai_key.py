@@ -15,7 +15,7 @@ Public API (importable):
   set_openai_api_key(key)         -> bool            -- store in best backend
   delete_openai_api_key()         -> bool            -- remove from all backends
   openai_key_status(masked=True)  -> str             -- "sk-…abcd" or "not configured"
-  openai_key_source()             -> str             -- "env" | "keychain" | "linux-file" | "none"
+  openai_key_source()             -> str             -- "env" | "keychain" | "openclaw-mount" | "linux-file" | "none"
 
 CLI subcommands:
   python3 openai_key.py status      -- show source (env/keychain) + masked key
@@ -55,6 +55,8 @@ ACCOUNT_NAME = "OPENAI_API_KEY"
 _OLD_SERVICE_NAME = "ai-ops-runner-openai"
 _OLD_ACCOUNT_NAME = "openai_api_key"
 LINUX_SECRET_PATH = "/etc/ai-ops-runner/secrets/openai_api_key"
+# Container mount on VPS: host /etc/ai-ops-runner/secrets → /run/openclaw_secrets (docker-compose)
+OPENCLAW_SECRETS_PATH = "/run/openclaw_secrets/openai_api_key"
 _KEYRING_TIMEOUT = 5  # seconds — prevents hang on locked Keychain dialogs
 
 # ---------------------------------------------------------------------------
@@ -216,7 +218,24 @@ def _delete_from_keyring() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Source 3: Linux secrets file
+# Source 3a: OpenClaw secrets mount (container: /run/openclaw_secrets on VPS)
+# ---------------------------------------------------------------------------
+
+
+def get_from_openclaw_secrets() -> "str | None":
+    """Read from /run/openclaw_secrets/openai_api_key (container mount on VPS)."""
+    if not os.path.isfile(OPENCLAW_SECRETS_PATH):
+        return None
+    try:
+        with open(OPENCLAW_SECRETS_PATH, "r") as fh:
+            val = fh.read().strip()
+        return val if val else None
+    except (PermissionError, OSError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Source 3b: Linux secrets file
 # ---------------------------------------------------------------------------
 
 
@@ -330,7 +349,7 @@ def _resolve_with_source() -> "tuple[str | None, str]":
     """Resolve key from all sources and return (key, source_label).
 
     Sources checked in priority order.  NEVER prompts interactively.
-    source_label is one of: "env", "keychain", "linux-file", "none".
+    source_label is one of: "env", "keychain", "openclaw-mount", "linux-file", "none".
     """
     val = get_from_env()
     if val:
@@ -339,6 +358,10 @@ def _resolve_with_source() -> "tuple[str | None, str]":
     val = get_from_keyring()
     if val:
         return val, "keychain"
+
+    val = get_from_openclaw_secrets()
+    if val:
+        return val, "openclaw-mount"
 
     val = get_from_linux_file()
     if val:
@@ -522,7 +545,7 @@ def openai_key_status(masked: bool = True) -> str:
 def openai_key_source() -> str:
     """Return the source label of the current key.
 
-    One of: 'env', 'keychain', 'linux-file', 'none'.
+    One of: 'env', 'keychain', 'openclaw-mount', 'linux-file', 'none'.
     """
     _val, src = _resolve_with_source()
     return src

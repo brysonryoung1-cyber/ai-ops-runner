@@ -15,7 +15,7 @@ Public API (importable):
   set_mistral_api_key(key)         -> bool           -- store in best backend
   delete_mistral_api_key()         -> bool          -- remove from all backends
   mistral_key_status(masked=True)   -> str           -- masked key or "not configured"
-  mistral_key_source()             -> str           -- "env" | "keychain" | "linux-file" | "none"
+  mistral_key_source()             -> str           -- "env" | "keychain" | "openclaw-mount" | "linux-file" | "none"
 
 CLI subcommands:
   python3 mistral_key.py status       -- show source + masked key
@@ -51,6 +51,8 @@ import urllib.request
 SERVICE_NAME = "ai-ops-runner"
 ACCOUNT_NAME = "MISTRAL_API_KEY"
 LINUX_SECRET_PATH = "/opt/ai-ops-runner/secrets/mistral_api_key"
+# Container mount on VPS: host /etc/ai-ops-runner/secrets → /run/openclaw_secrets (docker-compose)
+OPENCLAW_SECRETS_PATH = "/run/openclaw_secrets/mistral_api_key"
 _KEYRING_TIMEOUT = 5  # seconds
 
 # ---------------------------------------------------------------------------
@@ -151,6 +153,18 @@ def _delete_from_keyring() -> bool:
 # ---------------------------------------------------------------------------
 
 
+def get_from_openclaw_secrets() -> "str | None":
+    """Read from /run/openclaw_secrets/mistral_api_key (container mount on VPS)."""
+    if not os.path.isfile(OPENCLAW_SECRETS_PATH):
+        return None
+    try:
+        with open(OPENCLAW_SECRETS_PATH, "r") as fh:
+            val = fh.read().strip()
+        return val if val else None
+    except (PermissionError, OSError):
+        return None
+
+
 def get_from_linux_file() -> "str | None":
     """Read from /opt/ai-ops-runner/secrets/mistral_api_key (root-readable 0600)."""
     if not os.path.isfile(LINUX_SECRET_PATH):
@@ -207,13 +221,16 @@ def _delete_linux_file() -> bool:
 
 
 def _resolve_with_source() -> "tuple[str | None, str]":
-    """Resolve key from all sources. source_label: env, keychain, linux-file, none."""
+    """Resolve key from all sources. source_label: env, keychain, openclaw-mount, linux-file, none."""
     val = get_from_env()
     if val:
         return val, "env"
     val = get_from_keyring()
     if val:
         return val, "keychain"
+    val = get_from_openclaw_secrets()
+    if val:
+        return val, "openclaw-mount"
     val = get_from_linux_file()
     if val:
         return val, "linux-file"
@@ -361,7 +378,7 @@ def mistral_key_status(masked: bool = True) -> str:
 
 
 def mistral_key_source() -> str:
-    """Return the source label: 'env', 'keychain', 'linux-file', or 'none'."""
+    """Return the source label: 'env', 'keychain', 'openclaw-mount', 'linux-file', or 'none'."""
     _, src = _resolve_with_source()
     return src
 

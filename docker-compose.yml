@@ -12,6 +12,7 @@ x-runner-common: &runner-common
     - runner_work:/work:rw
     - ./configs:/app/configs:ro
     - /etc/ai-ops-runner/keys:/keys:ro
+    - /etc/ai-ops-runner/secrets:/run/openclaw_secrets:ro
   environment:
     DATABASE_URL: "postgresql://runner:runner@postgres:5432/runner"
     REDIS_URL: "redis://redis:6379/0"
