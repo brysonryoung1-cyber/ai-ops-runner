@@ -115,6 +115,44 @@ function getReviewEngineStatus(): ReviewEngine {
   };
 }
 
+function getLLMProvidersStatus(): AIProvider[] {
+  // Try to get full LLM router status (includes Moonshot, Ollama)
+  try {
+    const result = execSync(
+      `python3 -c "
+import sys, json
+sys.path.insert(0, '.')
+try:
+    from src.llm.router import get_router
+    router = get_router()
+    statuses = router.get_all_status()
+    print(json.dumps(statuses))
+except Exception as e:
+    print(json.dumps([]))
+"`,
+      {
+        cwd: process.cwd(),
+        timeout: 10000,
+        encoding: "utf-8",
+        env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+      }
+    );
+
+    const statuses = JSON.parse(result.trim());
+    if (Array.isArray(statuses) && statuses.length > 0) {
+      return statuses.map((s: any) => ({
+        name: s.name,
+        configured: s.configured,
+        fingerprint: s.fingerprint || null,
+        status: s.status === "active" ? "active" : s.status === "disabled" ? "inactive" : "unknown",
+      }));
+    }
+  } catch {
+    // Fall through to OpenAI-only
+  }
+  return [];
+}
+
 export async function GET(req: NextRequest) {
   const origin = req.headers.get("origin");
   const secFetchSite = req.headers.get("sec-fetch-site");
@@ -122,7 +160,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
   }
 
-  const providers: AIProvider[] = [getOpenAIStatus()];
+  // Get providers from LLM router (includes all configured providers)
+  let providers: AIProvider[] = getLLMProvidersStatus();
+  if (providers.length === 0) {
+    // Fallback: just show OpenAI status directly
+    providers = [getOpenAIStatus()];
+  }
   const reviewEngine = getReviewEngineStatus();
 
   return NextResponse.json({

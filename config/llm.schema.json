@@ -1,0 +1,97 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OpenClaw LLM Provider Configuration",
+  "description": "Configuration for LLM providers and routing. Review gate is always OpenAI Codex (fail-closed).",
+  "type": "object",
+  "required": ["enabledProviders", "defaults", "providers"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "enabledProviders": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["openai", "moonshot", "ollama"]
+      },
+      "contains": { "const": "openai" },
+      "description": "List of enabled providers. 'openai' is always required (review gate)."
+    },
+    "defaults": {
+      "type": "object",
+      "required": ["general", "review"],
+      "additionalProperties": false,
+      "properties": {
+        "general": { "$ref": "#/definitions/purposeRoute" },
+        "review": {
+          "type": "object",
+          "required": ["provider", "model"],
+          "additionalProperties": false,
+          "properties": {
+            "provider": { "type": "string", "const": "openai", "description": "Review MUST use OpenAI (fail-closed, non-negotiable)" },
+            "model": { "type": "string", "minLength": 1 }
+          }
+        },
+        "vision": { "$ref": "#/definitions/purposeRoute" }
+      },
+      "description": "Default provider + model for each purpose. review.provider MUST be 'openai'."
+    },
+    "providers": {
+      "type": "object",
+      "required": ["openai"],
+      "additionalProperties": false,
+      "properties": {
+        "openai": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "apiBase": { "type": "string", "format": "uri" },
+            "keySource": { "type": "string" },
+            "keyEnv": { "type": "string" },
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "moonshot": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "apiBase": { "type": "string", "format": "uri" },
+            "keyEnv": { "type": "string" },
+            "keySource": { "type": "string" },
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "ollama": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "apiBase": {
+              "type": "string",
+              "pattern": "^https?://(127\\.0\\.0\\.1|localhost|\\[::1\\])",
+              "description": "MUST be localhost-only (private-only invariant)"
+            },
+            "keyEnv": { "type": "string" },
+            "keySource": { "type": "string" },
+            "enabled": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "purposeRoute": {
+      "type": "object",
+      "required": ["provider", "model"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["openai", "moonshot", "ollama"]
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

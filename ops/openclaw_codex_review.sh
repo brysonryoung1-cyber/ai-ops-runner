@@ -99,19 +99,26 @@ elif [ "$BUNDLE_RC" -ne 0 ]; then
   exit 1
 fi
 
-# --- Call OpenAI API ---
+# --- Call OpenAI API via LLM Router ---
 VERDICT_FILE="$ARTIFACTS_DIR/CODEX_VERDICT.json"
 
-echo "==> Submitting to OpenAI API for review..."
+echo "==> Submitting to OpenAI API for review (via LLM router)..."
 
-# Pass bundle via file reference (not argv) to avoid ARG_MAX on large diffs
-python3 - "$VERDICT_FILE" "$BUNDLE_FILE" <<'PYEOF'
+# Use the LLM router (purpose=review is hard-pinned to OpenAI, fail-closed).
+# Falls back to direct API call if router module is not available.
+REVIEW_RC=0
+if python3 -c "from src.llm.review_gate import run_review" 2>/dev/null; then
+  # Router path: uses src.llm.review_gate (purpose=review -> OpenAI, always)
+  python3 -m src.llm.review_gate "$VERDICT_FILE" "$BUNDLE_FILE" || REVIEW_RC=$?
+else
+  echo "  (LLM router not available, using direct OpenAI API call)" >&2
+  # Fallback: direct OpenAI API call (legacy path, identical behavior)
+  python3 - "$VERDICT_FILE" "$BUNDLE_FILE" <<'PYEOF' || REVIEW_RC=$?
 import json, sys, os
 
 verdict_file = sys.argv[1]
 bundle_file = sys.argv[2]
 
-# Read system prompt from inline string (small, safe for embedding)
 system_prompt = """You are a security-focused code reviewer for the ai-ops-runner repository (OpenClaw control plane).
 
 Review the diff below and output ONLY valid JSON matching this schema:
@@ -138,7 +145,6 @@ BLOCK only for:
 
 If no blocking issues, verdict MUST be "APPROVED"."""
 
-# Read bundle from file (never via argv — avoids ARG_MAX and process argv exposure)
 with open(bundle_file) as f:
     bundle = f.read()
 
@@ -147,7 +153,6 @@ if not api_key:
     print("ERROR: OPENAI_API_KEY not set", file=sys.stderr)
     sys.exit(1)
 
-# Use urllib to avoid external dependency
 import urllib.request
 import urllib.error
 
@@ -184,18 +189,15 @@ except Exception as e:
     print(f"ERROR: OpenAI API call failed: {e}", file=sys.stderr)
     sys.exit(1)
 
-# Extract verdict from response
 try:
     content = result["choices"][0]["message"]["content"]
     verdict = json.loads(content)
 except (KeyError, IndexError, json.JSONDecodeError) as e:
     print(f"ERROR: Failed to parse API response: {e}", file=sys.stderr)
-    # Save raw response for debugging
     with open(verdict_file + ".raw", "w") as f:
         json.dump(result, f, indent=2)
     sys.exit(1)
 
-# Validate required fields
 required = ["verdict", "blockers", "non_blocking"]
 for key in required:
     if key not in verdict:
@@ -206,7 +208,6 @@ if verdict["verdict"] not in ["APPROVED", "BLOCKED"]:
     print(f"ERROR: Invalid verdict value: {verdict['verdict']}", file=sys.stderr)
     sys.exit(1)
 
-# Add metadata
 verdict["meta"] = {
     "model": model,
     "timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z",
@@ -218,6 +219,12 @@ with open(verdict_file, "w") as f:
 
 print(verdict["verdict"])
 PYEOF
+fi
+
+if [ "$REVIEW_RC" -ne 0 ]; then
+  echo "ERROR: Review submission failed (rc=$REVIEW_RC)" >&2
+  exit 1
+fi
 
 if [ ! -f "$VERDICT_FILE" ]; then
   echo "ERROR: No verdict produced" >&2

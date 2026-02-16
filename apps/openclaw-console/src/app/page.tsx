@@ -14,7 +14,7 @@ interface AIProvider {
   name: string;
   configured: boolean;
   fingerprint: string | null;
-  status: "active" | "inactive" | "unknown";
+  status: "active" | "inactive" | "unknown" | "disabled";
 }
 
 interface ReviewEngine {
@@ -26,6 +26,33 @@ interface ReviewEngine {
 interface AIStatus {
   providers: AIProvider[];
   review_engine: ReviewEngine;
+}
+
+// ── LLM Status Types ────────────────────────────────────────────
+
+interface LLMProviderStatus {
+  name: string;
+  enabled: boolean;
+  configured: boolean;
+  status: string;
+  fingerprint: string | null;
+  api_base?: string;
+  review_model?: string;
+}
+
+interface LLMStatus {
+  ok: boolean;
+  providers: LLMProviderStatus[];
+  router: {
+    review_provider: string;
+    review_model: string;
+    review_gate: string;
+  };
+  config: {
+    valid: boolean;
+    path: string;
+    error: string | null;
+  };
 }
 
 function deriveStatus(result?: ExecResult, loading?: boolean): CardStatus {
@@ -89,6 +116,7 @@ export default function OverviewPage() {
   const [connected, setConnected] = useState<boolean | null>(null);
   const [connError, setConnError] = useState<string | null>(null);
   const [aiStatus, setAiStatus] = useState<AIStatus | null>(null);
+  const [llmStatus, setLlmStatus] = useState<LLMStatus | null>(null);
 
   // Check connectivity on mount
   useEffect(() => {
@@ -116,6 +144,18 @@ export default function OverviewPage() {
       }
     } catch {
       // Non-critical; AI status panel just won't render
+    }
+    // Also fetch full LLM status
+    try {
+      const headers: Record<string, string> = {};
+      if (token) headers["X-OpenClaw-Token"] = token;
+      const res = await fetch("/api/llm/status", { headers });
+      const data = await res.json();
+      if (data.ok) {
+        setLlmStatus(data);
+      }
+    } catch {
+      // Non-critical; LLM panel just won't render
     }
   }, [token]);
 
@@ -362,6 +402,104 @@ export default function OverviewPage() {
               {/* Security note */}
               <p className="text-[10px] text-apple-muted mt-3 pt-3 border-t border-apple-border">
                 Keys are never displayed. Only masked fingerprints are shown.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* LLM Providers Panel */}
+      {llmStatus && (
+        <div className="mt-6">
+          <div className="bg-apple-card rounded-apple border border-apple-border shadow-apple overflow-hidden">
+            <div className="px-5 py-3 bg-gray-50 border-b border-apple-border flex items-center justify-between">
+              <span className="text-sm font-semibold text-apple-text">
+                LLM Providers
+              </span>
+              <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                llmStatus.config.valid
+                  ? "bg-green-100 text-green-700"
+                  : "bg-red-100 text-red-700"
+              }`}>
+                {llmStatus.config.valid ? "Config Valid" : "Config Error"}
+              </span>
+            </div>
+            <div className="p-5">
+              {/* Provider rows */}
+              <div className="space-y-3">
+                {llmStatus.providers.map((provider) => (
+                  <div key={provider.name} className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span
+                        className={`w-2.5 h-2.5 rounded-full ${
+                          provider.status === "active"
+                            ? "bg-apple-green"
+                            : provider.status === "disabled"
+                              ? "bg-gray-300"
+                              : provider.status === "inactive"
+                                ? "bg-apple-red"
+                                : "bg-apple-orange"
+                        }`}
+                      />
+                      <div>
+                        <p className="text-sm font-medium text-apple-text">
+                          {provider.name}
+                        </p>
+                        <p className="text-[10px] text-apple-muted">
+                          {provider.enabled
+                            ? provider.configured
+                              ? `Enabled · ${provider.fingerprint || "configured"}`
+                              : "Enabled · Not configured"
+                            : "Disabled"}
+                        </p>
+                      </div>
+                    </div>
+                    <span
+                      className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                        provider.status === "active"
+                          ? "bg-green-100 text-green-700"
+                          : provider.status === "disabled"
+                            ? "bg-gray-100 text-gray-500"
+                            : provider.status === "inactive"
+                              ? "bg-red-100 text-red-700"
+                              : "bg-yellow-100 text-yellow-700"
+                      }`}
+                    >
+                      {provider.enabled ? (provider.configured ? "Active" : "No Key") : "Disabled"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Router info */}
+              <div className="mt-4 pt-4 border-t border-apple-border">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-semibold text-apple-muted uppercase tracking-wider">
+                      Review Gate
+                    </p>
+                    <p className="text-sm text-apple-text mt-0.5">
+                      {llmStatus.router.review_provider} · {llmStatus.router.review_model}
+                    </p>
+                  </div>
+                  <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                    {llmStatus.router.review_gate}
+                  </span>
+                </div>
+              </div>
+
+              {/* Config error */}
+              {llmStatus.config.error && (
+                <div className="mt-3 p-2 rounded bg-red-50 border border-red-200">
+                  <p className="text-[10px] text-red-600">
+                    {llmStatus.config.error}
+                  </p>
+                </div>
+              )}
+
+              {/* Security note */}
+              <p className="text-[10px] text-apple-muted mt-3 pt-3 border-t border-apple-border">
+                Review gate always uses OpenAI Codex (fail-closed). Keys are never displayed — only masked fingerprints.
               </p>
             </div>
           </div>

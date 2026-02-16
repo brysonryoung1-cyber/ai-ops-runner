@@ -22,7 +22,8 @@
 - **Outbound notifications**: Pushover-first + SMS; rate-limited alerts from guard/doctor/deploy/nightly/SIZE_CAP
 - **One-command heal**: `ops/openclaw_heal.sh` — apply + verify + evidence bundle
 - **Expanded doctor**: 9 checks — Docker port audit, disk pressure, log growth, key health (fingerprint), console bind, guard timer health, JSON output
-- **Automated review**: `ops/openclaw_codex_review.sh` — OpenAI API diff-only review with security gates
+- **Automated review**: `ops/openclaw_codex_review.sh` — OpenAI API diff-only review with security gates (now via LLM router)
+- **LLM Provider Abstraction**: `src/llm/` — provider interface + fail-closed router. OpenAI (always), Moonshot (optional), Ollama (optional). Review gate always OpenAI Codex. Config: `config/llm.json`.
 - **Supply-chain decision**: openclaw.ai is open-source (MIT) but NOT adopted for ops — see `docs/OPENCLAW_SUPPLY_CHAIN.md`
 
 Docker smoke test passing. Full ops/review/ship framework active. ORB integration jobs implemented and tested. VPS deployment automation (private-only, Tailscale-only). openclaw_doctor uses tailnet-aware port audit. OpenClaw safety permanently locked: continuous VPS guard (10 min) with safe auto-remediation. **Soma Kajabi Library Ownership** workflow active with CLI + console + SMS. See `docs/SOMA_KAJABI_RUNBOOK.md`.
@@ -42,6 +43,8 @@ Docker smoke test passing. Full ops/review/ship framework active. ORB integratio
 | **Project Registry** | 4 projects (fail-closed) | `config/projects.json` |
 | **Run Recorder** | Per-action recording | `artifacts/runs/<run_id>/run.json` |
 | **AI Status** | Provider + review engine | `GET /api/ai-status` |
+| **LLM Router** | Fail-closed, review=OpenAI | `src/llm/router.py`, `config/llm.json` |
+| **LLM Status** | All providers + config health | `GET /api/llm/status` |
 | Notifications | Pushover + SMS (outbound-only) | `ops/openclaw_notify.sh`, `ops/openclaw_notify_sms.sh` |
 | Heal | One-command entrypoint | `ops/openclaw_heal.sh` |
 | **Soma Kajabi Sync** | Active (on-demand) | `services/soma_kajabi_sync/` |
@@ -98,7 +101,119 @@ The following are **out of scope** for this repository:
 - **Windows VPS** configuration and management
 - **openclaw.ai assistant** — NOT installed on the ops plane. See `docs/OPENCLAW_SUPPLY_CHAIN.md` for rationale. "OpenClaw" in this project = private ops runner + doctor/guard + console only.
 
+## LLM Providers & Routing
+
+### Overview
+
+OpenClaw uses a provider abstraction layer (`src/llm/`) with a fail-closed model router. The router selects provider + model by "purpose" (review, general, vision) using `config/llm.json`.
+
+**Review gate invariant (NON-NEGOTIABLE):** `purpose=review` ALWAYS resolves to `OpenAIProvider` + `CODEX_REVIEW_MODEL`. No fallback, no override, no config bypass. Missing OpenAI key → fail-closed with clear error message.
+
+### Available Providers
+
+| Provider | Status | Key Source | Purpose |
+|----------|--------|------------|---------|
+| **OpenAI** | Always enabled | env → Keychain → Linux file (existing hardened flow) | Review (hard-pinned), general, vision |
+| **Moonshot (Kimi)** | Disabled by default | `MOONSHOT_API_KEY` env var | General tasks only (NEVER review) |
+| **Ollama** | Disabled by default | None (local, no key needed) | General tasks only (NEVER review) |
+
+### How Routing Works
+
+1. `ModelRouter.resolve(purpose)` selects provider + model
+2. For `purpose=review`: always returns `OpenAIProvider` + `CODEX_REVIEW_MODEL` (env `OPENCLAW_REVIEW_MODEL`, default `gpt-4o`)
+3. For `purpose=general|vision`: checks `config/llm.json` defaults, then enabled providers; falls back to OpenAI
+4. Disabled providers are never called
+5. Unknown purposes fall back to OpenAI
+
+### Config: `config/llm.json`
+
+- Schema: `config/llm.schema.json` (strict, additionalProperties: false)
+- `enabledProviders`: MUST include `"openai"` (validated at startup)
+- `defaults.review.provider`: MUST be `"openai"` (enforced in schema + code)
+- `providers.ollama.apiBase`: MUST be localhost (127.0.0.1/::1) — no public Ollama endpoints
+- Invalid config → fail-closed with clear error message listing all violations
+
+### Enabling Kimi (Moonshot) Safely
+
+Moonshot is **disabled by default** and NEVER used for review actions.
+
+To enable for non-review tasks:
+1. Set `MOONSHOT_API_KEY` in your environment (or via the existing secret store)
+2. Edit `config/llm.json`: add `"moonshot"` to `enabledProviders`
+3. Optionally set `defaults.general.provider` to `"moonshot"` and `defaults.general.model` to a Moonshot model (e.g., `"moonshot-v1-8k"`)
+4. Verify via HQ: `GET /api/llm/status` should show Moonshot as "active"
+5. Review gate remains OpenAI (confirmed by the `router.review_gate: "fail-closed"` field)
+
+### Ollama Provider
+
+Ollama is **disabled by default** and runs **local-only** (no public port exposure).
+
+To enable:
+1. Install and run Ollama locally (`ollama serve` on 127.0.0.1:11434)
+2. Edit `config/llm.json`: add `"ollama"` to `enabledProviders`
+3. Optionally route general tasks to Ollama via `defaults.general`
+4. Ollama API base is validated to be localhost-only (schema + code); public URLs are rejected
+
+### HQ Visibility
+
+- `GET /api/llm/status` — full provider status (enabled/disabled, configured, masked fingerprint, router info, config validation)
+- `GET /api/ai-status` — backward-compatible (now includes all LLM providers)
+- Overview page "LLM Providers" panel — status lights, review gate badge, config health
+
+### Review Gate Statement
+
+**The review gate is ALWAYS OpenAI Codex and fail-closed.** This is enforced at three levels:
+1. **Config schema**: `defaults.review.provider` is constrained to `"openai"` (const in JSON Schema)
+2. **Router code**: `ModelRouter.resolve("review")` hard-returns OpenAI regardless of config
+3. **Provider check**: If OpenAI key is missing, `resolve("review")` raises `RuntimeError` (non-zero exit)
+
+No Moonshot, Ollama, or any other provider can be used for review. This is by design and MUST NOT be changed.
+
+### Architecture
+
+```
+src/llm/
+├── __init__.py            # Package exports
+├── types.py               # LLMConfig, LLMRequest, LLMResponse, ProviderStatus
+├── provider.py            # BaseProvider ABC + redact_for_log
+├── openai_provider.py     # OpenAIProvider (hard-pinned for review)
+├── moonshot_provider.py   # MoonshotProvider (optional, disabled by default)
+├── ollama_provider.py     # OllamaProvider (local-only, disabled by default)
+├── router.py              # ModelRouter (purpose-based routing, fail-closed)
+├── config.py              # Config loader + strict schema validation
+└── review_gate.py         # CLI entrypoint for review pipeline
+
+config/
+├── llm.json               # LLM provider config (source of truth)
+└── llm.schema.json        # JSON Schema (strict validation)
+```
+
+### Tests
+
+56 hermetic tests in `ops/tests/test_llm_router.py`:
+- Review pinning (4): review always selects OpenAI even with moonshot/ollama defaults
+- Fail-closed (3): missing key → RuntimeError with clear instructions
+- Config validation (14): good config passes, bad configs rejected (unknown fields, missing fields, wrong provider, non-localhost ollama)
+- Secret redaction (9): keys never in status output, errors redacted, stderr clean
+- Provider tests (8): instantiation, configuration, localhost enforcement, vision stub
+- Router behavior (7): routing logic, fallback, idempotency, init error capture
+- Artifact scan (3): simulated outputs scanned for secret patterns
+- Type tests (3): construction and serialization
+
 ## Recent Changes
+
+- **LLM Provider Abstraction + Fail-Closed Router** (2026-02-16):
+  - **Provider interface**: `BaseProvider` ABC with `generate_text()`, `is_configured()`, `health_check()`, `get_status()`
+  - **OpenAIProvider**: Uses existing hardened key-loading (env → Keychain → Linux file). Hard-pinned for review.
+  - **MoonshotProvider**: Optional Kimi hosted API (disabled by default). OpenAI-compatible chat completions.
+  - **OllamaProvider**: Optional local LLM (disabled by default). Localhost-only enforcement (no public ports).
+  - **ModelRouter**: Purpose-based routing. `purpose=review` → OpenAI always. `purpose=general` → config-driven with OpenAI fallback.
+  - **Config**: `config/llm.json` + `config/llm.schema.json` — strict validation, fail-closed. `enabledProviders` must include `openai`. `defaults.review.provider` must be `openai`.
+  - **Review pipeline**: `openclaw_codex_review.sh` now routes through `src.llm.review_gate` (with fallback to legacy direct API call)
+  - **HQ status**: `GET /api/llm/status` — all providers, router info, config health. Overview page LLM Providers panel with status lights.
+  - **Secret handling**: All providers use `redact_for_log()`. Status endpoints mask keys. No secrets in logs/artifacts.
+  - **Tests**: 56 hermetic tests — review pinning, fail-closed, config validation, secret scans, provider tests, router behavior
+  - **Docs**: LLM Providers & Routing section in handoff (this section)
 
 - **OpenClaw HQ — unified control panel** (2026-02-16):
   - **Console → HQ**: Renamed "OpenClaw Console" to "OpenClaw HQ" across UI, layout, sidebar
@@ -108,7 +223,7 @@ The following are **out of scope** for this repository:
   - **Runs page**: `/runs` — timeline/table of runs across all projects. Click into a run to view status, metadata, error summary, artifacts. Filter by project (`?project=ID`).
   - **AI Connections panel**: Overview page shows configured AI providers (OpenAI), masked fingerprints (NEVER raw keys), review engine mode + last review time, gate status (fail-closed)
   - **Sidebar expanded**: 6 sections: Overview, Projects, Runs, Logs, Artifacts, Actions
-  - **New API routes**: `GET /api/projects` (registry + last runs), `GET /api/runs` (list + detail), `GET /api/ai-status` (providers + review engine)
+  - **New API routes**: `GET /api/projects` (registry + last runs), `GET /api/runs` (list + detail), `GET /api/ai-status` (providers + review engine), `GET /api/llm/status` (all LLM providers + router + config health)
   - **Security preserved**: Token auth, CSRF, allowlist-only, tailnet-only, no secret leakage, fail-closed
   - **Self-tests**: `ops/tests/openclaw_hq_selftest.sh` — 35 assertions covering schema validation, run recorder, API routes, UI pages, security invariants
   - **Docs**: `docs/OPENCLAW_HQ.md` — full HQ documentation
@@ -311,6 +426,17 @@ The following are **out of scope** for this repository:
 ## Architecture
 
 ```
+src/llm/                         # LLM Provider abstraction + fail-closed router
+├── __init__.py                  # Package exports
+├── types.py                     # LLMConfig, LLMRequest, LLMResponse, ProviderStatus
+├── provider.py                  # BaseProvider ABC + redact_for_log()
+├── openai_provider.py           # OpenAI (hard-pinned for review, existing key flow)
+├── moonshot_provider.py         # Moonshot/Kimi (optional, disabled by default)
+├── ollama_provider.py           # Ollama local (optional, localhost-only)
+├── router.py                    # ModelRouter (purpose-based, review=OpenAI always)
+├── config.py                    # Config loader + strict schema validation
+└── review_gate.py               # CLI entrypoint for review pipeline
+
 ops/
 ├── openai_key.py             # Secure OpenAI key manager (get/set/delete/status; never prints raw key)
 ├── ensure_openai_key.sh      # Shell wrapper — source before Codex calls
@@ -363,8 +489,15 @@ ops/
     ├── openclaw_vps_deploy_selftest.sh
     ├── openai_key_selftest.sh
     ├── test_openai_key.py
+    ├── test_llm_router.py           # LLM provider + router tests (56 tests)
     ├── soma_smoke_selftest.sh        # Soma workflow smoke selftest
     └── openclaw_sms_selftest.sh      # SMS integration selftest
+
+config/
+├── llm.json                  # LLM provider config (source of truth)
+├── llm.schema.json           # LLM config JSON Schema (strict validation)
+├── projects.json             # Project registry (HQ)
+└── projects.schema.json      # Project registry schema
 
 configs/
 ├── job_allowlist.yaml        # Allowlisted job types (incl. ORB jobs)

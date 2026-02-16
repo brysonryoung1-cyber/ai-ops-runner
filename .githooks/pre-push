@@ -113,12 +113,27 @@ if not isinstance(meta, dict):
 if meta.get("simulated") is not False:
     errors.append("meta.simulated is not false — simulated verdicts NEVER satisfy the gate")
 
-# 4. codex_cli must be a non-null object with non-empty version
+# 4. Provenance check: accept either codex_cli or llm_router provenance
+#    - codex_cli: legacy path (codex exec CLI)
+#    - provider+routed_via: new LLM router path (OpenAI API via src.llm)
 codex_cli = meta.get("codex_cli")
-if not isinstance(codex_cli, dict):
-    errors.append("meta.codex_cli missing or null — real Codex provenance required")
-elif not codex_cli.get("version"):
-    errors.append("meta.codex_cli.version is empty — real Codex provenance required")
+routed_via = meta.get("routed_via", "")
+provider = meta.get("provider", "")
+
+if routed_via == "llm_router" and provider:
+    # LLM router path: provider must be non-empty (review is always openai)
+    pass  # provenance verified
+elif isinstance(codex_cli, dict) and codex_cli.get("version"):
+    # Legacy codex CLI path: version must be non-empty
+    pass  # provenance verified
+elif meta.get("type") == "codex_diff_review" and meta.get("model"):
+    # Direct OpenAI API path (openclaw_codex_review.sh): model must be non-empty
+    pass  # provenance verified
+else:
+    errors.append(
+        "No valid provenance: need codex_cli.version, or "
+        "routed_via=llm_router+provider, or type=codex_diff_review+model"
+    )
 
 # 5. Range check
 meta_since = meta.get("since_sha", "")
