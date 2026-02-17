@@ -157,9 +157,9 @@ elif [ -z "$ADMIN_TOKEN" ]; then
   FAILURES=$((FAILURES + 1))
   RESULTS="${RESULTS}doctor_exec=no_token "
 else
-  # Doctor can take ~30–45s; use 60s request timeout; on 409, poll /api/runs for completion (90s)
+  # Doctor can take ~30–45s; use 90s request timeout; on 409, poll /api/runs for completion (90s)
   DOCTOR_TMP="$(mktemp)"
-  HTTP_CODE="$(curl -s -o "$DOCTOR_TMP" -w "%{http_code}" --connect-timeout 5 --max-time 60 \
+  HTTP_CODE="$(curl -s -o "$DOCTOR_TMP" -w "%{http_code}" --connect-timeout 5 --max-time 90 \
     -X POST "$BASE_URL/api/exec" \
     -H "Content-Type: application/json" \
     -H "x-openclaw-token: $ADMIN_TOKEN" \
