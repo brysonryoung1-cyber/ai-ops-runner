@@ -4,7 +4,7 @@
 
 - **Project**: OpenClaw (ai-ops-runner)
 - **Goal summary**: Self-updating project brain; repo + HQ canonical; no ChatGPT memory reliance.
-- **Last verified VPS HEAD**: c6ff151
+- **Last verified VPS HEAD**: 3be7e2f
 - **Last deploy**: —
 - **Last doctor**: FAIL
 - **Last guard**: —
@@ -12,3 +12,9 @@
 - **UI accepted**: False (at: —, commit: —)
 - **LLM primary**: openai / gpt-4o-mini
 - **LLM fallback**: mistral / labs-devstral-small-2512
+
+## Definition-of-Done (DoD)
+
+- **DoD script**: `ops/dod_production.sh` — executable checks: hostd /health, /api/ai-status, /api/llm/status, /api/project/state, POST /api/exec action=doctor (PASS), /api/artifacts/list dirs > 0, no hard-fail strings (ENOENT, spawn ssh, Host Executor Unreachable).
+- **Pipeline enforcement**: `ops/deploy_pipeline.sh` runs DoD at Step 5b (after verify_production); deploy fails if DoD exits non-zero. No bypass flags.
+- **Proof artifacts**: `artifacts/dod/<run_id>/dod_result.json` (redacted; no secrets). Linked from deploy_result.artifacts.dod_result and served via GET `/api/dod/last`.

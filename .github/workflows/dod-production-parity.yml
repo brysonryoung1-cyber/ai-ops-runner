@@ -1,0 +1,53 @@
+# Production-parity CI: run Definition-of-Done against localhost (no Tailscale).
+# Catches: ssh spawning reintroduction, console→hostd unreachable, missing artifacts mount.
+name: DoD production parity
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  dod-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up admin token
+        run: |
+          sudo mkdir -p /etc/ai-ops-runner/secrets
+          echo -n "ci-dod-admin-token" | sudo tee /etc/ai-ops-runner/secrets/openclaw_admin_token
+
+      - name: Ensure artifacts dir has at least one top-level dir (DoD requires dirs length > 0)
+        run: mkdir -p artifacts/state/ci
+
+      - name: Start hostd (background)
+        run: |
+          cd $GITHUB_WORKSPACE
+          export OPENCLAW_REPO_ROOT=$GITHUB_WORKSPACE
+          python3 ops/openclaw_hostd.py &
+          sleep 2
+          curl -sf --connect-timeout 2 http://127.0.0.1:8877/health || { echo "hostd failed to start"; exit 1; }
+
+      - name: Start Docker stack + console
+        env:
+          OPENCLAW_ADMIN_TOKEN: "ci-dod-admin-token"
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.console.yml up -d --build
+
+      - name: Wait for console
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf --connect-timeout 2 http://127.0.0.1:8787/api/ai-status >/dev/null && break
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:8787/api/ai-status || exit 1
+
+      - name: Run Definition-of-Done (DoD)
+        env:
+          OPENCLAW_VERIFY_BASE_URL: "http://127.0.0.1:8787"
+          OPENCLAW_ADMIN_TOKEN: "ci-dod-admin-token"
+          OPENCLAW_DOD_CI: "1"
+        run: ./ops/dod_production.sh

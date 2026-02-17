@@ -43,109 +43,115 @@ VERSION = "1.0.0"
 HOST = "127.0.0.1"
 PORT = 8877
 TOKEN_PATH = "/etc/ai-ops-runner/secrets/openclaw_admin_token"
-ROOT_DIR = "/opt/ai-ops-runner"
+ROOT_DIR = os.environ.get("OPENCLAW_REPO_ROOT", "/opt/ai-ops-runner")
 ARTIFACTS_HOSTD = "artifacts/hostd"
 MAX_STDOUT_BYTES = 2 * 1024 * 1024
 MAX_STDERR_BYTES = 512 * 1024
 
-ALLOWLIST = {
-    "deploy_and_verify": {
-        "cmd": ["bash", "-c", "cd /opt/ai-ops-runner && ./ops/deploy_pipeline.sh"],
-        "timeout_sec": 900,
-    },
-    "doctor": {
-        "cmd": ["bash", "-c", "cd /opt/ai-ops-runner && ./ops/openclaw_doctor.sh"],
-        "timeout_sec": 120,
-    },
-    "apply": {
-        "cmd": ["bash", "-c", "cd /opt/ai-ops-runner && ./ops/openclaw_apply_remote.sh"],
-        "timeout_sec": 120,
-    },
-    "port_audit": {
-        "cmd": ["bash", "-c", "cd /opt/ai-ops-runner && ./ops/show_port_audit.sh"],
-        "timeout_sec": 60,
-    },
-    "tail_guard_log": {
-        "cmd": [
-            "bash",
-            "-c",
-            "journalctl -u openclaw-guard.service -n 200 --no-pager",
-        ],
-        "timeout_sec": 30,
-    },
-    "timer": {
-        "cmd": ["systemctl", "status", "openclaw-guard.timer", "--no-pager"],
-        "timeout_sec": 10,
-    },
-    "guard": {
-        "cmd": ["bash", "-c", "cd /opt/ai-ops-runner && sudo ./ops/openclaw_install_guard.sh"],
-        "timeout_sec": 30,
-    },
-    "llm_doctor": {
-        "cmd": ["bash", "-c", "cd /opt/ai-ops-runner && python3 -m src.llm.doctor"],
-        "timeout_sec": 30,
-    },
-    "soma_snapshot_home": {
-        "cmd": [
-            "bash",
-            "-c",
-            'cd /opt/ai-ops-runner && python3 -m services.soma_kajabi_sync.snapshot --product "Home User Library"',
-        ],
-        "timeout_sec": 120,
-    },
-    "soma_snapshot_practitioner": {
-        "cmd": [
-            "bash",
-            "-c",
-            'cd /opt/ai-ops-runner && python3 -m services.soma_kajabi_sync.snapshot --product "Practitioner Library"',
-        ],
-        "timeout_sec": 120,
-    },
-    "soma_harvest": {
-        "cmd": ["bash", "-c", "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi_sync.harvest"],
-        "timeout_sec": 180,
-    },
-    "soma_mirror": {
-        "cmd": [
-            "bash",
-            "-c",
-            "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi_sync.mirror --dry-run",
-        ],
-        "timeout_sec": 60,
-    },
-    "soma_status": {
-        "cmd": [
-            "bash",
-            "-c",
-            "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi_sync.sms status",
-        ],
-        "timeout_sec": 15,
-    },
-    "soma_last_errors": {
-        "cmd": [
-            "bash",
-            "-c",
-            'cd /opt/ai-ops-runner && python3 -c "from services.soma_kajabi_sync.sms import get_last_errors; errs=get_last_errors(5); print(chr(10).join(f\\"{e[\'timestamp\'][:16]}: {e[\'message\']}\\" for e in errs) if errs else \'No recent errors.\')"',
-        ],
-        "timeout_sec": 10,
-    },
-    "sms_status": {
-        "cmd": [
-            "bash",
-            "-c",
-            "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi_sync.sms test",
-        ],
-        "timeout_sec": 15,
-    },
-    "artifacts": {
-        "cmd": [
-            "bash",
-            "-c",
-            "ls -1dt /opt/ai-ops-runner/artifacts/* 2>/dev/null | head -n 15 && echo '---' && du -sh /opt/ai-ops-runner/artifacts/* 2>/dev/null | sort -h | tail -n 15",
-        ],
-        "timeout_sec": 10,
-    },
-}
+
+def _allowlist() -> dict:
+    """Build allowlist with ROOT_DIR so CI can set OPENCLAW_REPO_ROOT."""
+    return {
+        "deploy_and_verify": {
+            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/deploy_pipeline.sh"],
+            "timeout_sec": 900,
+        },
+        "doctor": {
+            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/openclaw_doctor.sh"],
+            "timeout_sec": 120,
+        },
+        "apply": {
+            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/openclaw_apply_remote.sh"],
+            "timeout_sec": 120,
+        },
+        "port_audit": {
+            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/show_port_audit.sh"],
+            "timeout_sec": 60,
+        },
+        "tail_guard_log": {
+            "cmd": [
+                "bash",
+                "-c",
+                "journalctl -u openclaw-guard.service -n 200 --no-pager",
+            ],
+            "timeout_sec": 30,
+        },
+        "timer": {
+            "cmd": ["systemctl", "status", "openclaw-guard.timer", "--no-pager"],
+            "timeout_sec": 10,
+        },
+        "guard": {
+            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && sudo ./ops/openclaw_install_guard.sh"],
+            "timeout_sec": 30,
+        },
+        "llm_doctor": {
+            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m src.llm.doctor"],
+            "timeout_sec": 30,
+        },
+        "soma_snapshot_home": {
+            "cmd": [
+                "bash",
+                "-c",
+                f'cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.snapshot --product "Home User Library"',
+            ],
+            "timeout_sec": 120,
+        },
+        "soma_snapshot_practitioner": {
+            "cmd": [
+                "bash",
+                "-c",
+                f'cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.snapshot --product "Practitioner Library"',
+            ],
+            "timeout_sec": 120,
+        },
+        "soma_harvest": {
+            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.harvest"],
+            "timeout_sec": 180,
+        },
+        "soma_mirror": {
+            "cmd": [
+                "bash",
+                "-c",
+                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.mirror --dry-run",
+            ],
+            "timeout_sec": 60,
+        },
+        "soma_status": {
+            "cmd": [
+                "bash",
+                "-c",
+                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.sms status",
+            ],
+            "timeout_sec": 15,
+        },
+        "soma_last_errors": {
+            "cmd": [
+                "bash",
+                "-c",
+                f'cd {ROOT_DIR} && python3 -c "from services.soma_kajabi_sync.sms import get_last_errors; errs=get_last_errors(5); print(chr(10).join(f\\"{{e[\'timestamp\'][:16]}}: {{e[\'message\']}}\\" for e in errs) if errs else \'No recent errors.\')"',
+            ],
+            "timeout_sec": 10,
+        },
+        "sms_status": {
+            "cmd": [
+                "bash",
+                "-c",
+                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.sms test",
+            ],
+            "timeout_sec": 15,
+        },
+        "artifacts": {
+            "cmd": [
+                "bash",
+                "-c",
+                f"ls -1dt {ROOT_DIR}/artifacts/* 2>/dev/null | head -n 15 && echo '---' && du -sh {ROOT_DIR}/artifacts/* 2>/dev/null | sort -h | tail -n 15",
+            ],
+            "timeout_sec": 10,
+        },
+    }
+
+
+ALLOWLIST = _allowlist()
 
 
 def load_admin_token() -> str | None:

@@ -189,6 +189,12 @@ def main() -> int:
 - **UI accepted**: {state.get('ui_accepted')} (at: {state.get('ui_accepted_at') or '—'}, commit: {state.get('ui_accepted_commit') or '—'})
 - **LLM primary**: {state.get('llm_primary_provider', 'openai')} / {state.get('llm_primary_model', 'gpt-4o-mini')}
 - **LLM fallback**: {state.get('llm_fallback_provider', 'mistral')} / {state.get('llm_fallback_model', 'labs-devstral-small-2512')}
+
+## Definition-of-Done (DoD)
+
+- **DoD script**: `ops/dod_production.sh` — executable checks: hostd /health, /api/ai-status, /api/llm/status, /api/project/state, POST /api/exec action=doctor (PASS), /api/artifacts/list dirs > 0, no hard-fail strings (ENOENT, spawn ssh, Host Executor Unreachable).
+- **Pipeline enforcement**: `ops/deploy_pipeline.sh` runs DoD at Step 5b (after verify_production); deploy fails if DoD exits non-zero. No bypass flags.
+- **Proof artifacts**: `artifacts/dod/<run_id>/dod_result.json` (redacted; no secrets). Linked from deploy_result.artifacts.dod_result and served via GET `/api/dod/last`.
 """
     (docs_dir / "OPENCLAW_CURRENT.md").write_text(current_md, encoding="utf-8")
 

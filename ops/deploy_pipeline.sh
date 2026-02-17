@@ -6,11 +6,12 @@
 #   2. git fetch origin && git reset --hard origin/main
 #   3. docker compose up -d --build (+ console if present)
 #   4. ops/verify_production.sh
-#   5. ops/update_project_state.py (last_deploy_timestamp, last_verified_vps_head, doctor, guard)
+#   5. ops/dod_production.sh (Definition-of-Done; fail deploy if DoD fails)
+#   6. ops/update_project_state.py (last_deploy_timestamp, last_verified_vps_head, doctor, guard)
 #
 # HARD GUARD: Script must not contain or invoke "git push" or "gh auth" for deploy steps.
 # CONCURRENCY: flock on .locks/deploy.lock.
-# ARTIFACTS: artifacts/deploy/<run_id>/{deploy_result.json, verify_production.json, doctor.json pointer}
+# ARTIFACTS: artifacts/deploy/<run_id>/{deploy_result.json, verify_production.json, dod_result pointer, doctor pointer}
 # No secrets in any artifact.
 set -euo pipefail
 
@@ -90,7 +91,7 @@ r = {
   'next_auto_fix': '$next_fix',
   'git_head': '$GIT_HEAD',
   'timestamps': {'finished': datetime.now(timezone.utc).isoformat()},
-  'artifacts': {'deploy_result': 'artifacts/deploy/$RUN_ID/deploy_result.json', 'verify_production': 'artifacts/deploy/$RUN_ID/verify_production.json', 'log_ref': '$log_ref'}
+  'artifacts': {'deploy_result': 'artifacts/deploy/$RUN_ID/deploy_result.json', 'verify_production': 'artifacts/deploy/$RUN_ID/verify_production.json', 'dod_result': None, 'log_ref': '$log_ref'}
 }
 with open(p + '/deploy_result.json', 'w') as f: json.dump(r, f, indent=2)
 "
@@ -186,6 +187,23 @@ fi
 echo "  Verify: PASS"
 echo ""
 
+# --- Step 5b: Definition-of-Done (executable DoD; fail deploy if any check fails) ---
+STEP="dod_production"
+echo "==> Step 5b: Definition-of-Done (dod_production.sh)"
+export SHIP_ARTIFACT_DIR="$DEPLOY_ARTIFACT_DIR"
+export OPENCLAW_VERIFY_BASE_URL="${OPENCLAW_VERIFY_BASE_URL:-http://127.0.0.1:8787}"
+if ! "$SCRIPT_DIR/dod_production.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/dod.log"; then
+  write_fail "$STEP" "dod_failed" "Fix DoD checks (hostd, endpoints, doctor, artifacts, hard-fail strings) and re-run deploy" "artifacts/deploy/$RUN_ID/dod.log"
+  exit 2
+fi
+# Copy or link latest dod result into deploy artifact dir for /api/deploy/last
+DOD_LATEST=""
+for d in $(ls -1dt "$ROOT_DIR/artifacts/dod"/[0-9]* 2>/dev/null | head -1); do
+  [ -f "$d/dod_result.json" ] && DOD_LATEST="artifacts/dod/$(basename "$d")/dod_result.json" && break
+done
+echo "  DoD: PASS (dod_result: ${DOD_LATEST:-—})"
+echo ""
+
 # --- Step 6: update_project_state again (doctor/guard from this run) ---
 STEP="update_project_state_refresh"
 echo "==> Step 6: Refresh project state (canonical brain)"
@@ -195,10 +213,14 @@ fi
 echo "  Project state refreshed"
 echo ""
 
-# --- Doctor/guard artifact pointers (latest) ---
+# --- Doctor/guard and DoD artifact pointers (latest) ---
 DOCTOR_POINTER=""
 for d in $(ls -1dt "$ROOT_DIR/artifacts/doctor"/[0-9]* 2>/dev/null | head -1); do
   [ -f "$d/doctor.json" ] && DOCTOR_POINTER="artifacts/doctor/$(basename "$d")/doctor.json" && break
+done
+DOD_POINTER=""
+for d in $(ls -1dt "$ROOT_DIR/artifacts/dod"/[0-9]* 2>/dev/null | head -1); do
+  [ -f "$d/dod_result.json" ] && DOD_POINTER="artifacts/dod/$(basename "$d")/dod_result.json" && break
 done
 
 # --- Success artifact ---
@@ -217,6 +239,7 @@ r = {
   'artifacts': {
     'deploy_result': 'artifacts/deploy/$RUN_ID/deploy_result.json',
     'verify_production': 'artifacts/deploy/$RUN_ID/verify_production.json',
+    'dod_result': '$DOD_POINTER',
     'doctor': '$DOCTOR_POINTER'
   }
 }

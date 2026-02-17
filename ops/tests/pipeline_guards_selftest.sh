@@ -99,6 +99,11 @@ if [ -f "$DEPLOY" ]; then
   else
     run false "deploy_pipeline should run install_openclaw_hostd"
   fi
+  if grep -q "dod_production.sh" "$DEPLOY" && grep -q "Step 5b" "$DEPLOY"; then
+    run true "deploy_pipeline runs DoD (dod_production.sh) after verify"
+  else
+    run false "deploy_pipeline should run dod_production.sh after verify_production"
+  fi
 fi
 
 # --- hostd installer and doctor check exist ---
