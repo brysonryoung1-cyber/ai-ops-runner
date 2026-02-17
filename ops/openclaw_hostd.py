@@ -132,6 +132,62 @@ def _allowlist() -> dict:
             ],
             "timeout_sec": 300,
         },
+        "soma_connectors_status": {
+            "cmd": [
+                "bash",
+                "-c",
+                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.connectors_status",
+            ],
+            "timeout_sec": 15,
+        },
+        "soma_kajabi_bootstrap_start": {
+            "cmd": [
+                "bash",
+                "-c",
+                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.bootstrap kajabi start",
+            ],
+            "timeout_sec": 30,
+        },
+        "soma_kajabi_bootstrap_status": {
+            "cmd": [
+                "bash",
+                "-c",
+                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.bootstrap kajabi status",
+            ],
+            "timeout_sec": 10,
+        },
+        "soma_kajabi_bootstrap_finalize": {
+            "cmd": [
+                "bash",
+                "-c",
+                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.bootstrap kajabi finalize",
+            ],
+            "timeout_sec": 30,
+        },
+        "soma_kajabi_gmail_connect_start": {
+            "cmd": [
+                "bash",
+                "-c",
+                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.gmail_connect start",
+            ],
+            "timeout_sec": 30,
+        },
+        "soma_kajabi_gmail_connect_status": {
+            "cmd": [
+                "bash",
+                "-c",
+                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.gmail_connect status",
+            ],
+            "timeout_sec": 10,
+        },
+        "soma_kajabi_gmail_connect_finalize": {
+            "cmd": [
+                "bash",
+                "-c",
+                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.gmail_connect finalize",
+            ],
+            "timeout_sec": 60,
+        },
         "soma_last_errors": {
             "cmd": [
                 "bash",

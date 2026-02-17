@@ -2,10 +2,21 @@
   "project_id": "soma_kajabi",
   "phase": 0,
   "kill_switch": true,
-  "kajabi_capture_mode": "manual",
-  "gmail_capture_mode": "manual",
-  "kajabi_secret_ref": "KAJABI_SESSION_TOKEN",
-  "gmail_secret_ref": "GMAIL_APP_PASSWORD",
-  "gmail_user_ref": "GMAIL_USER",
-  "_comment": "kill_switch=true blocks all actions until explicitly disabled. Set kill_switch=false in project_state.json to enable. Modes: manual=operator provides data; playwright/oauth=automated capture."
+  "kajabi": {
+    "mode": "session_token",
+    "base_url": "https://app.kajabi.com",
+    "storage_state_secret_ref": "/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json",
+    "interactive_bootstrap": false
+  },
+  "gmail": {
+    "mode": "imap",
+    "query": "from:(Zane McCourtney) has:attachment",
+    "attachment_types": ["video/mp4", "video/quicktime", "video/x-msvideo"],
+    "state_secret_ref": "/etc/ai-ops-runner/secrets/soma_kajabi/gmail_state.json",
+    "auth_secret_ref": "/etc/ai-ops-runner/secrets/soma_kajabi/gmail_oauth.json"
+  },
+  "artifacts": {
+    "base_dir": "artifacts/soma_kajabi/phase0"
+  },
+  "_comment": "kajabi.mode: manual|storage_state|session_token. gmail.mode: manual|oauth|imap. Fail-closed on CONFIG_INVALID when schema invalid. Use bootstrap/connect flows to configure connectors."
 }

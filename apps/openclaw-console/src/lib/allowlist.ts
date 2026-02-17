@@ -7,6 +7,13 @@
 export type ActionName =
   | "doctor"
   | "llm_doctor"
+  | "soma_connectors_status"
+  | "soma_kajabi_bootstrap_start"
+  | "soma_kajabi_bootstrap_status"
+  | "soma_kajabi_bootstrap_finalize"
+  | "soma_kajabi_gmail_connect_start"
+  | "soma_kajabi_gmail_connect_status"
+  | "soma_kajabi_gmail_connect_finalize"
   | "apply"
   | "guard"
   | "ports"
@@ -148,6 +155,55 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     remoteCommand:
       "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi_sync.sms status",
     timeoutSec: 15,
+  },
+  soma_connectors_status: {
+    name: "soma_connectors_status",
+    label: "Connectors Status",
+    description: "Check Kajabi and Gmail connector readiness (no secrets)",
+    remoteCommand: "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi.connectors_status",
+    timeoutSec: 15,
+  },
+  soma_kajabi_bootstrap_start: {
+    name: "soma_kajabi_bootstrap_start",
+    label: "Kajabi Bootstrap Start",
+    description: "Start Kajabi connector bootstrap (instructions)",
+    remoteCommand: "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi.bootstrap kajabi start",
+    timeoutSec: 30,
+  },
+  soma_kajabi_bootstrap_status: {
+    name: "soma_kajabi_bootstrap_status",
+    label: "Kajabi Bootstrap Status",
+    description: "Check Kajabi bootstrap status",
+    remoteCommand: "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi.bootstrap kajabi status",
+    timeoutSec: 10,
+  },
+  soma_kajabi_bootstrap_finalize: {
+    name: "soma_kajabi_bootstrap_finalize",
+    label: "Kajabi Bootstrap Finalize",
+    description: "Finalize Kajabi storage_state setup",
+    remoteCommand: "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi.bootstrap kajabi finalize",
+    timeoutSec: 30,
+  },
+  soma_kajabi_gmail_connect_status: {
+    name: "soma_kajabi_gmail_connect_status",
+    label: "Gmail Connect Status",
+    description: "Check Gmail connector status",
+    remoteCommand: "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi.gmail_connect status",
+    timeoutSec: 10,
+  },
+  soma_kajabi_gmail_connect_start: {
+    name: "soma_kajabi_gmail_connect_start",
+    label: "Gmail Connect Start",
+    description: "Start Gmail OAuth/IMAP connector setup",
+    remoteCommand: "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi.gmail_connect start",
+    timeoutSec: 30,
+  },
+  soma_kajabi_gmail_connect_finalize: {
+    name: "soma_kajabi_gmail_connect_finalize",
+    label: "Gmail Connect Finalize",
+    description: "Finalize Gmail OAuth token storage",
+    remoteCommand: "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi.gmail_connect finalize",
+    timeoutSec: 60,
   },
   soma_kajabi_phase0: {
     name: "soma_kajabi_phase0",

@@ -22,11 +22,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .config import (
-    get_kill_switch,
+from .config import get_kill_switch, mask_fingerprint, repo_root
+from .connector_config import (
+    is_gmail_ready,
+    is_kajabi_ready,
     load_soma_kajabi_config,
-    mask_fingerprint,
-    repo_root,
 )
 
 ARTIFACTS_ROOT = Path("artifacts/soma_kajabi/phase0")
@@ -186,7 +186,8 @@ def _transform_categories_to_lessons(categories: list[dict]) -> list[dict]:
 
 def _run_kajabi_snapshot(root: Path, out_dir: Path, run_id: str, cfg: dict) -> tuple[bool, str | None]:
     """Capture Kajabi structure. Returns (ok, recommended_next_action)."""
-    mode = cfg.get("kajabi_capture_mode", "manual")
+    kajabi_cfg = cfg.get("kajabi") or {}
+    mode = kajabi_cfg.get("mode", cfg.get("kajabi_capture_mode", "manual"))
     if mode == "manual":
         _write_kajabi_snapshot_fail_closed(out_dir, run_id, mode)
         return False, "Switch to playwright mode and provide credential reference in config/projects/soma_kajabi.json"
@@ -251,7 +252,7 @@ def _write_gmail_harvest_success(out_dir: Path, emails: list[dict]) -> Path:
 
 def _run_gmail_harvest(root: Path, out_dir: Path, cfg: dict) -> tuple[list[dict], bool, str | None]:
     """Harvest Gmail from:(Zane McCourtney) has:attachment. Returns (emails, ok, recommended_next_action)."""
-    mode = cfg.get("gmail_capture_mode", "manual")
+    mode = cfg.get("gmail", {}).get("mode") or cfg.get("gmail_capture_mode", "manual")
     if mode == "manual":
         _write_gmail_harvest_fail_closed(
             out_dir,
@@ -423,13 +424,65 @@ def _derive_manifest_from_emails(emails: list[dict]) -> list[dict]:
 
 def main() -> int:
     root = repo_root()
-    cfg = load_soma_kajabi_config(root)
+    cfg, config_error = load_soma_kajabi_config(root)
     run_id = _generate_run_id()
     out_dir = _ensure_artifacts_dir(run_id, root)
 
     artifact_paths: list[str] = []
     for name in ["kajabi_library_snapshot.json", "gmail_harvest.jsonl", "video_manifest.csv", "result.json", "BASELINE_OK.json"]:
         artifact_paths.append(str(ARTIFACTS_ROOT / run_id / name))
+
+    # Fail-closed: CONFIG_INVALID when config missing or schema invalid
+    if config_error:
+        _write_result(
+            out_dir,
+            ok=False,
+            action="soma_kajabi_phase0",
+            run_id=run_id,
+            artifact_paths=artifact_paths,
+            error_class="CONFIG_INVALID",
+            recommended_next_action=f"Fix config/projects/soma_kajabi.json: {config_error}",
+        )
+        print(json.dumps({
+            "ok": False,
+            "run_id": run_id,
+            "artifact_paths": artifact_paths,
+            "error_class": "CONFIG_INVALID",
+            "recommended_next_action": config_error,
+        }))
+        return 1
+
+    # Connector readiness: fail-closed with CONNECTOR_NOT_CONFIGURED when not ready
+    kajabi_ready, kajabi_reason = is_kajabi_ready(cfg)
+    gmail_ready, gmail_reason = is_gmail_ready(cfg)
+    if not kajabi_ready or not gmail_ready:
+        rec_parts = []
+        if not kajabi_ready:
+            rec_parts.append(f"Kajabi: {kajabi_reason}")
+        if not gmail_ready:
+            rec_parts.append(f"Gmail: {gmail_reason}")
+        rec = "; ".join(rec_parts)
+        _write_gmail_harvest_fail_closed(out_dir, "CONNECTOR_NOT_CONFIGURED", rec)
+        _write_kajabi_snapshot_fail_closed(out_dir, run_id, cfg.get("kajabi", {}).get("mode", "manual"))
+        _write_video_manifest(out_dir, [])
+        _write_baseline_ok(out_dir, run_id, {"gmail_emails": 0, "video_manifest_rows": 0, "home_modules": 0, "practitioner_lessons": 0})
+        _write_result(
+            out_dir,
+            ok=False,
+            action="soma_kajabi_phase0",
+            run_id=run_id,
+            artifact_paths=artifact_paths,
+            error_class="CONNECTOR_NOT_CONFIGURED",
+            recommended_next_action=rec,
+        )
+        print(json.dumps({
+            "ok": False,
+            "run_id": run_id,
+            "artifact_paths": artifact_paths,
+            "error_class": "CONNECTOR_NOT_CONFIGURED",
+            "recommended_next_action": rec,
+        }))
+        return 1
 
     # Kill switch: Phase 0 inventory (read-only snapshot/harvest) is permitted even when
     # kill_switch=true. Non-read-only actions are blocked elsewhere.

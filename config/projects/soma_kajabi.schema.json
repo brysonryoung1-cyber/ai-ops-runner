@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Soma Kajabi Project Config",
+  "type": "object",
+  "required": ["kajabi", "gmail", "artifacts"],
+  "additionalProperties": true,
+  "properties": {
+    "kajabi": {
+      "type": "object",
+      "required": ["mode", "base_url"],
+      "additionalProperties": true,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["manual", "storage_state", "session_token"]
+        },
+        "base_url": { "type": "string", "default": "https://app.kajabi.com" },
+        "storage_state_secret_ref": { "type": "string" },
+        "interactive_bootstrap": { "type": "boolean", "default": false }
+      }
+    },
+    "gmail": {
+      "type": "object",
+      "required": ["mode", "query"],
+      "additionalProperties": true,
+      "properties": {
+        "mode": { "type": "string", "enum": ["manual", "oauth", "imap"] },
+        "query": { "type": "string", "default": "from:(Zane McCourtney) has:attachment" },
+        "attachment_types": { "type": "array", "items": { "type": "string" } },
+        "state_secret_ref": { "type": "string" },
+        "auth_secret_ref": { "type": "string" }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "required": ["base_dir"],
+      "properties": {
+        "base_dir": { "type": "string", "default": "artifacts/soma_kajabi/phase0" }
+      }
+    }
+  }
+}

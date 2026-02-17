@@ -52,6 +52,92 @@ const SOMA_ACTIONS: SomaActionDef[] = [
   },
 ];
 
+function parseConnectorsStatus(stdout: string | undefined): {
+  kajabi: "connected" | "not_connected" | "unknown";
+  gmail: "connected" | "not_connected" | "unknown";
+} {
+  if (!stdout?.trim()) return { kajabi: "unknown", gmail: "unknown" };
+  try {
+    const d = JSON.parse(stdout.trim());
+    return {
+      kajabi: d.kajabi === "connected" ? "connected" : "not_connected",
+      gmail: d.gmail === "connected" ? "connected" : "not_connected",
+    };
+  } catch {
+    return { kajabi: "unknown", gmail: "unknown" };
+  }
+}
+
+function ConnectorsCard({
+  result,
+  loading,
+  onExec,
+}: {
+  result?: ExecResult;
+  loading: boolean;
+  onExec: (action: string) => void;
+}) {
+  const status = parseConnectorsStatus(result?.stdout);
+  return (
+    <div className="mb-8 p-4 rounded-apple bg-apple-card border border-apple-border">
+      <h3 className="text-sm font-semibold text-apple-text mb-3">Connectors</h3>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-apple-muted">Kajabi</span>
+          <span
+            className={`text-xs font-medium px-2 py-1 rounded ${
+              status.kajabi === "connected"
+                ? "bg-green-100 text-green-700"
+                : status.kajabi === "not_connected"
+                  ? "bg-amber-100 text-amber-700"
+                  : "bg-gray-100 text-gray-600"
+            }`}
+          >
+            {loading ? "Checking…" : status.kajabi === "connected" ? "Connected" : status.kajabi === "not_connected" ? "Not connected" : "—"}
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-apple-muted">Gmail</span>
+          <span
+            className={`text-xs font-medium px-2 py-1 rounded ${
+              status.gmail === "connected"
+                ? "bg-green-100 text-green-700"
+                : status.gmail === "not_connected"
+                  ? "bg-amber-100 text-amber-700"
+                  : "bg-gray-100 text-gray-600"
+            }`}
+          >
+            {loading ? "Checking…" : status.gmail === "connected" ? "Connected" : status.gmail === "not_connected" ? "Not connected" : "—"}
+          </span>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          onClick={() => onExec("soma_connectors_status")}
+          disabled={!!loading}
+          className="px-3 py-1.5 text-xs font-medium bg-gray-100 rounded hover:bg-gray-200 disabled:opacity-50"
+        >
+          {loading ? "Checking…" : "Check Connectors"}
+        </button>
+        <button
+          onClick={() => onExec("soma_kajabi_bootstrap_start")}
+          disabled={!!loading}
+          className="px-3 py-1.5 text-xs font-medium bg-blue-50 text-blue-700 rounded hover:bg-blue-100 disabled:opacity-50"
+        >
+          Kajabi Bootstrap
+        </button>
+        <button
+          onClick={() => onExec("soma_kajabi_gmail_connect_start")}
+          disabled={!!loading}
+          className="px-3 py-1.5 text-xs font-medium bg-blue-50 text-blue-700 rounded hover:bg-blue-100 disabled:opacity-50"
+        >
+          Gmail Connect
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function parseSomaStatus(stdout: string): {
   lastRun: string;
   totalRuns: number;
@@ -99,10 +185,11 @@ export default function SomaPage() {
       .catch(() => setConnected(false));
   }, []);
 
-  // Auto-load status
+  // Auto-load status and connector status
   useEffect(() => {
     if (connected === true) {
       exec("soma_status");
+      exec("soma_connectors_status");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
@@ -151,6 +238,13 @@ export default function SomaPage() {
           </p>
         </div>
       )}
+
+      {/* Connectors card */}
+      <ConnectorsCard
+        result={results["soma_connectors_status"]}
+        loading={loading === "soma_connectors_status"}
+        onExec={handleExec}
+      />
 
       {/* Status cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">

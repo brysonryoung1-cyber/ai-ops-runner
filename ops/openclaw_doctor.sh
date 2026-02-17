@@ -525,6 +525,50 @@ else
   pass "UI acceptance gate OK"
 fi
 
+# --- 10c. Soma Connectors (WARN only; Phase0 fail-closed) ---
+echo "--- Soma Connectors ---"
+if [ -f "$ROOT_DIR/services/soma_kajabi/connectors_status.py" ]; then
+  CONN_STATUS="$(cd "$ROOT_DIR" && python3 -m services.soma_kajabi.connectors_status 2>/dev/null || echo "{}")"
+  if echo "$CONN_STATUS" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    if not d.get('config_valid'):
+        print('WARN')
+        sys.exit(0)
+    kajabi = d.get('kajabi', 'unknown')
+    gmail = d.get('gmail', 'unknown')
+    if kajabi == 'connected' and gmail == 'connected':
+        print('PASS')
+    else:
+        print('WARN')
+except Exception:
+    print('WARN')
+" 2>/dev/null; then
+    CONN_RESULT="$(echo "$CONN_STATUS" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    kajabi = d.get('kajabi', 'unknown')
+    gmail = d.get('gmail', 'unknown')
+    print(f'Kajabi: {kajabi}, Gmail: {gmail}')
+except Exception:
+    print('unknown')
+" 2>/dev/null || echo "unknown")"
+    if echo "$CONN_RESULT" | grep -qE "Kajabi: connected.*Gmail: connected|Gmail: connected.*Kajabi: connected"; then
+      pass "Soma connectors: both configured"
+    else
+      echo "  WARN: Soma connectors not fully configured (Phase0 will fail until configured)"
+      pass "Soma connectors: WARN (Kajabi/Gmail not both connected)"
+    fi
+  else
+    echo "  WARN: Soma connectors check failed or not configured"
+    pass "Soma connectors: WARN (check failed)"
+  fi
+else
+  pass "Soma connectors check N/A (connectors_status not found)"
+fi
+
 # --- 11. Guard Timer Health ---
 echo "--- Guard Timer Health ---"
 if command -v systemctl >/dev/null 2>&1; then
