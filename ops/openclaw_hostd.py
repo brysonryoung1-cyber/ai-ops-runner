@@ -220,6 +220,22 @@ def _allowlist() -> dict:
             "cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/scripts/orb_backtest_confirm_nt8.sh"],
             "timeout_sec": 120,
         },
+        "pred_markets.mirror.run": {
+            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.pred_markets.run mirror_run"],
+            "timeout_sec": 300,
+        },
+        "pred_markets.mirror.backfill": {
+            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.pred_markets.run mirror_backfill"],
+            "timeout_sec": 600,
+        },
+        "pred_markets.report.health": {
+            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.pred_markets.run report_health"],
+            "timeout_sec": 60,
+        },
+        "pred_markets.report.daily": {
+            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.pred_markets.run report_daily"],
+            "timeout_sec": 60,
+        },
     }
 
 

@@ -569,6 +569,86 @@ else
   pass "Soma connectors check N/A (connectors_status not found)"
 fi
 
+# --- 10d. pred_markets (config, connectors, artifact dir, last mirror freshness) ---
+echo "--- pred_markets Phase 0 ---"
+if [ -f "$ROOT_DIR/services/pred_markets/config.py" ]; then
+  PRED_CFG="$(cd "$ROOT_DIR" && python3 -c "
+import sys
+sys.path.insert(0, '.')
+from services.pred_markets.config import load_pred_markets_config, repo_root
+root = repo_root()
+cfg, err = load_pred_markets_config(root)
+if err:
+    print('CONFIG_INVALID', err)
+    sys.exit(1)
+print('CONFIG_OK')
+" 2>/dev/null)" || PRED_CFG=""
+  if [ "$PRED_CFG" = "CONFIG_OK" ]; then
+    pass "pred_markets config present and valid"
+    # Connectors reachable (basic GET, no artifact write)
+    PRED_CONN="$(cd "$ROOT_DIR" && python3 -c "
+import urllib.request, json
+try:
+    cfg = json.load(open('config/projects/pred_markets.json'))
+    conn = cfg.get('connectors') or {}
+    k = (conn.get('kalshi') or {}).get('base_url', 'https://api.elections.kalshi.com/trade-api/v2')
+    p = (conn.get('polymarket') or {}).get('base_url', 'https://gamma-api.polymarket.com')
+    for name, url in [('kalshi', k + '/markets?limit=1'), ('polymarket', p + '/markets?limit=1')]:
+        try:
+            urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'OpenClaw-doctor/1.0'}), timeout=5)
+            print(name + '_ok')
+        except Exception:
+            print(name + '_fail')
+except Exception:
+    print('skip')
+" 2>/dev/null)" || PRED_CONN=""
+    if echo "$PRED_CONN" | grep -q "kalshi_ok" && echo "$PRED_CONN" | grep -q "polymarket_ok"; then
+      pass "pred_markets connectors reachable (Kalshi + Polymarket)"
+    elif echo "$PRED_CONN" | grep -q "skip"; then
+      echo "  WARN: pred_markets connector check skipped"
+      pass "pred_markets connectors check WARN"
+    else
+      echo "  WARN: pred_markets one or both connectors unreachable"
+      pass "pred_markets connectors check WARN"
+    fi
+    # Artifact base dir writable
+    PRED_ARTIFACT_BASE="$ROOT_DIR/artifacts/pred_markets"
+    if [ -d "$PRED_ARTIFACT_BASE" ] || mkdir -p "$PRED_ARTIFACT_BASE" 2>/dev/null; then
+      if [ -w "$PRED_ARTIFACT_BASE" ] 2>/dev/null; then
+        pass "pred_markets artifact base dir writable"
+      else
+        fail "pred_markets artifact base dir not writable"
+      fi
+    else
+      fail "pred_markets artifact base dir could not be created"
+    fi
+    # Last mirror run freshness (warn if none yet)
+    LAST_MIRROR="$(python3 -c "
+import json
+p = '$ROOT_DIR/config/project_state.json'
+try:
+    d = json.load(open(p))
+    pm = (d.get('projects') or {}).get('pred_markets') or {}
+    rid = pm.get('last_mirror_run_id')
+    ts = pm.get('last_mirror_timestamp')
+    print(rid or 'none', ts or '')
+except Exception:
+    print('none', '')
+" 2>/dev/null)" || LAST_MIRROR="none "
+    if [ "$LAST_MIRROR" = "none " ] || [ -z "${LAST_MIRROR%%none*}" ]; then
+      echo "  WARN: pred_markets has no mirror run yet"
+      pass "pred_markets last mirror run: none (warn)"
+    else
+      pass "pred_markets last mirror run present"
+    fi
+  else
+    echo "  WARN: pred_markets config invalid or missing"
+    pass "pred_markets config WARN (schema/config missing)"
+  fi
+else
+  pass "pred_markets check N/A (service not found)"
+fi
+
 # --- 11. Guard Timer Health ---
 echo "--- Guard Timer Health ---"
 if command -v systemctl >/dev/null 2>&1; then

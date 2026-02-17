@@ -23,6 +23,15 @@
       "phase0_baseline_status": "UNKNOWN",
       "phase0_baseline_artifact_dir": "",
       "phase0_last_run_id": null
+    },
+    "pred_markets": {
+      "phase": 0,
+      "kill_switch": true,
+      "phase0_baseline_status": "UNKNOWN",
+      "phase0_last_run_id": null,
+      "phase0_baseline_artifact_dir": "",
+      "last_mirror_run_id": null,
+      "last_mirror_timestamp": null
     }
   },
   "gates": {

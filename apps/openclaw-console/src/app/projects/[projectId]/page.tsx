@@ -36,6 +36,7 @@ interface ProjectData {
 }
 
 const SOMA_PROJECT_IDS = new Set(["soma_kajabi", "soma_kajabi_library_ownership"]);
+const PRED_MARKETS_PROJECT_ID = "pred_markets";
 
 function statusColor(project: ProjectData): { dot: "pass" | "fail" | "warn" | "idle"; label: string; labelColor: string } {
   if (!project.enabled) return { dot: "idle", label: "Disabled", labelColor: "text-white/40" };
@@ -103,6 +104,7 @@ export default function ProjectDetailsPage() {
       exec("soma_connectors_status");
     }
   }, [project?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const isPredMarkets = project?.id === PRED_MARKETS_PROJECT_ID;
 
   const handleExec = useCallback(
     async (action: string) => {
@@ -220,6 +222,33 @@ export default function ProjectDetailsPage() {
             />
           </div>
         </>
+      )}
+
+      {isPredMarkets && (
+        <div className="mb-6">
+          <h3 className="text-lg font-semibold text-white/95 mb-3">Phase 0 Mirror</h3>
+          <p className="text-sm text-white/60 mb-3">
+            Kill switch and phase are read-only (display only). Run mirror or health report below.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <ActionButton
+              label="Run Mirror (Phase 0)"
+              description="Snapshot Kalshi + Polymarket public markets into artifacts"
+              variant="primary"
+              loading={execLoading === "pred_markets.mirror.run"}
+              disabled={execLoading !== null && execLoading !== "pred_markets.mirror.run"}
+              onClick={() => handleExec("pred_markets.mirror.run")}
+            />
+            <ActionButton
+              label="Run Health Report"
+              description="Check config + connector reachability"
+              variant="secondary"
+              loading={execLoading === "pred_markets.report.health"}
+              disabled={execLoading !== null && execLoading !== "pred_markets.report.health"}
+              onClick={() => handleExec("pred_markets.report.health")}
+            />
+          </div>
+        </div>
       )}
     </div>
   );

@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Prediction Markets Project Config",
+  "type": "object",
+  "required": ["project_id", "phase", "kill_switch", "connectors", "artifacts"],
+  "additionalProperties": true,
+  "properties": {
+    "project_id": { "type": "string", "const": "pred_markets" },
+    "phase": { "type": "integer", "minimum": 0 },
+    "kill_switch": { "type": "boolean" },
+    "connectors": {
+      "type": "object",
+      "required": ["kalshi", "polymarket"],
+      "properties": {
+        "kalshi": {
+          "type": "object",
+          "required": ["enabled", "base_url", "mode"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "base_url": { "type": "string" },
+            "mode": { "type": "string", "enum": ["public"] },
+            "rate_limit": { "type": "integer" },
+            "user_agent": { "type": "string" }
+          }
+        },
+        "polymarket": {
+          "type": "object",
+          "required": ["enabled", "base_url", "mode"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "base_url": { "type": "string" },
+            "mode": { "type": "string", "enum": ["public"] },
+            "rate_limit": { "type": "integer" },
+            "user_agent": { "type": "string" }
+          }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "required": ["base_dir"],
+      "properties": { "base_dir": { "type": "string" } }
+    },
+    "snapshot": {
+      "type": "object",
+      "properties": {
+        "cadence_seconds": { "type": "integer" },
+        "depth_levels": { "type": ["integer", "null"] }
+      }
+    },
+    "backfill": {
+      "type": "object",
+      "properties": {
+        "max_days": { "type": "integer" },
+        "max_markets": { "type": "integer" }
+      }
+    }
+  }
+}

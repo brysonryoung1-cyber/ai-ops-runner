@@ -9,7 +9,7 @@
 - **Last doctor**: PASS (DoD PASS)
 - **Last guard**: PASS
 - **Zane phase**: 0
-- **Connectors**: Kajabi (storage_state bootstrap); Gmail (OAuth device flow or IMAP fallback). Phase 0 fails with CONNECTOR_NOT_CONFIGURED until both are ready.
+- **Connectors**: Kajabi (storage_state bootstrap); Gmail (OAuth device flow or IMAP fallback). Phase 0 fails with CONNECTOR_NOT_CONFIGURED until both are ready. **pred_markets**: Phase 0 read-only mirror (Kalshi + Polymarket public APIs); no trading; kill_switch default ON.
 - **UI accepted**: False (at: —, commit: —)
 - **LLM primary**: openai / gpt-4o-mini
 - **LLM fallback**: mistral / labs-devstral-small-2512

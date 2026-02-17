@@ -135,6 +135,27 @@
         "music",
         "placeholder"
       ]
+    },
+    {
+      "id": "pred_markets",
+      "name": "Prediction Markets (Phase 0 Mirror)",
+      "description": "Read-only market mirror: snapshots public market data from Kalshi + Polymarket into canonical artifacts. No trading.",
+      "enabled": true,
+      "workflows": ["mirror_run", "mirror_backfill", "report_health", "report_daily"],
+      "schedules": [
+        {
+          "workflow": "report_health",
+          "cron": "0 * * * *",
+          "label": "Hourly health"
+        }
+      ],
+      "notification_flags": {
+        "on_success": false,
+        "on_failure": true,
+        "on_recovery": true,
+        "channels": ["pushover"]
+      },
+      "tags": ["pred", "markets", "phase0"]
     }
   ]
 }

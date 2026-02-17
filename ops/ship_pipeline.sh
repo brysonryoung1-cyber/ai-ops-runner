@@ -181,6 +181,11 @@ run_tests_inner() {
       test_failed=1
     fi
   fi
+  if [ -d "$ROOT_DIR/services/pred_markets/tests" ]; then
+    if ! (cd "$ROOT_DIR" && python3 -m pytest -q services/pred_markets/tests/ 2>&1 | tee -a "$SHIP_ARTIFACT_DIR/tests.log"); then
+      test_failed=1
+    fi
+  fi
   if [ -d "$ROOT_DIR/ops/tests" ]; then
     for selftest in "$ROOT_DIR"/ops/tests/*_selftest.sh; do
       [ -f "$selftest" ] || continue

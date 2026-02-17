@@ -2,3 +2,4 @@
 # Install once on macOS / Linux dev machines and the VPS:
 #   pip install -r requirements-ops.txt
 keyring>=25.0.0
+jsonschema>=4.0.0

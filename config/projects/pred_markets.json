@@ -1,0 +1,33 @@
+{
+  "project_id": "pred_markets",
+  "phase": 0,
+  "kill_switch": true,
+  "connectors": {
+    "kalshi": {
+      "enabled": true,
+      "base_url": "https://api.elections.kalshi.com/trade-api/v2",
+      "mode": "public",
+      "rate_limit": 10,
+      "user_agent": "OpenClaw-pred_markets/1.0 (phase0 mirror; no auth)"
+    },
+    "polymarket": {
+      "enabled": true,
+      "base_url": "https://gamma-api.polymarket.com",
+      "mode": "public",
+      "rate_limit": 10,
+      "user_agent": "OpenClaw-pred_markets/1.0 (phase0 mirror; no auth)"
+    }
+  },
+  "artifacts": {
+    "base_dir": "artifacts/pred_markets"
+  },
+  "snapshot": {
+    "cadence_seconds": 60,
+    "depth_levels": null
+  },
+  "backfill": {
+    "max_days": 7,
+    "max_markets": 500
+  },
+  "_comment": "Phase 0 read-only. No API keys. Fail-closed: CONFIG_INVALID when schema invalid; KILL_SWITCH_ENABLED when kill_switch true."
+}

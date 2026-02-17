@@ -40,6 +40,10 @@ const ACTION_TO_HOSTD: Record<string, string> = {
   artifacts: "artifacts",
   "orb.backtest.bulk": "orb.backtest.bulk",
   "orb.backtest.confirm_nt8": "orb.backtest.confirm_nt8",
+  "pred_markets.mirror.run": "pred_markets.mirror.run",
+  "pred_markets.mirror.backfill": "pred_markets.mirror.backfill",
+  "pred_markets.report.health": "pred_markets.report.health",
+  "pred_markets.report.daily": "pred_markets.report.daily",
 };
 
 function getHostdUrl(): string | null {

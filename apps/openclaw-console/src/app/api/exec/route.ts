@@ -249,15 +249,18 @@ export async function POST(req: NextRequest) {
 
     const finishedAt = new Date();
 
-    // Parse soma_kajabi_phase0 stdout for error_class, recommended_next_action, artifact_paths
+    // Parse project action stdout for error_class (soma_kajabi_phase0, pred_markets.*)
     let errorForRecord = result.error || null;
     let responsePayload: Record<string, unknown> = { ...result };
-    if (actionName === "soma_kajabi_phase0" && result.stdout) {
+    const isProjectAction =
+      actionName === "soma_kajabi_phase0" ||
+      actionName.startsWith("pred_markets.");
+    if (isProjectAction && result.stdout) {
       try {
         const parsed = JSON.parse(result.stdout.trim().split("\n").pop() || "{}");
         if (parsed.error_class) {
           errorForRecord = `error_class: ${parsed.error_class}${parsed.recommended_next_action ? ` | recommended_next_action: ${parsed.recommended_next_action}` : ""}`;
-          responsePayload = { ...result, error_class: parsed.error_class, recommended_next_action: parsed.recommended_next_action, artifact_paths: parsed.artifact_paths };
+          responsePayload = { ...result, error_class: parsed.error_class, recommended_next_action: parsed.recommended_next_action, artifact_paths: parsed.artifact_paths, artifact_dir: parsed.artifact_dir ?? result.artifact_dir };
         }
       } catch {
         // Ignore parse errors

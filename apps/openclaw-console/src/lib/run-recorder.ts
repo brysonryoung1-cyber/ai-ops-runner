@@ -67,6 +67,10 @@ const ACTION_PROJECT_MAP: Record<string, string> = {
   sms_status: "soma_kajabi_library_ownership",
   "orb.backtest.bulk": "orb_backtest",
   "orb.backtest.confirm_nt8": "orb_backtest",
+  "pred_markets.mirror.run": "pred_markets",
+  "pred_markets.mirror.backfill": "pred_markets",
+  "pred_markets.report.health": "pred_markets",
+  "pred_markets.report.daily": "pred_markets",
 };
 
 export function resolveProjectId(action: string): string {

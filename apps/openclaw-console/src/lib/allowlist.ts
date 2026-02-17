@@ -30,7 +30,11 @@ export type ActionName =
   | "sms_status"
   | "soma_kajabi_phase0"
   | "orb.backtest.bulk"
-  | "orb.backtest.confirm_nt8";
+  | "orb.backtest.confirm_nt8"
+  | "pred_markets.mirror.run"
+  | "pred_markets.mirror.backfill"
+  | "pred_markets.report.health"
+  | "pred_markets.report.daily";
 
 export interface AllowedAction {
   name: ActionName;
@@ -247,6 +251,39 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     remoteCommand:
       "cd /opt/ai-ops-runner && ./ops/scripts/orb_backtest_confirm_nt8.sh",
     timeoutSec: 120,
+  },
+  "pred_markets.mirror.run": {
+    name: "pred_markets.mirror.run",
+    label: "Run Mirror (Phase 0)",
+    description:
+      "Read-only snapshot of Kalshi + Polymarket public markets into artifacts/pred_markets/<run_id>/.",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && python3 -m services.pred_markets.run mirror_run",
+    timeoutSec: 300,
+  },
+  "pred_markets.mirror.backfill": {
+    name: "pred_markets.mirror.backfill",
+    label: "Run Mirror Backfill",
+    description: "Bounded backfill of market snapshots (Phase 0, no auth).",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && python3 -m services.pred_markets.run mirror_backfill",
+    timeoutSec: 600,
+  },
+  "pred_markets.report.health": {
+    name: "pred_markets.report.health",
+    label: "Run Health Report",
+    description: "Check config + connector reachability; writes SUMMARY.md.",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && python3 -m services.pred_markets.run report_health",
+    timeoutSec: 60,
+  },
+  "pred_markets.report.daily": {
+    name: "pred_markets.report.daily",
+    label: "Run Daily Report",
+    description: "Phase 0 daily report stub; writes SUMMARY.md.",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && python3 -m services.pred_markets.run report_daily",
+    timeoutSec: 60,
   },
 };
 
