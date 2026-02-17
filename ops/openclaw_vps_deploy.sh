@@ -230,6 +230,13 @@ if [ -f /etc/ai-ops-runner/secrets/openclaw_console_token ]; then
 fi
 export OPENCLAW_CONSOLE_TOKEN="$CONSOLE_TOKEN"
 
+# Load admin token (required for console→hostd auth)
+ADMIN_TOKEN=""
+for f in /etc/ai-ops-runner/secrets/openclaw_admin_token /etc/ai-ops-runner/secrets/openclaw_console_token /etc/ai-ops-runner/secrets/openclaw_api_token /etc/ai-ops-runner/secrets/openclaw_token; do
+  [ -f "$f" ] && ADMIN_TOKEN="$(cat "$f" 2>/dev/null | tr -d '[:space:]')" && [ -n "$ADMIN_TOKEN" ] && break
+done
+export OPENCLAW_ADMIN_TOKEN="$ADMIN_TOKEN"
+
 # Set AIOPS_HOST to this machine's Tailscale IPv4 (required for SSH exec)
 AIOPS_HOST="$(tailscale ip -4 2>/dev/null | head -n1 | tr -d '[:space:]')"
 if [ -z "$AIOPS_HOST" ]; then
