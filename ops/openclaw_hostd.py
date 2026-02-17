@@ -156,10 +156,71 @@ def _allowlist() -> dict:
             ],
             "timeout_sec": 10,
         },
+        "orb.backtest.bulk": {
+            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/scripts/orb_backtest_bulk.sh"],
+            "timeout_sec": 600,
+        },
+        "orb.backtest.confirm_nt8": {
+            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/scripts/orb_backtest_confirm_nt8.sh"],
+            "timeout_sec": 120,
+        },
     }
 
 
 ALLOWLIST = _allowlist()
+
+ORB_BACKTEST_ACTIONS = {"orb.backtest.bulk", "orb.backtest.confirm_nt8"}
+REQUIRED_CONDITION = "Set gates.allow_orb_backtests=true after Soma Phase0 baseline PASS"
+
+
+def load_project_state() -> dict:
+    """Read config/project_state.json. Return {} on missing or error."""
+    path = os.path.join(ROOT_DIR, "config", "project_state.json")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def is_orb_backtest_allowed() -> tuple[bool, str]:
+    """Check gates.allow_orb_backtests and Soma Phase0 baseline. Return (allowed, reason)."""
+    state = load_project_state()
+    gates = state.get("gates") or {}
+    if gates.get("allow_orb_backtests") is not True:
+        return False, "gates.allow_orb_backtests is not true"
+    projects = state.get("projects") or {}
+    sk = projects.get("soma_kajabi") or {}
+    if sk.get("phase0_baseline_status") != "PASS":
+        return False, "projects.soma_kajabi.phase0_baseline_status is not PASS"
+    return True, ""
+
+
+def write_blocked_artifact(run_id: str, action: str) -> None:
+    """Write artifacts/backtests/blocked/<run_id>/SUMMARY.md and blocked.json."""
+    blocked_dir = os.path.join(ROOT_DIR, "artifacts", "backtests", "blocked", run_id)
+    os.makedirs(blocked_dir, exist_ok=True)
+    summary = (
+        f"# ORB Backtest Blocked (Soma-First Gate)\n\n"
+        f"- **Run ID**: {run_id}\n"
+        f"- **Action**: {action}\n"
+        f"- **Required condition**: {REQUIRED_CONDITION}\n"
+        f"- **Unlock**: Set `gates.allow_orb_backtests=true` in config/project_state.json after Soma Phase 0 baseline PASS.\n"
+    )
+    summary_path = os.path.join(blocked_dir, "SUMMARY.md")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        f.write(summary)
+    blocked_json = {
+        "run_id": run_id,
+        "action": action,
+        "error_class": "LANE_LOCKED_SOMA_FIRST",
+        "required_condition": REQUIRED_CONDITION,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    with open(os.path.join(blocked_dir, "blocked.json"), "w", encoding="utf-8") as f:
+        json.dump(blocked_json, f, indent=2)
 
 
 def load_admin_token() -> str | None:
@@ -187,13 +248,14 @@ def run_action(action: str, run_id: str) -> tuple[int, str, str, bool]:
     stdout_path = os.path.join(art_dir, "stdout.txt")
     stderr_path = os.path.join(art_dir, "stderr.txt")
     result_path = os.path.join(art_dir, "hostd_result.json")
+    env = {**os.environ, "OPENCLAW_RUN_ID": run_id}
     try:
         proc = subprocess.run(
             cmd,
             cwd=ROOT_DIR,
             capture_output=True,
             timeout=timeout_sec,
-            env={**os.environ},
+            env=env,
         )
         out_b = proc.stdout or b""
         err_b = proc.stderr or b""
@@ -319,6 +381,23 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(403, {"error": "Action not allowlisted"})
             return
         run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + os.urandom(4).hex()
+        # Soma-first gate: block orb.backtest.* until baseline PASS and gate unlocked
+        if action in ORB_BACKTEST_ACTIONS:
+            allowed, reason = is_orb_backtest_allowed()
+            if not allowed:
+                write_blocked_artifact(run_id, action)
+                self.send_response(423)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "ok": False,
+                    "action": action,
+                    "error_class": "LANE_LOCKED_SOMA_FIRST",
+                    "required_condition": REQUIRED_CONDITION,
+                    "run_id": run_id,
+                    "artifact_dir": f"artifacts/backtests/blocked/{run_id}",
+                }).encode("utf-8"))
+                return
         exit_code, stdout, stderr, truncated = run_action(action, run_id)
         self.send_json(200, {
             "ok": exit_code == 0,

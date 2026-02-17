@@ -21,7 +21,9 @@ export type ActionName =
   | "soma_status"
   | "soma_last_errors"
   | "sms_status"
-  | "soma_kajabi_phase0";
+  | "soma_kajabi_phase0"
+  | "orb.backtest.bulk"
+  | "orb.backtest.confirm_nt8";
 
 export interface AllowedAction {
   name: ActionName;
@@ -171,6 +173,24 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     remoteCommand:
       "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi_sync.sms test",
     timeoutSec: 15,
+  },
+  "orb.backtest.bulk": {
+    name: "orb.backtest.bulk",
+    label: "ORB Tier-1 Bulk Backtest",
+    description:
+      "Run Tier-1 bulk backtest (algo-nt8-orb). Writes to artifacts/backtests/<run_id>/tier1/. Requires OPENCLAW_ORB_REPO_PATH or /opt/algo-nt8-orb.",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && ./ops/scripts/orb_backtest_bulk.sh",
+    timeoutSec: 600,
+  },
+  "orb.backtest.confirm_nt8": {
+    name: "orb.backtest.confirm_nt8",
+    label: "ORB Tier-2 Confirm NT8",
+    description:
+      "Tier-2 confirmation stub: validate spec, write artifact skeleton, done.json with NT8_EXECUTOR_NOT_CONFIGURED (exit 3). Writes to artifacts/backtests/<run_id>/tier2/.",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && ./ops/scripts/orb_backtest_confirm_nt8.sh",
+    timeoutSec: 120,
   },
 };
 

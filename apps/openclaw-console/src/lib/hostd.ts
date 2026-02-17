@@ -14,6 +14,10 @@ export interface HostdResult {
   error?: string;
   artifact_dir?: string;
   truncated?: boolean;
+  /** When hostd returns 423 Locked (Soma-first gate). */
+  httpStatus?: number;
+  error_class?: string;
+  required_condition?: string;
 }
 
 const ACTION_TO_HOSTD: Record<string, string> = {
@@ -34,6 +38,8 @@ const ACTION_TO_HOSTD: Record<string, string> = {
   soma_last_errors: "soma_last_errors",
   sms_status: "sms_status",
   artifacts: "artifacts",
+  "orb.backtest.bulk": "orb.backtest.bulk",
+  "orb.backtest.confirm_nt8": "orb.backtest.confirm_nt8",
 };
 
 function getHostdUrl(): string | null {
@@ -107,7 +113,7 @@ export async function executeAction(actionName: string): Promise<HostdResult> {
     }
 
     if (!res.ok) {
-      return {
+      const payload = {
         ok: false,
         action: actionName,
         stdout: data.stdout ?? "",
@@ -115,7 +121,11 @@ export async function executeAction(actionName: string): Promise<HostdResult> {
         exitCode: null,
         durationMs,
         error: data.error ?? `HTTP ${res.status}`,
+        httpStatus: res.status,
+        error_class: data.error_class,
+        required_condition: data.required_condition,
       };
+      return payload;
     }
 
     return {
@@ -127,6 +137,9 @@ export async function executeAction(actionName: string): Promise<HostdResult> {
       durationMs,
       artifact_dir: data.artifact_dir,
       truncated: data.truncated,
+      httpStatus: res.status,
+      error_class: data.error_class,
+      required_condition: data.required_condition,
     };
   } catch (err) {
     const durationMs = Date.now() - start;

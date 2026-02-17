@@ -65,6 +65,8 @@ const ACTION_PROJECT_MAP: Record<string, string> = {
   soma_status: "soma_kajabi_library_ownership",
   soma_last_errors: "soma_kajabi_library_ownership",
   sms_status: "soma_kajabi_library_ownership",
+  "orb.backtest.bulk": "orb_backtest",
+  "orb.backtest.confirm_nt8": "orb_backtest",
 };
 
 export function resolveProjectId(action: string): string {
