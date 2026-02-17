@@ -71,6 +71,58 @@ def _write_result(
     (out_dir / "result.json").write_text(json.dumps(doc, indent=2))
 
 
+def _file_sha256(path: Path) -> str:
+    if not path.exists():
+        return ""
+    h = hashlib.sha256()
+    h.update(path.read_bytes())
+    return h.hexdigest()
+
+
+def _write_baseline_ok(
+    out_dir: Path,
+    run_id: str,
+    counts: dict[str, int],
+) -> None:
+    """Write BASELINE_OK.json with hashes of main artifacts, counts, timestamp."""
+    paths = [
+        out_dir / "kajabi_library_snapshot.json",
+        out_dir / "gmail_harvest.jsonl",
+        out_dir / "video_manifest.csv",
+    ]
+    hashes: dict[str, str] = {}
+    for p in paths:
+        if p.exists():
+            hashes[p.name] = _file_sha256(p)
+    doc: dict[str, Any] = {
+        "run_id": run_id,
+        "timestamp_utc": _now_iso(),
+        "counts": counts,
+        "artifact_hashes": hashes,
+    }
+    (out_dir / "BASELINE_OK.json").write_text(json.dumps(doc, indent=2))
+
+
+def _update_project_state_baseline(root: Path, run_id: str, artifact_dir: str) -> None:
+    """Merge Phase 0 baseline result into config/project_state.json (canonical)."""
+    state_path = root / "config" / "project_state.json"
+    if not state_path.exists():
+        return
+    try:
+        state = json.loads(state_path.read_text())
+    except Exception:
+        return
+    projects = state.setdefault("projects", {})
+    sk = projects.setdefault("soma_kajabi", {})
+    sk["phase0_baseline_status"] = "PASS"
+    sk["phase0_baseline_artifact_dir"] = artifact_dir
+    sk["phase0_last_run_id"] = run_id
+    try:
+        state_path.write_text(json.dumps(state, indent=2))
+    except OSError:
+        pass
+
+
 def _write_kajabi_snapshot_fail_closed(out_dir: Path, run_id: str, mode: str) -> Path:
     """Write schema-compliant snapshot with unknown fields when capture cannot run."""
     doc = {
@@ -376,35 +428,12 @@ def main() -> int:
     out_dir = _ensure_artifacts_dir(run_id, root)
 
     artifact_paths: list[str] = []
-    for name in ["kajabi_library_snapshot.json", "gmail_harvest.jsonl", "video_manifest.csv", "result.json"]:
+    for name in ["kajabi_library_snapshot.json", "gmail_harvest.jsonl", "video_manifest.csv", "result.json", "BASELINE_OK.json"]:
         artifact_paths.append(str(ARTIFACTS_ROOT / run_id / name))
 
-    # Kill switch
-    if get_kill_switch(root):
-        _write_kajabi_snapshot_fail_closed(out_dir, run_id, cfg.get("kajabi_capture_mode", "manual"))
-        _write_gmail_harvest_fail_closed(
-            out_dir,
-            "KILL_SWITCH_ENABLED",
-            "Set projects.soma_kajabi.kill_switch to false in config/project_state.json to enable.",
-        )
-        _write_video_manifest(out_dir, [])
-        _write_result(
-            out_dir,
-            ok=False,
-            action="soma_kajabi_phase0",
-            run_id=run_id,
-            artifact_paths=artifact_paths,
-            error_class="KILL_SWITCH_ENABLED",
-            recommended_next_action="Set projects.soma_kajabi.kill_switch to false in config/project_state.json",
-        )
-        print(json.dumps({
-            "ok": False,
-            "error_class": "KILL_SWITCH_ENABLED",
-            "run_id": run_id,
-            "recommended_next_action": "Set projects.soma_kajabi.kill_switch to false in config/project_state.json",
-            "artifact_paths": artifact_paths,
-        }))
-        return 1
+    # Kill switch: Phase 0 inventory (read-only snapshot/harvest) is permitted even when
+    # kill_switch=true. Non-read-only actions are blocked elsewhere.
+    # No early exit here; proceed with snapshot/harvest.
 
     # Phase gate: only Phase 0 actions allowed (this is Phase 0)
     # Future: if action were phase1+, block with PHASE_GATE_BLOCKED
@@ -430,6 +459,29 @@ def main() -> int:
         error_class=None if ok else "CONNECTOR_NOT_CONFIGURED",
         recommended_next_action=rec,
     )
+
+    # Baseline counts for BASELINE_OK.json
+    snapshot_path = out_dir / "kajabi_library_snapshot.json"
+    home_modules = pract_lessons_count = 0
+    if snapshot_path.exists():
+        try:
+            snap = json.loads(snapshot_path.read_text())
+            home_modules = len(snap.get("home", {}).get("modules", []))
+            pract_lessons_count = len(snap.get("practitioner", {}).get("lessons", []))
+        except Exception:
+            pass
+    counts = {
+        "gmail_emails": len(emails),
+        "video_manifest_rows": len(manifest_rows),
+        "home_modules": home_modules,
+        "practitioner_lessons": pract_lessons_count,
+    }
+    _write_baseline_ok(out_dir, run_id, counts)
+
+    # Update canonical project_state when run succeeded (baseline PASS)
+    artifact_dir = str(ARTIFACTS_ROOT / run_id)
+    if ok:
+        _update_project_state_baseline(root, run_id, artifact_dir)
 
     print(json.dumps({
         "ok": ok,

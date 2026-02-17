@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import ActionButton from "@/components/ActionButton";
 
 /** Normalize unknown values to safe ReactNode. Never render raw secrets. */
@@ -71,9 +71,51 @@ const ACTIONS: ActionDef[] = [
   },
 ];
 
+const ORB_BACKTEST_ACTIONS: ActionDef[] = [
+  {
+    action: "orb.backtest.bulk",
+    label: "ORB Tier-1 Bulk Backtest",
+    description: "Tier-1 bulk backtest. Locked until Soma Phase 0 baseline PASS.",
+    variant: "secondary",
+  },
+  {
+    action: "orb.backtest.confirm_nt8",
+    label: "ORB Tier-2 Confirm NT8",
+    description: "Tier-2 confirmation stub. Locked until Soma Phase 0 baseline PASS.",
+    variant: "secondary",
+  },
+];
+
+interface GateState {
+  allow_orb_backtests: boolean;
+  phase0_baseline_artifact_dir: string | null;
+}
+
 export default function ActionsPage() {
   const { exec, loading, results } = useExec();
   const [lastAction, setLastAction] = useState<string | null>(null);
+  const [gateState, setGateState] = useState<GateState | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/project/state")
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled || !data?.state) return;
+        const st = data.state as Record<string, unknown>;
+        const gates = (st.gates as Record<string, unknown>) ?? {};
+        const projects = (st.projects as Record<string, unknown>) ?? {};
+        const sk = (projects.soma_kajabi as Record<string, unknown>) ?? {};
+        setGateState({
+          allow_orb_backtests: gates.allow_orb_backtests === true,
+          phase0_baseline_artifact_dir: (sk.phase0_baseline_artifact_dir as string) || null,
+        });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleExec = async (action: string) => {
     // Require explicit confirmation for destructive/non-idempotent actions
@@ -114,6 +156,38 @@ export default function ActionsPage() {
         ))}
       </div>
 
+      {/* ORB Backtest — Soma-first gate lock banner */}
+      <div className="mt-8">
+        <h3 className="text-lg font-semibold text-white/90 mb-2">ORB Backtest</h3>
+        {gateState && !gateState.allow_orb_backtests && (
+          <div className="mb-4 p-4 rounded-xl bg-amber-500/15 border border-amber-500/30">
+            <p className="text-sm font-medium text-amber-200">
+              ORB backtest lane is locked (Soma-first policy). Complete Soma Phase 0 baseline, then set{" "}
+              <code className="text-amber-100 bg-white/10 px-1 rounded">gates.allow_orb_backtests=true</code> in{" "}
+              <code className="text-amber-100 bg-white/10 px-1 rounded">config/project_state.json</code> to unlock.
+            </p>
+            {gateState.phase0_baseline_artifact_dir && (
+              <p className="text-xs text-amber-200/90 mt-2">
+                Baseline artifact dir: <code className="bg-white/10 px-1 rounded">{gateState.phase0_baseline_artifact_dir}</code>
+              </p>
+            )}
+          </div>
+        )}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {ORB_BACKTEST_ACTIONS.map((a) => (
+            <ActionButton
+              key={a.action}
+              label={a.label}
+              description={a.description}
+              variant={a.variant}
+              loading={loading === a.action}
+              disabled={loading !== null && loading !== a.action}
+              onClick={() => handleExec(a.action)}
+            />
+          ))}
+        </div>
+      </div>
+
       {lastResult && (
         <div className="mt-8">
           <GlassCard>
@@ -141,6 +215,11 @@ export default function ActionsPage() {
                 {(lastResult as unknown as Record<string, unknown>).recommended_next_action != null ? (
                   <p className="text-xs text-amber-200 mt-1">
                     recommended_next_action: {toSafeReactNode((lastResult as unknown as Record<string, unknown>).recommended_next_action)}
+                  </p>
+                ) : null}
+                {(lastResult as unknown as Record<string, unknown>).required_condition != null ? (
+                  <p className="text-xs text-amber-200 mt-1">
+                    required_condition: {toSafeReactNode((lastResult as unknown as Record<string, unknown>).required_condition)}
                   </p>
                 ) : null}
               </div>

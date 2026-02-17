@@ -34,7 +34,9 @@ from src.llm.budget import (
     check_budget,
     actual_cost,
     write_cost_telemetry,
+    DEFAULT_PRICING,
 )
+from src.llm.cost_tracker import log_usage, check_guard
 
 # Singleton router instance
 _router_instance: ModelRouter | None = None
@@ -64,6 +66,32 @@ def _classify_transient(exc: RuntimeError) -> str:
     if "timeout" in msg or "unreachable" in msg or "timed out" in msg:
         return TRANSIENT_NETWORK
     return NON_TRANSIENT
+
+
+def _log_usage_from_response(
+    response: LLMResponse,
+    action: str,
+    project_id: str,
+    pricing: dict[str, dict[str, float]] | None = None,
+) -> None:
+    """Append usage to cost tracker (always-on). No secrets."""
+    usage = response.usage or {}
+    if not usage:
+        return
+    try:
+        cost = actual_cost(response.model, usage, pricing or DEFAULT_PRICING)
+        log_usage(
+            project_id=project_id,
+            action=action,
+            model=response.model,
+            provider=response.provider,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            total_tokens=usage.get("total_tokens", 0),
+            cost_usd=cost,
+        )
+    except Exception:
+        pass
 
 
 def _is_transient_error(exc: RuntimeError) -> bool:
@@ -282,6 +310,15 @@ class ModelRouter:
         config = self._config
         assert config is not None
 
+        # Cost guard: block non-essential LLM when hourly/daily limit exceeded
+        if not getattr(request, "essential", False):
+            allowed, reason = check_guard(run_id=request.trace_id or "")
+            if not allowed:
+                raise RuntimeError(
+                    f"COST_GUARD_TRIPPED: {reason}. "
+                    "Non-essential LLM blocked. Doctor/deploy/guard remain available."
+                )
+
         if request.purpose == "review":
             return self._generate_review(request)
 
@@ -295,9 +332,12 @@ class ModelRouter:
             purpose=request.purpose,
             trace_id=request.trace_id,
             response_format=request.response_format,
+            essential=getattr(request, "essential", False),
         )
 
-        return provider.generate_text(routed_request)
+        response = provider.generate_text(routed_request)
+        _log_usage_from_response(response, request.purpose, "openclaw", self._budget.pricing)
+        return response
 
     def _generate_review(self, request: LLMRequest) -> LLMResponse:
         """Execute a review request with fallback and budget enforcement.
@@ -365,6 +405,7 @@ class ModelRouter:
         primary_transient_class: str = NON_TRANSIENT
         try:
             response = primary_provider.generate_text(routed_request)
+            _log_usage_from_response(response, "review", "openclaw", self._budget.pricing)
             return response
         except RuntimeError as exc:
             primary_error = exc
@@ -421,6 +462,7 @@ class ModelRouter:
             response = fallback_provider.generate_text(fb_request)
             # Tag response with fallback provenance and classification
             response.primary_transient_class = primary_transient_class
+            _log_usage_from_response(response, "review_fallback", "openclaw", self._budget.pricing)
             _log(
                 f"Review fallback ({fallback_provider.provider_name}/"
                 f"{fallback_model}) succeeded",

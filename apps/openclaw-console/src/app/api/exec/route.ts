@@ -211,6 +211,42 @@ export async function POST(req: NextRequest) {
     // executeAction validates allowlist and calls hostd (fail-closed)
     const result = await executeAction(actionName);
 
+    // Soma-first gate: pass through 423 Locked from hostd
+    if (result.httpStatus === 423) {
+      const finishedAt = new Date();
+      writeAuditEntry({
+        timestamp: finishedAt.toISOString(),
+        actor: deriveActor(req.headers.get("x-openclaw-token")),
+        action_name: actionName,
+        params_hash: hashParams({ action: actionName }),
+        exit_code: null,
+        duration_ms: finishedAt.getTime() - startedAt.getTime(),
+        error: `error_class: ${result.error_class ?? "LANE_LOCKED_SOMA_FIRST"}`,
+      });
+      writeRunRecord(
+        buildRunRecord(
+          actionName,
+          startedAt,
+          finishedAt,
+          null,
+          false,
+          result.error_class ?? "LANE_LOCKED_SOMA_FIRST",
+          runId
+        )
+      );
+      return NextResponse.json(
+        {
+          ok: false,
+          error_class: result.error_class ?? "LANE_LOCKED_SOMA_FIRST",
+          required_condition: result.required_condition ?? "Set gates.allow_orb_backtests=true after Soma Phase0 baseline PASS",
+          action: actionName,
+          run_id: runId,
+          artifact_dir: result.artifact_dir,
+        },
+        { status: 423 }
+      );
+    }
+
     const finishedAt = new Date();
 
     // Parse soma_kajabi_phase0 stdout for error_class, recommended_next_action, artifact_paths

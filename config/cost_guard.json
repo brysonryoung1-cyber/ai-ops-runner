@@ -1,0 +1,5 @@
+{
+  "hourly_usd_limit": 20,
+  "daily_usd_limit": 100,
+  "_comment": "When exceeded, non-essential LLM actions return COST_GUARD_TRIPPED. Doctor/deploy/guard remain available."
+}

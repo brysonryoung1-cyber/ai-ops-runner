@@ -97,7 +97,17 @@ export async function executeAction(actionName: string): Promise<HostdResult> {
     });
     const durationMs = Date.now() - start;
     const text = await res.text();
-    let data: { ok?: boolean; error?: string; stdout?: string; stderr?: string; exitCode?: number; truncated?: boolean; artifact_dir?: string };
+    let data: {
+      ok?: boolean;
+      error?: string;
+      stdout?: string;
+      stderr?: string;
+      exitCode?: number;
+      truncated?: boolean;
+      artifact_dir?: string;
+      error_class?: string;
+      required_condition?: string;
+    };
     try {
       data = JSON.parse(text);
     } catch {

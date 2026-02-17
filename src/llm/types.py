@@ -125,6 +125,8 @@ class LLMRequest:
     purpose: str = "general"
     trace_id: str = ""
     response_format: dict[str, str] | None = None
+    """When True, cost guard is skipped (doctor/deploy/guard)."""
+    essential: bool = False
 
 
 @dataclass

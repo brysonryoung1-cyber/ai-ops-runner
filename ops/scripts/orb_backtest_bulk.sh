@@ -41,6 +41,12 @@ if [[ -d "$BULK_OUT" ]]; then
 fi
 rm -rf "$BULK_TMP"
 if [[ -f "${ART_ROOT}/summary.json" ]]; then
+  if [[ ! -f "${ART_ROOT}/SUMMARY.md" ]]; then
+    echo "# ORB Tier-1 Bulk Backtest" > "${ART_ROOT}/SUMMARY.md"
+    echo "" >> "${ART_ROOT}/SUMMARY.md"
+    echo "- **run_id**: ${RUN_ID}" >> "${ART_ROOT}/SUMMARY.md"
+    echo "- **artifacts**: ${ART_ROOT}" >> "${ART_ROOT}/SUMMARY.md"
+  fi
   echo "orb.backtest.bulk|run_id=${RUN_ID}|artifacts=${ART_ROOT}"
   exit 0
 fi

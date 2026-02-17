@@ -26,8 +26,8 @@ def test_soma_kajabi_discoverable_in_projects():
     assert "soma_kajabi" in ids
 
 
-def test_kill_switch_blocks_soma_kajabi_actions():
-    """When kill_switch=true, phase0_runner exits 1 with KILL_SWITCH_ENABLED."""
+def test_phase0_runs_even_with_kill_switch():
+    """Phase 0 inventory is permitted when kill_switch=true; runner proceeds and writes artifacts."""
     root = _repo_root()
     env = {**os.environ, "OPENCLAW_REPO_ROOT": str(root)}
     r = subprocess.run(
@@ -38,16 +38,17 @@ def test_kill_switch_blocks_soma_kajabi_actions():
         timeout=30,
         env=env,
     )
-    assert r.returncode == 1, f"Expected exit 1, got {r.returncode}. stdout={r.stdout!r} stderr={r.stderr!r}"
     out = r.stdout.strip()
     lines = [l for l in out.split("\n") if l.strip().startswith("{")]
     parsed = json.loads(lines[-1]) if lines else {}
-    assert parsed.get("error_class") == "KILL_SWITCH_ENABLED", f"Got {parsed}"
-    assert "recommended_next_action" in parsed
+    # Must NOT be blocked by kill_switch (no KILL_SWITCH_ENABLED)
+    assert parsed.get("error_class") != "KILL_SWITCH_ENABLED", f"Phase 0 should run when kill_switch=true. Got {parsed}"
+    assert "run_id" in parsed
+    assert "artifact_paths" in parsed
 
 
 def test_phase0_actions_always_write_artifacts():
-    """Phase0 runner writes all 4 artifacts even on fail-closed (kill_switch)."""
+    """Phase0 runner writes required artifacts including BASELINE_OK.json."""
     root = _repo_root()
     art_base = root / "artifacts" / "soma_kajabi" / "phase0"
     if not art_base.exists():
@@ -56,7 +57,7 @@ def test_phase0_actions_always_write_artifacts():
     if not run_dirs:
         return
     latest = max(run_dirs, key=lambda d: d.name)
-    required = ["kajabi_library_snapshot.json", "gmail_harvest.jsonl", "video_manifest.csv", "result.json"]
+    required = ["kajabi_library_snapshot.json", "gmail_harvest.jsonl", "video_manifest.csv", "result.json", "BASELINE_OK.json"]
     for name in required:
         assert (latest / name).exists(), f"Missing {name} in {latest}"
 

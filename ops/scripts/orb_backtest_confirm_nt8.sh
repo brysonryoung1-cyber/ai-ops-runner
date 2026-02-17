@@ -22,7 +22,7 @@ if [[ -n "$SPEC_PATH" && -f "$SPEC_PATH" ]]; then
 fi
 # Skeleton artifacts (contract-compliant)
 echo "candidate_id,strategy_name,instrument,pnl,pf,sharpe,maxdd,trades,winrate,avg_trade,avg_win,avg_loss,profit_factor,status" > "${ART_ROOT}/results.csv"
-echo '{"schema_version":"tier2_summary.v1","exp_id":"'"${RUN_ID}"'","verdict":"NT8_EXECUTOR_NOT_CONFIGURED","reasons":["NT8_EXECUTOR_NOT_CONFIGURED"]}' > "${ART_ROOT}/summary.json"
+echo '{"schema_version":"tier2_summary.v1","exp_id":"'"${RUN_ID}"'","verdict":"NT8_EXECUTOR_NOT_CONFIGURED","error_class":"NT8_EXECUTOR_NOT_CONFIGURED","reasons":["NT8_EXECUTOR_NOT_CONFIGURED"]}' > "${ART_ROOT}/summary.json"
 echo '[]' > "${ART_ROOT}/run_manifest.json"
 echo '{"done":true,"status":"NT8_EXECUTOR_NOT_CONFIGURED","exit_code":3,"exp_id":"'"${RUN_ID}"'"}' > "${ART_ROOT}/done.json"
 echo "orb.backtest.confirm_nt8|run_id=${RUN_ID}|status=NT8_EXECUTOR_NOT_CONFIGURED|artifacts=${ART_ROOT}"

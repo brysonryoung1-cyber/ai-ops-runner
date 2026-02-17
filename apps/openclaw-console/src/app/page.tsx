@@ -179,6 +179,12 @@ export default function OverviewPage() {
     finished_at: string;
     duration_ms: number;
   }[]>([]);
+  const [costSummary, setCostSummary] = useState<{
+    today_usd: number;
+    mtd_usd: number;
+    last_7_days_usd: number;
+    top_project: { id: string; usd: number };
+  } | null>(null);
 
   // Check connectivity on mount; show "Degraded" only after N consecutive failures (avoid flapping)
   const CONSECUTIVE_FAILURES_FOR_DEGRADED = 3;
@@ -276,6 +282,28 @@ export default function OverviewPage() {
     }
   }, [token]);
 
+  // Cost summary (today, MTD, 7d)
+  const fetchCostSummary = useCallback(async () => {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) headers["X-OpenClaw-Token"] = token;
+      const res = await fetch("/api/costs/summary", { headers });
+      const data = await res.json();
+      if (data?.ok && data.today_usd !== undefined) {
+        setCostSummary({
+          today_usd: data.today_usd,
+          mtd_usd: data.mtd_usd,
+          last_7_days_usd: data.last_7_days_usd,
+          top_project: data.top_project ?? { id: "", usd: 0 },
+        });
+      } else {
+        setCostSummary(null);
+      }
+    } catch {
+      setCostSummary(null);
+    }
+  }, [token]);
+
   // Recent runs (last 5)
   const fetchRecentRuns = useCallback(async () => {
     try {
@@ -343,6 +371,7 @@ export default function OverviewPage() {
     fetchAuthContext();
     fetchDeployLast();
     fetchRecentRuns();
+    fetchCostSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
 
@@ -691,6 +720,44 @@ export default function OverviewPage() {
           </GlassCard>
         </div>
       )}
+
+      {/* Cost summary tile */}
+      <div className="mt-6">
+        <GlassCard>
+          <div className="px-5 py-3 border-b border-white/10 flex items-center justify-between">
+            <span className="text-sm font-semibold text-white/95">LLM Cost</span>
+            {costSummary && (
+              <span className="text-xs text-white/50">Today · MTD · 7d</span>
+            )}
+          </div>
+          <div className="p-5">
+            {costSummary ? (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                <div>
+                  <p className="text-white/50 text-xs">Today</p>
+                  <p className="text-white/95 font-medium">${costSummary.today_usd.toFixed(2)}</p>
+                </div>
+                <div>
+                  <p className="text-white/50 text-xs">MTD</p>
+                  <p className="text-white/95 font-medium">${costSummary.mtd_usd.toFixed(2)}</p>
+                </div>
+                <div>
+                  <p className="text-white/50 text-xs">Last 7d</p>
+                  <p className="text-white/95 font-medium">${costSummary.last_7_days_usd.toFixed(2)}</p>
+                </div>
+                <div>
+                  <p className="text-white/50 text-xs">Top project</p>
+                  <p className="text-white/95 font-medium truncate" title={costSummary.top_project.id}>
+                    {costSummary.top_project.id || "—"} ${costSummary.top_project.usd.toFixed(2)}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-white/50">No usage data yet. Costs from artifacts/cost/usage.jsonl.</p>
+            )}
+          </div>
+        </GlassCard>
+      </div>
 
       {/* AI Connections Status Panel */}
       {aiStatus && (

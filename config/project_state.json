@@ -1,7 +1,7 @@
 {
   "project_name": "OpenClaw",
   "goal_summary": "Self-updating project brain; repo + HQ canonical; no ChatGPT memory reliance.",
-  "last_verified_vps_head": "b64b7aa",
+  "last_verified_vps_head": "b59f432",
   "last_deploy_timestamp": null,
   "last_guard_result": null,
   "last_doctor_result": "FAIL",
@@ -19,7 +19,15 @@
     "soma_kajabi": {
       "phase": 0,
       "kill_switch": true,
-      "enable_instructions": "Set projects.soma_kajabi.kill_switch to false in config/project_state.json to allow Phase 0 actions."
+      "enable_instructions": "Set projects.soma_kajabi.kill_switch to false in config/project_state.json to allow Phase 0 actions.",
+      "phase0_baseline_status": "UNKNOWN",
+      "phase0_baseline_artifact_dir": "",
+      "phase0_last_run_id": null
     }
+  },
+  "gates": {
+    "allow_orb_backtests": false,
+    "allow_orb_backtests_unlocked_by": null,
+    "allow_orb_backtests_unlocked_at": null
   }
 }
