@@ -119,14 +119,8 @@ export default function ProjectsPage() {
             const status = statusColor(project);
             const projectHref = `/projects/${encodeURIComponent(project.id)}`;
             return (
-              <Link
-                key={project.id}
-                href={projectHref}
-                className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--glass-bg)] rounded-2xl"
-                aria-label={`Open project ${project.id}`}
-              >
-                <GlassCard>
-                  <div className="p-5 pb-3">
+              <GlassCard key={project.id}>
+                <div className="p-5 pb-3">
                     <div className="flex items-start justify-between mb-2">
                       <div className="flex-1 min-w-0">
                         <h3 className="text-sm font-semibold text-white/95 truncate">{project.name}</h3>
@@ -198,21 +192,20 @@ export default function ProjectsPage() {
                         <Link
                           href={`/runs?project=${project.id}`}
                           className="text-[11px] font-medium text-blue-400 hover:text-blue-300 focus:outline-none focus-visible:underline"
-                          onClick={(e) => e.stopPropagation()}
                         >
                           View runs
                         </Link>
                       )}
-                      <span
-                        className="text-[11px] font-medium text-blue-400 hover:text-blue-300"
-                        aria-hidden="true"
+                      <Link
+                        href={projectHref}
+                        className="text-[11px] font-medium text-blue-400 hover:text-blue-300 focus:outline-none focus-visible:underline"
+                        aria-label={`Open project ${project.id}`}
                       >
                         Open →
-                      </span>
+                      </Link>
                     </div>
                   </div>
                 </GlassCard>
-              </Link>
             );
           })}
         </div>
