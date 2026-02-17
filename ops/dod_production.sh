@@ -211,6 +211,7 @@ else
     POLL_START="$(date +%s)"
     POLL_END=$((POLL_START + 90))
     POLL_PASS=0
+    POLL_GOT_FAIL=0
     echo "{\"ok\":false,\"skipped\":\"409_conflict\",\"note\":\"polling_api_runs\"}" >"$DOD_ARTIFACT_DIR/exec_doctor.json"
     while [ "$(date +%s)" -lt "$POLL_END" ]; do
       RUNS_JSON="$(curl -sf --connect-timeout 5 --max-time 10 -H "x-openclaw-token: $ADMIN_TOKEN" "$BASE_URL/api/runs?limit=20" 2>/dev/null)" || true
@@ -242,7 +243,8 @@ except Exception:
           echo '{"ok":true,"source":"api_runs_poll","note":"doctor_run_completed"}' >"$DOD_ARTIFACT_DIR/exec_doctor.json"
           break
         elif [ "$DOCTOR_RUN" = "FAIL" ]; then
-          echo "  FAIL: doctor run reported failure (polled /api/runs)" >&2
+          POLL_GOT_FAIL=1
+          echo "  In-flight doctor finished with failure; triggering fresh doctor run..." >&2
           break
         fi
       fi
@@ -250,6 +252,23 @@ except Exception:
     done
     if [ "$POLL_PASS" -eq 1 ]; then
       DOCTOR_PASS=1
+    elif [ "$POLL_GOT_FAIL" -eq 1 ]; then
+      # One more POST now that previous run finished; wait for 200
+      DOCTOR_TMP2="$(mktemp)"
+      HTTP_CODE2="$(curl -s -o "$DOCTOR_TMP2" -w "%{http_code}" --connect-timeout 5 --max-time 90 \
+        -X POST "$BASE_URL/api/exec" -H "Content-Type: application/json" -H "x-openclaw-token: $ADMIN_TOKEN" \
+        -d '{"action":"doctor"}' 2>/dev/null)" || HTTP_CODE2="000"
+      DOCTOR_RESP2="$(cat "$DOCTOR_TMP2" 2>/dev/null)"
+      rm -f "$DOCTOR_TMP2"
+      if [ -n "$DOCTOR_RESP2" ] && [ "$HTTP_CODE2" = "200" ] && check_ok "$DOCTOR_RESP2" && echo "$DOCTOR_RESP2" | grep -q "All checks passed"; then
+        echo "  PASS: fresh doctor run passed (after 409 in-flight failure)"
+        echo "$DOCTOR_RESP2" >"$DOD_ARTIFACT_DIR/exec_doctor.json"
+        DOCTOR_PASS=1
+      else
+        echo "  FAIL: fresh doctor after 409 did not pass (HTTP $HTTP_CODE2)" >&2
+        FAILURES=$((FAILURES + 1))
+        RESULTS="${RESULTS}doctor_exec=409_then_fresh_fail "
+      fi
     else
       echo "  FAIL: doctor 409 — no PASS from /api/runs within 90s" >&2
       FAILURES=$((FAILURES + 1))
