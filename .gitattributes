@@ -1,0 +1,2 @@
+# Generated review packet: always keep current branch version on merge (avoid conflict loops).
+docs/REVIEW_PACKET.md merge=ours

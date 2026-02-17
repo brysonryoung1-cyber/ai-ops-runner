@@ -10,6 +10,16 @@
 6. **Commit isolation**: baseline-advance commits touch ONLY `docs/LAST_REVIEWED_SHA.txt` via pathspec.
 7. **No bypass env vars** in the pre-push gate. `REVIEW_PUSH_APPROVED` has been removed.
 
+## Merge strategy for REVIEW_PACKET.md
+
+`docs/REVIEW_PACKET.md` is a generated template; on merge we always keep the current branch version to avoid conflict loops. `.gitattributes` sets `docs/REVIEW_PACKET.md merge=ours`. One-time per clone:
+
+```bash
+git config merge.ours.driver true
+```
+
+`ops/doctor_repo.sh` does not set this automatically (repo config is local); run the above after clone if you pull/merge often.
+
 ## Push Gate Checks (pre-push hook)
 
 The pre-push hook enforces ALL of the following for every push to `refs/heads/main`:

@@ -70,6 +70,20 @@ for hook in pre-push post-commit; do
   fi
 done
 
+# --- Check merge driver for REVIEW_PACKET.md (avoids merge conflicts) ---
+echo ""
+echo "--- Merge driver (REVIEW_PACKET.md) ---"
+if grep -q 'REVIEW_PACKET.md merge=ours' "$ROOT_DIR/.gitattributes" 2>/dev/null; then
+  OUR_DRIVER="$(git config merge.ours.driver 2>/dev/null)" || true
+  if [ "$OUR_DRIVER" = "true" ]; then
+    check_pass "merge.ours.driver configured (REVIEW_PACKET.md merge=ours)"
+  else
+    check_warn "REVIEW_PACKET.md uses merge=ours but merge.ours.driver not set — run: git config merge.ours.driver true"
+  fi
+else
+  check_pass ".gitattributes (no REVIEW_PACKET merge=ours)"
+fi
+
 # --- Check .githooks source ---
 echo ""
 echo "--- Hook Sources ---"
