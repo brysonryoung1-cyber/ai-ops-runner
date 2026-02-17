@@ -124,6 +124,14 @@ def _allowlist() -> dict:
             ],
             "timeout_sec": 15,
         },
+        "soma_kajabi_phase0": {
+            "cmd": [
+                "bash",
+                "-c",
+                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.phase0_runner",
+            ],
+            "timeout_sec": 300,
+        },
         "soma_last_errors": {
             "cmd": [
                 "bash",

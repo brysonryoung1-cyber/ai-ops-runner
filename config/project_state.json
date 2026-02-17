@@ -14,5 +14,12 @@
   "next_action_text": "Start Zane Phase 0 skeleton",
   "ui_accepted": false,
   "ui_accepted_at": null,
-  "ui_accepted_commit": null
+  "ui_accepted_commit": null,
+  "projects": {
+    "soma_kajabi": {
+      "phase": 0,
+      "kill_switch": true,
+      "enable_instructions": "Set projects.soma_kajabi.kill_switch to false in config/project_state.json to allow Phase 0 actions."
+    }
+  }
 }

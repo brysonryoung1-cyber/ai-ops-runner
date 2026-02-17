@@ -61,6 +61,7 @@ const ACTION_PROJECT_MAP: Record<string, string> = {
   soma_snapshot_practitioner: "soma_kajabi_library_ownership",
   soma_harvest: "soma_kajabi_library_ownership",
   soma_mirror: "soma_kajabi_library_ownership",
+  soma_kajabi_phase0: "soma_kajabi",
   soma_status: "soma_kajabi_library_ownership",
   soma_last_errors: "soma_kajabi_library_ownership",
   sms_status: "soma_kajabi_library_ownership",

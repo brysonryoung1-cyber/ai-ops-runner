@@ -20,7 +20,8 @@ export type ActionName =
   | "soma_mirror"
   | "soma_status"
   | "soma_last_errors"
-  | "sms_status";
+  | "sms_status"
+  | "soma_kajabi_phase0";
 
 export interface AllowedAction {
   name: ActionName;
@@ -145,6 +146,15 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     remoteCommand:
       "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi_sync.sms status",
     timeoutSec: 15,
+  },
+  soma_kajabi_phase0: {
+    name: "soma_kajabi_phase0",
+    label: "Soma Kajabi Phase 0",
+    description:
+      "Read-only: Kajabi snapshot + Gmail harvest (Zane McCourtney, has:attachment) + video_manifest.csv",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi.phase0_runner",
+    timeoutSec: 300,
   },
   soma_last_errors: {
     name: "soma_last_errors",

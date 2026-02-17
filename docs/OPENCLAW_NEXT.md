@@ -1,3 +1,3 @@
 # Next Action
 
-Start Zane Phase 0 skeleton
+Run soma_kajabi Phase 0 snapshot+harvest and confirm artifacts populate.

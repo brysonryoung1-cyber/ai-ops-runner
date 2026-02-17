@@ -49,6 +49,21 @@
       ]
     },
     {
+      "id": "soma_kajabi",
+      "name": "Soma Kajabi Phase 0",
+      "description": "Phase 0 read-only: Kajabi library snapshot, Gmail harvest (from:Zane McCourtney has:attachment), video_manifest.csv",
+      "enabled": true,
+      "workflows": ["soma_kajabi_phase0"],
+      "schedules": [],
+      "notification_flags": {
+        "on_success": false,
+        "on_failure": true,
+        "on_recovery": true,
+        "channels": ["sms"]
+      },
+      "tags": ["soma", "kajabi", "phase0"]
+    },
+    {
       "id": "soma_kajabi_library_ownership",
       "name": "Soma Kajabi Library Ownership",
       "description": "Kajabi library sync: Home + Practitioner snapshots, Gmail video harvest, mirror",

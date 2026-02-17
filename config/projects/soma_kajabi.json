@@ -1,0 +1,11 @@
+{
+  "project_id": "soma_kajabi",
+  "phase": 0,
+  "kill_switch": true,
+  "kajabi_capture_mode": "manual",
+  "gmail_capture_mode": "manual",
+  "kajabi_secret_ref": "KAJABI_SESSION_TOKEN",
+  "gmail_secret_ref": "GMAIL_APP_PASSWORD",
+  "gmail_user_ref": "GMAIL_USER",
+  "_comment": "kill_switch=true blocks all actions until explicitly disabled. Set kill_switch=false in project_state.json to enable. Modes: manual=operator provides data; playwright/oauth=automated capture."
+}

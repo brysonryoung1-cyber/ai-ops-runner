@@ -29,6 +29,7 @@ const ACTION_TO_HOSTD: Record<string, string> = {
   soma_snapshot_practitioner: "soma_snapshot_practitioner",
   soma_harvest: "soma_harvest",
   soma_mirror: "soma_mirror",
+  soma_kajabi_phase0: "soma_kajabi_phase0",
   soma_status: "soma_status",
   soma_last_errors: "soma_last_errors",
   sms_status: "sms_status",

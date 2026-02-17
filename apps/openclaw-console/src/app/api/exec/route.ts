@@ -168,6 +168,21 @@ export async function POST(req: NextRequest) {
 
     const finishedAt = new Date();
 
+    // Parse soma_kajabi_phase0 stdout for error_class, recommended_next_action, artifact_paths
+    let errorForRecord = result.error || null;
+    let responsePayload: Record<string, unknown> = { ...result };
+    if (actionName === "soma_kajabi_phase0" && result.stdout) {
+      try {
+        const parsed = JSON.parse(result.stdout.trim().split("\n").pop() || "{}");
+        if (parsed.error_class) {
+          errorForRecord = `error_class: ${parsed.error_class}${parsed.recommended_next_action ? ` | recommended_next_action: ${parsed.recommended_next_action}` : ""}`;
+          responsePayload = { ...result, error_class: parsed.error_class, recommended_next_action: parsed.recommended_next_action, artifact_paths: parsed.artifact_paths };
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+
     // Write audit entry
     writeAuditEntry({
       timestamp: finishedAt.toISOString(),
@@ -176,7 +191,7 @@ export async function POST(req: NextRequest) {
       params_hash: hashParams(params),
       exit_code: result.exitCode,
       duration_ms: result.durationMs,
-      error: result.error,
+      error: errorForRecord,
     });
 
     // Write run record (even on action failure — fail-closed recorder)
@@ -186,11 +201,11 @@ export async function POST(req: NextRequest) {
       finishedAt,
       result.exitCode,
       result.ok,
-      result.error || null
+      errorForRecord
     );
     writeRunRecord(runRecord);
 
-    return NextResponse.json(result, { status: result.ok ? 200 : 502 });
+    return NextResponse.json(responsePayload, { status: result.ok ? 200 : 502 });
   } catch (err) {
     const finishedAt = new Date();
     const duration_ms = finishedAt.getTime() - startedAt.getTime();
