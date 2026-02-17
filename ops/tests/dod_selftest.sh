@@ -98,6 +98,29 @@ else
 fi
 echo ""
 
+# ── Section 1d: deploy_until_green retries joinable 409 ──────────
+echo "=== deploy_until_green retryable 409 ==="
+if grep -q "dod_failed_joinable_409" "$OPS_DIR/deploy_until_green.sh" && grep -q "RETRYABLE\|retryable\|continue" "$OPS_DIR/deploy_until_green.sh"; then
+  pass "deploy_until_green classifies joinable 409 as retryable and continues"
+else
+  fail "deploy_until_green must retry on dod_failed_joinable_409 (not fail-close)"
+fi
+if grep -q "retryable" "$OPS_DIR/deploy_until_green.sh" && grep -q "triage" "$OPS_DIR/deploy_until_green.sh"; then
+  pass "deploy_until_green writes retryable in triage"
+else
+  fail "deploy_until_green must set retryable in triage.json for joinable 409"
+fi
+echo ""
+
+# ── Section 1e: DoD single rerun cap (no spam) ───────────────────
+echo "=== DoD doctor single rerun cap ==="
+if grep -q "1 rerun\|exactly one rerun\|single fresh POST" "$OPS_DIR/dod_production.sh"; then
+  pass "DoD caps doctor rerun to exactly one after join FAIL"
+else
+  fail "DoD must not spam POST on 409; single rerun after join FAIL"
+fi
+echo ""
+
 # ── Section 2: /api/dod/last route ───────────────────────────────
 
 echo "=== /api/dod/last route ==="

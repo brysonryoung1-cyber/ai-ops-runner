@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { executeAction, checkConnectivity } from "@/lib/hostd";
-import { acquireLock, releaseLock } from "@/lib/action-lock";
+import { acquireLock, releaseLock, getLockInfo } from "@/lib/action-lock";
 import {
   writeAuditEntry,
   deriveActor,
@@ -185,20 +185,20 @@ export async function POST(req: NextRequest) {
   const lockResult = acquireLock(actionName);
   if (!lockResult.acquired) {
     const existing = lockResult.existing;
-    const payload = existing
-      ? {
-          ok: false,
-          error_class: "ALREADY_RUNNING",
-          action: actionName,
-          active_run_id: existing.runId,
-          started_at: new Date(existing.startedAt).toISOString(),
-        }
-      : {
-          ok: false,
-          error_class: "ALREADY_RUNNING",
-          action: actionName,
-          error: `Action "${actionName}" is already running. Wait for it to complete.`,
-        };
+    const lockInfo = getLockInfo(actionName);
+    const runId = existing?.runId ?? lockInfo?.active_run_id;
+    const startedAt = existing?.startedAt ?? (lockInfo?.started_at ? new Date(lockInfo.started_at).getTime() : undefined);
+    const payload: Record<string, unknown> = {
+      ok: false,
+      error_class: "ALREADY_RUNNING",
+      action: actionName,
+    };
+    if (runId) {
+      payload.active_run_id = runId;
+      if (startedAt != null) payload.started_at = new Date(startedAt).toISOString();
+    } else {
+      payload.error = `Action "${actionName}" is already running. Wait for it to complete.`;
+    }
     return NextResponse.json(payload, { status: 409 });
   }
 

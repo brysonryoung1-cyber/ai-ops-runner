@@ -27,7 +27,9 @@ write_triage() {
   local run_id="$1" attempt="$2" err_class="$3" failing_step="$4" next_action="$5"
   local triage_dir="$DEPLOY_DIR/$run_id"
   mkdir -p "$triage_dir"
-  export _TRIAGE_RUN_ID="$run_id" _TRIAGE_ATTEMPT="$attempt" _TRIAGE_ERR="$err_class" _TRIAGE_STEP="$failing_step" _TRIAGE_NEXT="$next_action" _TRIAGE_DIR="$triage_dir" _DOD_DIR="$DOD_DIR"
+  local retryable="false"
+  [ "$err_class" = "dod_failed_joinable_409" ] && retryable="true"
+  export _TRIAGE_RUN_ID="$run_id" _TRIAGE_ATTEMPT="$attempt" _TRIAGE_ERR="$err_class" _TRIAGE_STEP="$failing_step" _TRIAGE_NEXT="$next_action" _TRIAGE_DIR="$triage_dir" _DOD_DIR="$DOD_DIR" _TRIAGE_RETRYABLE="$retryable"
   python3 -c "
 import json, os
 from datetime import datetime, timezone
@@ -36,6 +38,7 @@ r = {
   'run_id': os.environ.get('_TRIAGE_RUN_ID', ''),
   'attempt': int(os.environ.get('_TRIAGE_ATTEMPT', '0')),
   'error_class': os.environ.get('_TRIAGE_ERR', ''),
+  'retryable': os.environ.get('_TRIAGE_RETRYABLE', 'false').lower() == 'true',
   'failing_step': os.environ.get('_TRIAGE_STEP', ''),
   'recommended_next_action': os.environ.get('_TRIAGE_NEXT', ''),
   'artifact_pointers': {
@@ -73,7 +76,7 @@ print(d.get('error_class', 'unknown'))
 " 2>/dev/null)" || err_class="unknown"
     # If dod_failed, check if joinable 409 (doctor 409 / ALREADY_RUNNING) — then retryable
     if [ "$err_class" = "dod_failed" ]; then
-      local dod_result dod_log
+      local dod_result
       dod_result=""
       for d in $(ls -1dt "$DOD_DIR"/[0-9]* 2>/dev/null | head -1); do
         [ -f "$d/dod_result.json" ] && dod_result="$d/dod_result.json" && break
@@ -86,7 +89,10 @@ if path and os.path.isfile(path):
     with open(path) as f:
         d = json.load(f)
     s = (d.get('summary') or '') + ' ' + str(d.get('checks') or {})
-    if 'doctor_exec=409' in s or '409_poll' in s or '409_then_fresh' in s:
+    doc_err = d.get('doctor_error_class') or ''
+    if 'doctor_exec=409' in s or '409_poll' in s or '409_then_fresh' in s or '409' in doc_err or 'ALREADY_RUNNING' in s:
+        sys.exit(0)
+    if doc_err in ('409_poll_timeout', '409_then_fresh_fail'):
         sys.exit(0)
 sys.exit(1)
 " 2>/dev/null && { echo "dod_failed_joinable_409"; return; }

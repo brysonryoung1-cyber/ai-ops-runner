@@ -278,20 +278,12 @@ except Exception: print('NONE')
     if [ "$POLL_PASS" -eq 1 ]; then
       DOCTOR_PASS=1
     elif [ "$POLL_GOT_FAIL" -eq 1 ]; then
-      # 1 rerun max: fresh POST; if 409 again wait 15s and retry once (idempotency).
+      # Exactly one rerun after join FAIL: single fresh POST (no spam). If 409, do not retry again — cap total.
       DOCTOR_TMP2="$(mktemp)"
       HTTP_CODE2="$(curl -s -o "$DOCTOR_TMP2" -w "%{http_code}" --connect-timeout 5 --max-time 90 \
         -X POST "$BASE_URL/api/exec" -H "Content-Type: application/json" -H "x-openclaw-token: $ADMIN_TOKEN" $DOD_HEADER \
         -d '{"action":"doctor"}' 2>/dev/null)" || HTTP_CODE2="000"
       DOCTOR_RESP2="$(cat "$DOCTOR_TMP2" 2>/dev/null)"
-      if [ "$HTTP_CODE2" = "409" ]; then
-        echo "  Fresh POST returned 409; waiting 15s and retrying once..." >&2
-        sleep 15
-        HTTP_CODE2="$(curl -s -o "$DOCTOR_TMP2" -w "%{http_code}" --connect-timeout 5 --max-time 90 \
-          -X POST "$BASE_URL/api/exec" -H "Content-Type: application/json" -H "x-openclaw-token: $ADMIN_TOKEN" $DOD_HEADER \
-          -d '{"action":"doctor"}' 2>/dev/null)" || HTTP_CODE2="000"
-        DOCTOR_RESP2="$(cat "$DOCTOR_TMP2" 2>/dev/null)"
-      fi
       rm -f "$DOCTOR_TMP2"
       if [ -n "$DOCTOR_RESP2" ] && [ "$HTTP_CODE2" = "200" ] && check_ok "$DOCTOR_RESP2" && echo "$DOCTOR_RESP2" | grep -q "All checks passed"; then
         echo "  PASS: fresh doctor run passed (after join FAIL, 1 rerun)"
@@ -376,7 +368,9 @@ else
 fi
 echo ""
 
-# --- Write redacted proof artifact ---
+# --- Write redacted proof artifact (include doctor_error_class for joinable 409 classification) ---
+DOCTOR_ERR_CLASS=""
+echo "$RESULTS" | grep -q "doctor_exec=" && DOCTOR_ERR_CLASS="$(echo "$RESULTS" | sed -n 's/.*doctor_exec=\([^ ]*\).*/\1/p' | tr -d ' ')"
 python3 -c "
 import json
 from datetime import datetime, timezone
@@ -384,6 +378,7 @@ run_id = '$RUN_ID'
 artifact_dir = 'artifacts/dod/$RUN_ID'
 failures = int('$FAILURES')
 results = '$RESULTS'.strip()
+doctor_err = '$DOCTOR_ERR_CLASS'
 checks = {
   'hostd_health': 'hostd_health' not in results,
   'api_ai_status': 'ai_status' not in results,
@@ -410,6 +405,8 @@ obj = {
   },
   'timestamps': {'finished': datetime.now(timezone.utc).isoformat()},
 }
+if doctor_err:
+    obj['doctor_error_class'] = doctor_err
 with open('$DOD_ARTIFACT_DIR/dod_result.json', 'w') as f:
     json.dump(obj, f, indent=2)
 "
