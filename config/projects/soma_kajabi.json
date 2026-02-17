@@ -3,15 +3,19 @@
   "phase": 0,
   "kill_switch": true,
   "kajabi": {
-    "mode": "session_token",
+    "mode": "storage_state",
     "base_url": "https://app.kajabi.com",
     "storage_state_secret_ref": "/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json",
     "interactive_bootstrap": false
   },
   "gmail": {
-    "mode": "imap",
+    "mode": "oauth",
     "query": "from:(Zane McCourtney) has:attachment",
-    "attachment_types": ["video/mp4", "video/quicktime", "video/x-msvideo"],
+    "attachment_types": [
+      "video/mp4",
+      "video/quicktime",
+      "video/x-msvideo"
+    ],
     "state_secret_ref": "/etc/ai-ops-runner/secrets/soma_kajabi/gmail_state.json",
     "auth_secret_ref": "/etc/ai-ops-runner/secrets/soma_kajabi/gmail_oauth.json"
   },

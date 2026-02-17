@@ -184,8 +184,26 @@ def _transform_categories_to_lessons(categories: list[dict]) -> list[dict]:
     return lessons
 
 
+def _session_token_from_storage_state(path: Path) -> str | None:
+    """Extract _kjb_session cookie value from Playwright storage_state JSON. Returns None if missing/invalid."""
+    if not path.exists() or path.stat().st_size == 0:
+        return None
+    try:
+        data = json.loads(path.read_text())
+        cookies = data.get("cookies") if isinstance(data, dict) else []
+        for c in cookies if isinstance(cookies, list) else []:
+            if isinstance(c, dict) and c.get("name") == "_kjb_session":
+                val = c.get("value")
+                if val and isinstance(val, str):
+                    return val
+    except Exception:
+        pass
+    return None
+
+
 def _run_kajabi_snapshot(root: Path, out_dir: Path, run_id: str, cfg: dict) -> tuple[bool, str | None]:
     """Capture Kajabi structure. Returns (ok, recommended_next_action)."""
+    import os
     kajabi_cfg = cfg.get("kajabi") or {}
     mode = kajabi_cfg.get("mode", cfg.get("kajabi_capture_mode", "manual"))
     if mode == "manual":
@@ -200,7 +218,16 @@ def _run_kajabi_snapshot(root: Path, out_dir: Path, run_id: str, cfg: dict) -> t
         _write_kajabi_snapshot_fail_closed(out_dir, run_id, mode)
         return False, "soma_kajabi_sync not available; ensure services.soma_kajabi_sync is importable"
 
-    token = load_secret("KAJABI_SESSION_TOKEN", required=False)
+    token: str | None = None
+    if mode == "storage_state":
+        from .connector_config import KAJABI_STORAGE_STATE_PATH
+        path_str = kajabi_cfg.get("storage_state_secret_ref") or str(KAJABI_STORAGE_STATE_PATH)
+        path = Path(path_str)
+        token = _session_token_from_storage_state(path)
+        if token:
+            os.environ["KAJABI_SESSION_TOKEN"] = token
+    if not token:
+        token = load_secret("KAJABI_SESSION_TOKEN", required=False)
     if not token:
         _write_kajabi_snapshot_fail_closed(out_dir, run_id, mode)
         return False, "KAJABI_SESSION_TOKEN not configured; store in env or /etc/ai-ops-runner/secrets/kajabi_session_token"
@@ -250,6 +277,89 @@ def _write_gmail_harvest_success(out_dir: Path, emails: list[dict]) -> Path:
     return path
 
 
+def _run_gmail_harvest_oauth(root: Path, out_dir: Path, cfg: dict) -> tuple[list[dict], bool, str | None]:
+    """Harvest Gmail via OAuth refresh token. Returns (emails, ok, recommended_next_action)."""
+    from .connector_config import GMAIL_OAUTH_PATH
+    path_str = cfg.get("gmail", {}).get("auth_secret_ref") or str(GMAIL_OAUTH_PATH)
+    path = Path(path_str)
+    if not path.exists() or path.stat().st_size == 0:
+        _write_gmail_harvest_fail_closed(
+            out_dir,
+            "OAUTH_TOKEN_MISSING",
+            f"Run soma_kajabi_gmail_connect_start then finalize; store refresh token at {path_str}",
+        )
+        return [], False, "Gmail OAuth token not found; run connect flow"
+    try:
+        oauth_data = json.loads(path.read_text())
+        refresh_token = oauth_data.get("refresh_token") if isinstance(oauth_data, dict) else None
+        if not refresh_token:
+            _write_gmail_harvest_fail_closed(out_dir, "OAUTH_TOKEN_INVALID", "gmail_oauth.json must contain refresh_token")
+            return [], False, "refresh_token missing in gmail_oauth.json"
+    except Exception:
+        _write_gmail_harvest_fail_closed(out_dir, "OAUTH_TOKEN_INVALID", f"Invalid JSON at {path_str}")
+        return [], False, "Invalid gmail_oauth.json"
+    try:
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+    except ImportError:
+        _write_gmail_harvest_fail_closed(
+            out_dir,
+            "OAUTH_DEPS_MISSING",
+            "Install google-auth and google-api-python-client for Gmail OAuth; or use gmail.mode=imap",
+        )
+        return [], False, "Google API libs not installed; use gmail.mode=imap"
+    try:
+        from google.auth.transport.requests import Request
+        creds = Credentials(
+            token=None,
+            refresh_token=refresh_token,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=oauth_data.get("client_id") or "",
+            client_secret=oauth_data.get("client_secret") or "",
+        )
+        creds.refresh(Request())
+        service = build("gmail", "v1", credentials=creds)
+        response = service.users().messages().list(
+            userId="me",
+            q=GMAIL_SEARCH_QUERY,
+            maxResults=100,
+        ).execute()
+        messages = response.get("messages") or []
+        emails_out: list[dict] = []
+        for m in messages:
+            msg = service.users().messages().get(userId="me", id=m["id"], format="metadata").execute()
+            payload = msg.get("payload") or {}
+            headers = {h["name"].lower(): h["value"] for h in payload.get("headers") or []}
+            subject = headers.get("subject", "")
+            date_str = headers.get("date", "")
+            email_id = msg.get("id", "")
+            attachments = []
+            for p in payload.get("parts") or []:
+                fname = (p.get("filename") or "").strip()
+                if fname:
+                    attachments.append({
+                        "filename": fname,
+                        "mime": p.get("mimeType") or "unknown",
+                        "size_bytes": len((p.get("body") or {}).get("data") or b"") or 0,
+                    })
+            emails_out.append({
+                "email_id": email_id,
+                "subject": subject,
+                "datetime": date_str,
+                "body_text": "",
+                "attachments": attachments,
+            })
+        _write_gmail_harvest_success(out_dir, emails_out)
+        return emails_out, True, None
+    except Exception as e:
+        _write_gmail_harvest_fail_closed(
+            out_dir,
+            "GMAIL_HARVEST_FAILED",
+            f"Gmail API error: {str(e)[:200]}",
+        )
+        return [], False, str(e)[:100]
+
+
 def _run_gmail_harvest(root: Path, out_dir: Path, cfg: dict) -> tuple[list[dict], bool, str | None]:
     """Harvest Gmail from:(Zane McCourtney) has:attachment. Returns (emails, ok, recommended_next_action)."""
     mode = cfg.get("gmail", {}).get("mode") or cfg.get("gmail_capture_mode", "manual")
@@ -260,6 +370,9 @@ def _run_gmail_harvest(root: Path, out_dir: Path, cfg: dict) -> tuple[list[dict]
             "Switch to oauth mode and provide credential reference, or run manual harvest and place gmail_harvest.jsonl in artifacts",
         )
         return [], False, "Switch to oauth mode and provide credential reference"
+
+    if mode == "oauth":
+        return _run_gmail_harvest_oauth(root, out_dir, cfg)
 
     try:
         import email

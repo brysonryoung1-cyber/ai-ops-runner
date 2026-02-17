@@ -4,11 +4,12 @@
 
 - **Project**: OpenClaw (ai-ops-runner)
 - **Goal summary**: Self-updating project brain; repo + HQ canonical; no ChatGPT memory reliance.
-- **Last verified VPS HEAD**: 0e1a46f
-- **Last deploy**: —
-- **Last doctor**: FAIL
-- **Last guard**: —
+- **Last verified VPS HEAD**: bce28cc (post-deploy)
+- **Last deploy**: deploy_until_green on aiops-1
+- **Last doctor**: PASS (DoD PASS)
+- **Last guard**: PASS
 - **Zane phase**: 0
+- **Connectors**: Kajabi (storage_state bootstrap); Gmail (OAuth device flow or IMAP fallback). Phase 0 fails with CONNECTOR_NOT_CONFIGURED until both are ready.
 - **UI accepted**: False (at: —, commit: —)
 - **LLM primary**: openai / gpt-4o-mini
 - **LLM fallback**: mistral / labs-devstral-small-2512

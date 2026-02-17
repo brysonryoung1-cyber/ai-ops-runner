@@ -1,3 +1,3 @@
 # Next Action
 
-Run soma_kajabi Phase 0 snapshot+harvest and confirm artifacts populate
+Generate Phase 1 plan artifact for mapping videos→lessons; still no writes.

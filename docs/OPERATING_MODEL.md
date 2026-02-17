@@ -38,3 +38,9 @@ The project maintains a single next action in `docs/OPENCLAW_NEXT.md`. It remain
 - **HQ**: Binds to 127.0.0.1 only. Actions run via **Host Executor (hostd)** on the host (127.0.0.1:8877). No SSH dependency. Deploy+Verify button (admin-only when `OPENCLAW_ADMIN_TOKEN` is set; 503 if unset). Artifacts listing from read-only mount (`/var/openclaw_artifacts`). Last deploy result and artifact path on Overview.
 - **Host Executor (hostd)**: `ops/openclaw_hostd.py` — allowlisted actions (doctor, deploy_and_verify, port_audit, tail_guard_log, etc.). Auth via `X-OpenClaw-Admin-Token` from `/etc/ai-ops-runner/secrets/openclaw_admin_token`. Fail-closed: token missing → 503; token mismatch → 403. Installed by `ops/install_openclaw_hostd.sh` (idempotent); deploy pipeline runs it early.
 - **Failure modes**: hostd down → HQ connectivity check fails; doctor fails hostd check. No public ports; Tailscale/localhost only.
+
+## Connector bootstrap (no secrets in logs)
+
+- **Kajabi**: HQ Soma → Connectors card → **Bootstrap Kajabi** (start → owner completes login/2FA in browser and saves Playwright storage_state; copy file to `/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json`) → finalize. Perms 0640, owner 1000:1000. Config: `kajabi.mode=storage_state`, `storage_state_secret_ref` points to that path.
+- **Gmail**: HQ Soma → **Connect Gmail** (start → owner opens verification_url, enters user_code; then finalize). OAuth token written to `/etc/ai-ops-runner/secrets/soma_kajabi/gmail_oauth.json` (0640). Requires `gmail_client.json` with client_id/client_secret (Google OAuth Desktop/Limited Input Device app). Alternative: `gmail.mode=imap` with GMAIL_USER + GMAIL_APP_PASSWORD in secrets (no token logging).
+- Phase 0 remains CONNECTOR_NOT_CONFIGURED until both connectors report ready.

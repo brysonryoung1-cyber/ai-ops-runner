@@ -58,3 +58,29 @@ def test_phase0_connector_not_configured_when_manual():
     parsed = json.loads(lines[-1]) if lines else {}
     assert parsed.get("error_class") == "CONNECTOR_NOT_CONFIGURED"
     assert parsed.get("ok") is False
+
+
+def test_storage_state_present_is_kajabi_ready():
+    """When kajabi.mode is storage_state and file exists with _kjb_session cookie, is_kajabi_ready returns True."""
+    from services.soma_kajabi.connector_config import is_kajabi_ready
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump({
+            "cookies": [{"name": "_kjb_session", "value": "secret-session-value", "domain": ".kajabi.com"}],
+            "origins": [],
+        }, f)
+        path = f.name
+    try:
+        cfg = {
+            "kajabi": {
+                "mode": "storage_state",
+                "base_url": "https://app.kajabi.com",
+                "storage_state_secret_ref": path,
+            },
+            "gmail": {"mode": "imap", "query": "x"},
+            "artifacts": {"base_dir": "artifacts/soma_kajabi/phase0"},
+        }
+        ready, reason = is_kajabi_ready(cfg)
+        assert ready is True
+        assert "storage_state" in reason.lower() or "present" in reason.lower()
+    finally:
+        Path(path).unlink(missing_ok=True)

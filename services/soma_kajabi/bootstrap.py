@@ -55,6 +55,7 @@ def _run_status() -> int:
 
 
 def _run_finalize() -> int:
+    import os
     root = _repo_root()
     cfg, err = load_soma_kajabi_config(root)
     if err:
@@ -63,8 +64,17 @@ def _run_finalize() -> int:
     path_str = cfg.get("kajabi", {}).get("storage_state_secret_ref") or str(KAJABI_STORAGE_STATE_PATH)
     path = Path(path_str)
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Finalize expects the file to already exist (user copied it). We just verify.
+    # Finalize expects the file to already exist (user copied it). Verify and enforce perms 0640.
     if path.exists():
+        try:
+            path.chmod(0o640)
+        except OSError:
+            pass
+        # Prefer 1000:1000 if we have capability (e.g. on host); skip if not root
+        try:
+            os.chown(path, 1000, 1000)
+        except (OSError, AttributeError):
+            pass
         print(json.dumps({"ok": True, "message": "storage_state already present", "path": path_str}))
         return 0
     print(json.dumps({
