@@ -51,6 +51,9 @@ echo "Installing dependencies..."
 
 # ─── Build ────────────────────────────────────────────────────────────────────
 
+echo "Running codegen (action registry export)..."
+(cd "$CONSOLE_DIR" && npm run codegen)
+
 echo "Building for production..."
 (cd "$CONSOLE_DIR" && npm run build)
 

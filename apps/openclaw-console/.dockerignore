@@ -1,0 +1,9 @@
+# Keep Docker build context lean — exclude dev/test artifacts
+node_modules
+.next
+.env*
+artifacts
+test-results
+data
+*.log
+.git

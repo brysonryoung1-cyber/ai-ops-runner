@@ -164,6 +164,31 @@ if [ -f "docker-compose.console.yml" ]; then
   [ -n "$AIOPS_HOST" ] && export AIOPS_HOST
   if ! docker compose -f docker-compose.yml -f docker-compose.console.yml build openclaw_console 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/console_build.log"; then
     echo "console_build_failed" >"$DEPLOY_ARTIFACT_DIR/console_build_failed"
+    # --- Diagnostic probe: capture toolchain info from the builder base image ---
+    PROBE_IMG="$(grep -m1 'FROM node:' apps/openclaw-console/Dockerfile | awk '{print $2}' 2>/dev/null || echo 'node:20-alpine')"
+    docker run --rm "$PROBE_IMG" sh -c 'echo "node: $(node -v 2>/dev/null || echo MISSING)"; echo "npm: $(npm -v 2>/dev/null || echo MISSING)"; echo "python3: $(python3 --version 2>/dev/null || echo MISSING)"; echo "which node: $(which node 2>/dev/null || echo MISSING)"; echo "which npm: $(which npm 2>/dev/null || echo MISSING)"' >"$DEPLOY_ARTIFACT_DIR/console_build_probe.txt" 2>&1 || true
+    # --- JSON summary of failure (reads log file directly to avoid quoting issues) ---
+    CONSOLE_BUILD_FAIL_IMG="$PROBE_IMG" python3 -c "
+import json, os
+p = os.environ.get('DEPLOY_ARTIFACT_DIR', '')
+probe = ''
+probe_path = os.path.join(p, 'console_build_probe.txt')
+if os.path.isfile(probe_path):
+    with open(probe_path) as f: probe = f.read().strip()
+tail_lines = []
+log_path = os.path.join(p, 'console_build.log')
+if os.path.isfile(log_path):
+    with open(log_path) as f: tail_lines = f.read().strip().split('\n')[-40:]
+summary = {
+    'error_class': 'console_build_failed',
+    'exit_code': 1,
+    'base_image': os.environ.get('CONSOLE_BUILD_FAIL_IMG', 'unknown'),
+    'probe': probe,
+    'tail_40_lines': tail_lines
+}
+with open(os.path.join(p, 'console_build_fail.json'), 'w') as f:
+    json.dump(summary, f, indent=2)
+" 2>/dev/null || true
     write_fail "$STEP" "console_build_failed" "Fix openclaw-console build/typecheck and re-run deploy" "artifacts/deploy/$RUN_ID/console_build.log"
     exit 2
   fi

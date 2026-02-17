@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1 --port 8787",
-    "prebuild": "cd ../.. && python3 ops/export_action_registry_ts.py",
+    "codegen": "cd ../.. && python3 ops/export_action_registry_ts.py",
     "build": "next build",
     "start": "next start --hostname 127.0.0.1 --port 8787",
     "lint": "next lint",
