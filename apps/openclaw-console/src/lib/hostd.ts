@@ -44,7 +44,72 @@ const ACTION_TO_HOSTD: Record<string, string> = {
   "pred_markets.mirror.backfill": "pred_markets.mirror.backfill",
   "pred_markets.report.health": "pred_markets.report.health",
   "pred_markets.report.daily": "pred_markets.report.daily",
+  // Soma connectors (server-side only; browser never calls hostd directly)
+  soma_connectors_status: "soma_connectors_status",
+  soma_kajabi_bootstrap_start: "soma_kajabi_bootstrap_start",
+  soma_kajabi_bootstrap_status: "soma_kajabi_bootstrap_status",
+  soma_kajabi_bootstrap_finalize: "soma_kajabi_bootstrap_finalize",
+  soma_kajabi_gmail_connect_start: "soma_kajabi_gmail_connect_start",
+  soma_kajabi_gmail_connect_status: "soma_kajabi_gmail_connect_status",
+  soma_kajabi_gmail_connect_finalize: "soma_kajabi_gmail_connect_finalize",
 };
+
+export const HOSTD_ACTIONS = Object.keys(ACTION_TO_HOSTD);
+
+function buildMockStdout(actionName: string): string {
+  const payloads: Record<string, Record<string, unknown>> = {
+    soma_connectors_status: {
+      result_summary: { kajabi: "not_connected", gmail: "not_connected" },
+    },
+    soma_kajabi_bootstrap_start: {
+      result_summary: "Bootstrap started (mock)",
+      next_steps: {
+        instruction: "Check status and finalize when ready.",
+        verification_url: null,
+        user_code: null,
+      },
+    },
+    soma_kajabi_bootstrap_status: {
+      result_summary: { status: "pending", ready_to_finalize: false },
+    },
+    soma_kajabi_bootstrap_finalize: {
+      result_summary: "Bootstrap finalized (mock)",
+    },
+    soma_kajabi_gmail_connect_start: {
+      result_summary: "Gmail connect started (mock)",
+      next_steps: {
+        instruction: "Complete OAuth in browser; then refresh status.",
+        verification_url: "https://example.com/device",
+        user_code: "MOCK-CODE",
+      },
+    },
+    soma_kajabi_gmail_connect_status: {
+      result_summary: { status: "pending", ready_to_finalize: false },
+    },
+    soma_kajabi_gmail_connect_finalize: {
+      result_summary: "Gmail connect finalized (mock)",
+    },
+  };
+  const payload = payloads[actionName] ?? {
+    result_summary: "Mock hostd ok",
+  };
+  return JSON.stringify(payload);
+}
+
+function mockHostdResult(actionName: string): HostdResult {
+  const safeAction = actionName.replace(/[^a-zA-Z0-9_.-]/g, "_");
+  return {
+    ok: true,
+    action: actionName,
+    stdout: buildMockStdout(actionName),
+    stderr: "",
+    exitCode: 0,
+    durationMs: 5,
+    artifact_dir: `artifacts/hostd/mock-${safeAction}`,
+    truncated: false,
+    httpStatus: 200,
+  };
+}
 
 function getHostdUrl(): string | null {
   const url = process.env.OPENCLAW_HOSTD_URL;
@@ -57,6 +122,23 @@ function getHostdUrl(): string | null {
  */
 export async function executeAction(actionName: string): Promise<HostdResult> {
   const start = Date.now();
+  const hostdAction = ACTION_TO_HOSTD[actionName];
+  if (!hostdAction) {
+    return {
+      ok: false,
+      action: actionName,
+      stdout: "",
+      stderr: "",
+      exitCode: null,
+      durationMs: Date.now() - start,
+      error: `Action "${actionName}" is not available via Host Executor.`,
+    };
+  }
+
+  if (process.env.OPENCLAW_HOSTD_MOCK === "1") {
+    return mockHostdResult(actionName);
+  }
+
   const baseUrl = getHostdUrl();
   if (!baseUrl) {
     return {
@@ -68,19 +150,6 @@ export async function executeAction(actionName: string): Promise<HostdResult> {
       durationMs: Date.now() - start,
       error:
         "Host Executor not configured. Set OPENCLAW_HOSTD_URL (e.g. http://host.docker.internal:8877).",
-    };
-  }
-
-  const hostdAction = ACTION_TO_HOSTD[actionName];
-  if (!hostdAction) {
-    return {
-      ok: false,
-      action: actionName,
-      stdout: "",
-      stderr: "",
-      exitCode: null,
-      durationMs: Date.now() - start,
-      error: `Action "${actionName}" is not available via Host Executor.`,
     };
   }
 

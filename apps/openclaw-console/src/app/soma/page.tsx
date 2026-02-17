@@ -156,8 +156,8 @@ export default function SomaPage() {
 
       {/* Connectors card */}
       <ConnectorsCard
-        result={results["soma_connectors_status"]}
-        loading={loading === "soma_connectors_status"}
+        result={results["soma_connectors_status"] as import("@/components/ConnectorsCard").ConnectorResult}
+        loadingAction={loading}
         onExec={handleExec}
         variant="apple"
       />

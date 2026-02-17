@@ -382,10 +382,48 @@ fi
 # Test 35: Allowlist module untouched (no arbitrary commands added)
 # Count actual action entries in the ALLOWLIST record (keys ending with colon + space + {)
 ALLOWLIST_ACTIONS=$(grep -c "name:" "$REPO_ROOT/apps/openclaw-console/src/lib/allowlist.ts" || true)
-if [[ "$ALLOWLIST_ACTIONS" -le 30 ]]; then
+if [[ "$ALLOWLIST_ACTIONS" -le 40 ]]; then
   pass "allowlist action count within bounds ($ALLOWLIST_ACTIONS)"
 else
   fail "allowlist unexpectedly large ($ALLOWLIST_ACTIONS actions)"
+fi
+
+# Test 35b: Allowlist actions must exist in hostd registry (UI guard)
+if python3 -c "
+import re, sys
+from pathlib import Path
+root = Path('$REPO_ROOT')
+
+def extract_keys(path: Path, marker: str) -> set[str]:
+    text = path.read_text()
+    idx = text.find(marker)
+    if idx == -1:
+        raise SystemExit(f'marker not found: {marker}')
+    brace = text.find('{', idx)
+    if brace == -1:
+        raise SystemExit(f'no opening brace after: {marker}')
+    keys = []
+    depth = 0
+    for line in text[brace:].splitlines():
+        depth += line.count('{') - line.count('}')
+        if depth <= 0:
+            break
+        if depth == 1:
+            m = re.match(r'\\s*(?:\"([^\"]+)\"|([A-Za-z0-9_.]+))\\s*:', line)
+            if m:
+                keys.append(m.group(1) or m.group(2))
+    return set(keys)
+
+allowlist = extract_keys(root / 'apps/openclaw-console/src/lib/allowlist.ts', 'export const ALLOWLIST')
+hostd = extract_keys(root / 'apps/openclaw-console/src/lib/hostd.ts', 'const ACTION_TO_HOSTD')
+missing = sorted(allowlist - hostd)
+if missing:
+    print('Missing hostd actions:', ', '.join(missing))
+    raise SystemExit(1)
+" 2>/dev/null; then
+  pass "hostd registry covers allowlist actions"
+else
+  fail "hostd registry missing allowlist actions (registry mismatch)"
 fi
 
 # Test 36: No raw secrets in new files

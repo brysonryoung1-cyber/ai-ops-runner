@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useToken } from "@/lib/token-context";
 import { GlassCard, StatusDot } from "@/components/glass";
 import ConnectorsCard from "@/components/ConnectorsCard";
+import type { ConnectorResult } from "@/components/ConnectorsCard";
 import ActionButton from "@/components/ActionButton";
 import { useExec } from "@/lib/hooks";
+import { telemetryClick, telemetryError } from "@/lib/ui-telemetry";
 
 interface LastRun {
   run_id: string;
@@ -38,6 +40,18 @@ interface ProjectData {
 const SOMA_PROJECT_IDS = new Set(["soma_kajabi", "soma_kajabi_library_ownership"]);
 const PRED_MARKETS_PROJECT_ID = "pred_markets";
 
+const CONNECTOR_ACTIONS = new Set([
+  "soma_connectors_status",
+  "soma_kajabi_bootstrap_start",
+  "soma_kajabi_bootstrap_status",
+  "soma_kajabi_bootstrap_finalize",
+  "soma_kajabi_gmail_connect_start",
+  "soma_kajabi_gmail_connect_status",
+  "soma_kajabi_gmail_connect_finalize",
+]);
+
+type Toast = { type: "success" | "error"; message: string } | null;
+
 function statusColor(project: ProjectData): { dot: "pass" | "fail" | "warn" | "idle"; label: string; labelColor: string } {
   if (!project.enabled) return { dot: "idle", label: "Disabled", labelColor: "text-white/40" };
   if (!project.last_run) return { dot: "warn", label: "No runs", labelColor: "text-amber-400" };
@@ -63,6 +77,10 @@ export default function ProjectDetailsPage() {
   const [project, setProject] = useState<ProjectData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [connectorLoading, setConnectorLoading] = useState<string | null>(null);
+  const [connectorResults, setConnectorResults] = useState<Record<string, ConnectorResult>>({});
+  const [toast, setToast] = useState<Toast>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { exec, loading: execLoading, results } = useExec();
 
   const fetchProject = useCallback(async () => {
@@ -98,9 +116,81 @@ export default function ProjectDetailsPage() {
     fetchProject();
   }, [fetchProject]);
 
-  // Auto-load connectors status for Soma projects
+  const clearToastAfter = useCallback((ms: number) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), ms);
+  }, []);
+
+  const handleConnectorExec = useCallback(
+    async (action: string) => {
+      if (!projectId || project?.id !== "soma_kajabi") return;
+      telemetryClick("/projects/soma_kajabi", action);
+      setConnectorLoading(action);
+      try {
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (token) headers["X-OpenClaw-Token"] = token;
+        const res = await fetch(`/api/projects/${projectId}/run`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ action }),
+        });
+        const data = await res.json();
+        const result: ConnectorResult = {
+          ok: data.ok === true,
+          stdout: data.result_summary && typeof data.result_summary !== "object" ? String(data.result_summary) : undefined,
+          result_summary: typeof data.result_summary === "object" ? data.result_summary : undefined,
+          run_id: data.run_id,
+          artifact_dir: data.artifact_dir,
+          error_class: data.error_class,
+          message: data.message,
+          next_steps: data.next_steps,
+        };
+        setConnectorResults((prev) => ({ ...prev, [action]: result }));
+        if (data.ok) {
+          setToast({
+            type: "success",
+            message: `Done. Run: ${data.run_id ?? "—"}${data.artifact_dir ? ` · ${data.artifact_dir}` : ""}`,
+          });
+          clearToastAfter(5000);
+        } else {
+          telemetryError(
+            "/projects/soma_kajabi",
+            action,
+            `${data.error_class ?? "Error"}: ${data.message ?? "Action failed"}`
+          );
+          setToast({
+            type: "error",
+            message: `${data.error_class ?? "Error"}: ${data.message ?? "Action failed"}${
+              data.run_id ? ` · Run: ${data.run_id}` : ""
+            }${data.artifact_dir ? ` · ${data.artifact_dir}` : ""}`,
+          });
+          clearToastAfter(8000);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        telemetryError("/projects/soma_kajabi", action, msg);
+        setToast({ type: "error", message: "UI_ACTION_FAILED — check telemetry artifacts." });
+        clearToastAfter(8000);
+        setConnectorResults((prev) => ({
+          ...prev,
+          [action]: {
+            ok: false,
+            error_class: "UI_ACTION_FAILED",
+            message: msg,
+          },
+        }));
+      } finally {
+        setConnectorLoading(null);
+      }
+    },
+    [projectId, project?.id, token, clearToastAfter]
+  );
+
+  // Auto-load connectors status for Soma project (soma_kajabi uses run route)
   useEffect(() => {
-    if (project && SOMA_PROJECT_IDS.has(project.id)) {
+    if (project?.id === "soma_kajabi") {
+      handleConnectorExec("soma_connectors_status");
+    } else if (project && SOMA_PROJECT_IDS.has(project.id)) {
       exec("soma_connectors_status");
     }
   }, [project?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -108,9 +198,13 @@ export default function ProjectDetailsPage() {
 
   const handleExec = useCallback(
     async (action: string) => {
+      if (project?.id === "soma_kajabi" && CONNECTOR_ACTIONS.has(action)) {
+        await handleConnectorExec(action);
+        return;
+      }
       await exec(action);
     },
-    [exec]
+    [exec, project?.id, handleConnectorExec]
   );
 
   const isSoma = project ? SOMA_PROJECT_IDS.has(project.id) : false;
@@ -154,6 +248,24 @@ export default function ProjectDetailsPage() {
 
   return (
     <div>
+      {toast && (
+        <div
+          className={`mb-4 p-3 rounded-lg text-sm font-medium flex items-center justify-between ${
+            toast.type === "success" ? "bg-emerald-500/20 text-emerald-200 border border-emerald-500/30" : "bg-red-500/20 text-red-200 border border-red-500/30"
+          }`}
+          role="alert"
+        >
+          <span>{toast.message}</span>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            className="ml-2 opacity-80 hover:opacity-100"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
       <div className="flex items-center justify-between mb-6">
         <div>
           <Link href="/projects" className="text-xs text-blue-400 hover:text-blue-300 mb-2 inline-block">
@@ -205,9 +317,15 @@ export default function ProjectDetailsPage() {
       {isSoma && (
         <>
           <ConnectorsCard
-            result={results["soma_connectors_status"]}
-            loading={execLoading === "soma_connectors_status"}
+            result={
+              project.id === "soma_kajabi"
+                ? connectorResults["soma_connectors_status"]
+                : (results["soma_connectors_status"] as ConnectorResult)
+            }
+            loadingAction={project.id === "soma_kajabi" ? connectorLoading : execLoading}
             onExec={handleExec}
+            nextStepsBootstrap={connectorResults["soma_kajabi_bootstrap_start"]?.next_steps}
+            nextStepsGmail={connectorResults["soma_kajabi_gmail_connect_start"]?.next_steps}
             variant="glass"
           />
           <div className="mb-6">

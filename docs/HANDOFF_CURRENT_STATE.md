@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-2026-02-16 (OpenClaw HQ milestone)
+2026-02-17 (Soma connectors UI + guard)
 
 ## Status
 
@@ -286,6 +286,12 @@ config/
 - Type tests (6): construction and serialization incl. ReviewFallbackConfig, ReviewCapsConfig
 
 ## Recent Changes
+
+- **Soma connectors UI hardening + tests** (2026-02-17):
+  - **Projects UI**: `/projects/soma_kajabi` connector buttons now use the project run route, show toasts with run_id/artifact_dir, and emit redacted UI telemetry on errors.
+  - **Run attribution**: `/api/projects/[projectId]/run` writes run records with explicit project_id for Soma connector actions.
+  - **Mock hostd + contract tests**: Hermetic contract test validates `/api/projects/soma_kajabi/run` and run.json attribution; Playwright supports mock hostd mode.
+  - **Registry guard**: DoD + HQ selftest ensure every allowlisted UI action exists in the hostd registry (fail-closed).
 
 - **Mistral fallback real, safe, cost-optimal** (2026-02-16):
   - **Mistral key management**: `ops/mistral_key.py` — subcommands `set`, `doctor`, `print-source`, `status`, `delete`. macOS: Keychain. Linux (VPS): `/etc/ai-ops-runner/secrets/mistral_api_key` (0640, 1000:1000); containers see it at `/run/openclaw_secrets`. One-time migration from `/opt`: `./ops/migrate_mistral_key_to_etc.sh`. Doctor does lightweight auth call, reports PASS/FAIL without leaking key.

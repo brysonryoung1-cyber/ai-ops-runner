@@ -381,6 +381,49 @@ else
 fi
 echo ""
 
+# --- (f) UI action registry guard (allowlist must exist in hostd registry) ---
+echo "==> (f) UI action registry guard"
+if python3 -c "
+import re
+from pathlib import Path
+
+root = Path('$ROOT_DIR')
+
+def extract_keys(path: Path, marker: str) -> set[str]:
+    text = path.read_text()
+    idx = text.find(marker)
+    if idx == -1:
+        raise SystemExit(f'marker not found: {marker}')
+    brace = text.find('{', idx)
+    if brace == -1:
+        raise SystemExit(f'no opening brace after: {marker}')
+    keys = []
+    depth = 0
+    for line in text[brace:].splitlines():
+        depth += line.count('{') - line.count('}')
+        if depth <= 0:
+            break
+        if depth == 1:
+            m = re.match(r'\\s*(?:\"([^\"]+)\"|([A-Za-z0-9_.]+))\\s*:', line)
+            if m:
+                keys.append(m.group(1) or m.group(2))
+    return set(keys)
+
+allowlist = extract_keys(root / 'apps/openclaw-console/src/lib/allowlist.ts', 'export const ALLOWLIST')
+hostd = extract_keys(root / 'apps/openclaw-console/src/lib/hostd.ts', 'const ACTION_TO_HOSTD')
+missing = sorted(allowlist - hostd)
+if missing:
+    print('Missing hostd actions:', ', '.join(missing))
+    raise SystemExit(1)
+" 2>/dev/null; then
+  echo "  PASS: hostd registry covers allowlist actions"
+else
+  echo "  FAIL: hostd registry missing allowlist actions" >&2
+  FAILURES=$((FAILURES + 1))
+  RESULTS="${RESULTS}ui_action_registry=missing "
+fi
+echo ""
+
 # --- Write redacted proof artifact (include doctor_error_class for joinable 409 classification) ---
 DOCTOR_ERR_CLASS=""
 echo "$RESULTS" | grep -q "doctor_exec=" && DOCTOR_ERR_CLASS="$(echo "$RESULTS" | sed -n 's/.*doctor_exec=\([^ ]*\).*/\1/p' | tr -d ' ')"

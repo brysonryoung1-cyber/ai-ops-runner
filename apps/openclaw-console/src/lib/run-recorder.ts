@@ -62,6 +62,13 @@ const ACTION_PROJECT_MAP: Record<string, string> = {
   soma_harvest: "soma_kajabi_library_ownership",
   soma_mirror: "soma_kajabi_library_ownership",
   soma_kajabi_phase0: "soma_kajabi",
+  soma_connectors_status: "soma_kajabi",
+  soma_kajabi_bootstrap_start: "soma_kajabi",
+  soma_kajabi_bootstrap_status: "soma_kajabi",
+  soma_kajabi_bootstrap_finalize: "soma_kajabi",
+  soma_kajabi_gmail_connect_start: "soma_kajabi",
+  soma_kajabi_gmail_connect_status: "soma_kajabi",
+  soma_kajabi_gmail_connect_finalize: "soma_kajabi",
   soma_status: "soma_kajabi_library_ownership",
   soma_last_errors: "soma_kajabi_library_ownership",
   sms_status: "soma_kajabi_library_ownership",
@@ -127,6 +134,7 @@ export function writeRunRecord(record: RunRecord): string | null {
 /**
  * Build a RunRecord from action execution results.
  * @param runId — optional; when provided (e.g. from action lock) use for single-flight join semantics.
+ * @param projectId — optional; when provided, overrides action-to-project mapping.
  */
 export function buildRunRecord(
   action: string,
@@ -135,11 +143,12 @@ export function buildRunRecord(
   exitCode: number | null,
   ok: boolean,
   errorMsg: string | null,
-  runId?: string
+  runId?: string,
+  projectId?: string
 ): RunRecord {
   return {
     run_id: runId ?? generateRunId(),
-    project_id: resolveProjectId(action),
+    project_id: projectId || resolveProjectId(action),
     action,
     started_at: startedAt.toISOString(),
     finished_at: finishedAt.toISOString(),

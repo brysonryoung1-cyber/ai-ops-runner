@@ -2,7 +2,7 @@
 
 Complete index of all operational scripts and commands in ai-ops-runner. This document is canonical and MUST be updated on every change.
 
-**Last Updated**: 2026-02-15
+**Last Updated**: 2026-02-17
 
 ## Quick Reference
 
@@ -134,6 +134,7 @@ All tests run hermetically (no network, no real secrets).
 | `ops/tests/openclaw_heal_selftest.sh` | Heal entrypoint + evidence |
 | `ops/tests/openclaw_notify_selftest.sh` | Notifications + rate limiting |
 | `ops/tests/openclaw_console_auth_selftest.sh` | Console auth + allowlist |
+| `ops/tests/openclaw_hq_selftest.sh` | HQ schema + run recorder + UI guard |
 | `ops/tests/openclaw_codex_review_selftest.sh` | Automated review pipeline |
 | `ops/tests/openclaw_vps_deploy_selftest.sh` | VPS deploy (mocked SSH, fail-closed) |
 | `ops/tests/review_bundle_selftest.sh` | Review bundle generation |
