@@ -253,12 +253,20 @@ except Exception:
     if [ "$POLL_PASS" -eq 1 ]; then
       DOCTOR_PASS=1
     elif [ "$POLL_GOT_FAIL" -eq 1 ]; then
-      # One more POST now that previous run finished; wait for 200
+      # One more POST now that previous run finished; wait for 200. If 409, wait 15s and retry once.
       DOCTOR_TMP2="$(mktemp)"
       HTTP_CODE2="$(curl -s -o "$DOCTOR_TMP2" -w "%{http_code}" --connect-timeout 5 --max-time 90 \
         -X POST "$BASE_URL/api/exec" -H "Content-Type: application/json" -H "x-openclaw-token: $ADMIN_TOKEN" \
         -d '{"action":"doctor"}' 2>/dev/null)" || HTTP_CODE2="000"
       DOCTOR_RESP2="$(cat "$DOCTOR_TMP2" 2>/dev/null)"
+      if [ "$HTTP_CODE2" = "409" ]; then
+        echo "  Fresh POST returned 409; waiting 15s and retrying once..." >&2
+        sleep 15
+        HTTP_CODE2="$(curl -s -o "$DOCTOR_TMP2" -w "%{http_code}" --connect-timeout 5 --max-time 90 \
+          -X POST "$BASE_URL/api/exec" -H "Content-Type: application/json" -H "x-openclaw-token: $ADMIN_TOKEN" \
+          -d '{"action":"doctor"}' 2>/dev/null)" || HTTP_CODE2="000"
+        DOCTOR_RESP2="$(cat "$DOCTOR_TMP2" 2>/dev/null)"
+      fi
       rm -f "$DOCTOR_TMP2"
       if [ -n "$DOCTOR_RESP2" ] && [ "$HTTP_CODE2" = "200" ] && check_ok "$DOCTOR_RESP2" && echo "$DOCTOR_RESP2" | grep -q "All checks passed"; then
         echo "  PASS: fresh doctor run passed (after 409 in-flight failure)"
