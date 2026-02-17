@@ -63,7 +63,7 @@ elif [ -z "$DOD_BODY" ]; then
   echo "FAIL: /api/dod/last empty response" >&2
   FAILURES=$((FAILURES + 1))
 else
-  OVERALL="$(echo "$DOD_BODY" | json_get "overall" 2>/dev/null || echo "")"
+  OVERALL="$(json_get "$DOD_BODY" "overall" 2>/dev/null || echo "")"
   if [ "$OVERALL" != "PASS" ]; then
     echo "FAIL: /api/dod/last overall=$OVERALL (expect PASS)" >&2
     FAILURES=$((FAILURES + 1))
