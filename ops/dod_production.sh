@@ -157,7 +157,10 @@ elif [ -z "$ADMIN_TOKEN" ]; then
   FAILURES=$((FAILURES + 1))
   RESULTS="${RESULTS}doctor_exec=no_token "
 else
-  # Doctor can take ~30–45s; use 90s request timeout; on 409, poll /api/runs for completion (90s)
+  # DoD header: allow doctor during maintenance mode (deploy pipeline sets OPENCLAW_DEPLOY_RUN_ID)
+  DOD_HEADER=""
+  [ -n "${OPENCLAW_DEPLOY_RUN_ID:-}" ] && DOD_HEADER="-H x-openclaw-dod-run: $OPENCLAW_DEPLOY_RUN_ID"
+  # Doctor can take ~30–45s; use 90s request timeout; on 409 with active_run_id, JOIN that run (poll /api/runs?id=).
   # On unreachable/timeout, retry once after 10s (transient post-deploy readiness).
   DOCTOR_TMP="$(mktemp)"
   DOCTOR_ATTEMPT=1
@@ -167,6 +170,7 @@ else
       -X POST "$BASE_URL/api/exec" \
       -H "Content-Type: application/json" \
       -H "x-openclaw-token: $ADMIN_TOKEN" \
+      $DOD_HEADER \
       -d '{"action":"doctor"}' 2>/dev/null)" || HTTP_CODE="000"
     DOCTOR_RESP="$(cat "$DOCTOR_TMP" 2>/dev/null)"
     if [ -n "$DOCTOR_RESP" ] && [ "$HTTP_CODE" = "200" ]; then
@@ -206,46 +210,67 @@ else
       RESULTS="${RESULTS}doctor_exec=not_ok "
     fi
   elif [ "$HTTP_CODE" = "409" ]; then
-    # Doctor already running — poll /api/runs for completion (source of truth)
-    echo "  409: doctor already running; polling /api/runs for completion (90s max)"
+    # Joinable single-flight: 409 includes active_run_id; poll GET /api/runs?id=active_run_id until completion (90s max).
+    ACTIVE_RUN_ID="$(echo "$DOCTOR_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('active_run_id') or '')" 2>/dev/null)" || true
+    echo "  409: doctor already running (active_run_id=${ACTIVE_RUN_ID:-—}); joining run (90s max)"
     POLL_START="$(date +%s)"
     POLL_END=$((POLL_START + 90))
     POLL_PASS=0
     POLL_GOT_FAIL=0
-    echo "{\"ok\":false,\"skipped\":\"409_conflict\",\"note\":\"polling_api_runs\"}" >"$DOD_ARTIFACT_DIR/exec_doctor.json"
+    echo "{\"ok\":false,\"skipped\":\"409_conflict\",\"active_run_id\":\"$ACTIVE_RUN_ID\",\"note\":\"joining\"}" >"$DOD_ARTIFACT_DIR/exec_doctor.json"
     while [ "$(date +%s)" -lt "$POLL_END" ]; do
-      RUNS_JSON="$(curl -sf --connect-timeout 5 --max-time 10 -H "x-openclaw-token: $ADMIN_TOKEN" "$BASE_URL/api/runs?limit=20" 2>/dev/null)" || true
-      if [ -n "$RUNS_JSON" ]; then
-        # Find most recent doctor run that completed in our polling window
-        DOCTOR_RUN="$(echo "$RUNS_JSON" | python3 -c "
+      if [ -n "$ACTIVE_RUN_ID" ]; then
+        RUN_JSON="$(curl -sf --connect-timeout 5 --max-time 10 -H "x-openclaw-token: $ADMIN_TOKEN" "$BASE_URL/api/runs?id=$ACTIVE_RUN_ID" 2>/dev/null)" || true
+        if [ -n "$RUN_JSON" ]; then
+          DOCTOR_RUN="$(echo "$RUN_JSON" | python3 -c "
 import sys,json
 try:
     d=json.load(sys.stdin)
-    runs=d.get('runs') or []
-    for r in runs:
-        if r.get('action')=='doctor':
-            st=r.get('status')
-            ec=r.get('exit_code')
-            if st=='success' and ec==0:
-                print('PASS')
-            elif st in ('failure','error'):
-                print('FAIL')
-            else:
-                print('PENDING')
-            sys.exit(0)
-    print('NONE')
-except Exception:
-    print('NONE')
+    r=d.get('run')
+    if not r or r.get('action')!='doctor': print('NONE'); sys.exit(0)
+    st=r.get('status'); ec=r.get('exit_code')
+    if st=='success' and ec==0: print('PASS')
+    elif st in ('failure','error'): print('FAIL')
+    else: print('PENDING')
+except Exception: print('NONE')
 " 2>/dev/null)" || DOCTOR_RUN="NONE"
-        if [ "$DOCTOR_RUN" = "PASS" ]; then
-          echo "  PASS: doctor run completed (polled /api/runs)"
-          POLL_PASS=1
-          echo '{"ok":true,"source":"api_runs_poll","note":"doctor_run_completed"}' >"$DOD_ARTIFACT_DIR/exec_doctor.json"
-          break
-        elif [ "$DOCTOR_RUN" = "FAIL" ]; then
-          POLL_GOT_FAIL=1
-          echo "  In-flight doctor finished with failure; triggering fresh doctor run..." >&2
-          break
+          if [ "$DOCTOR_RUN" = "PASS" ]; then
+            echo "  PASS: joined doctor run $ACTIVE_RUN_ID completed (GET /api/runs?id=)"
+            POLL_PASS=1
+            echo "{\"ok\":true,\"source\":\"join\",\"active_run_id\":\"$ACTIVE_RUN_ID\",\"note\":\"doctor_run_completed\"}" >"$DOD_ARTIFACT_DIR/exec_doctor.json"
+            break
+          elif [ "$DOCTOR_RUN" = "FAIL" ]; then
+            POLL_GOT_FAIL=1
+            echo "  Joined doctor run finished with failure; one fresh POST allowed (1 rerun max)..." >&2
+            break
+          fi
+        fi
+      else
+        # Fallback: no active_run_id in 409 response — poll list
+        RUNS_JSON="$(curl -sf --connect-timeout 5 --max-time 10 -H "x-openclaw-token: $ADMIN_TOKEN" "$BASE_URL/api/runs?limit=20" 2>/dev/null)" || true
+        if [ -n "$RUNS_JSON" ]; then
+          DOCTOR_RUN="$(echo "$RUNS_JSON" | python3 -c "
+import sys,json
+try:
+    d=json.load(sys.stdin)
+    for r in (d.get('runs') or []):
+        if r.get('action')=='doctor':
+            st=r.get('status'); ec=r.get('exit_code')
+            if st=='success' and ec==0: print('PASS'); break
+            elif st in ('failure','error'): print('FAIL'); break
+            else: print('PENDING'); break
+    else: print('NONE')
+except Exception: print('NONE')
+" 2>/dev/null)" || DOCTOR_RUN="NONE"
+          if [ "$DOCTOR_RUN" = "PASS" ]; then
+            echo "  PASS: doctor run completed (polled /api/runs)"
+            POLL_PASS=1
+            echo '{"ok":true,"source":"api_runs_poll","note":"doctor_run_completed"}' >"$DOD_ARTIFACT_DIR/exec_doctor.json"
+            break
+          elif [ "$DOCTOR_RUN" = "FAIL" ]; then
+            POLL_GOT_FAIL=1
+            break
+          fi
         fi
       fi
       sleep 5
@@ -253,23 +278,23 @@ except Exception:
     if [ "$POLL_PASS" -eq 1 ]; then
       DOCTOR_PASS=1
     elif [ "$POLL_GOT_FAIL" -eq 1 ]; then
-      # One more POST now that previous run finished; wait for 200. If 409, wait 15s and retry once.
+      # 1 rerun max: fresh POST; if 409 again wait 15s and retry once (idempotency).
       DOCTOR_TMP2="$(mktemp)"
       HTTP_CODE2="$(curl -s -o "$DOCTOR_TMP2" -w "%{http_code}" --connect-timeout 5 --max-time 90 \
-        -X POST "$BASE_URL/api/exec" -H "Content-Type: application/json" -H "x-openclaw-token: $ADMIN_TOKEN" \
+        -X POST "$BASE_URL/api/exec" -H "Content-Type: application/json" -H "x-openclaw-token: $ADMIN_TOKEN" $DOD_HEADER \
         -d '{"action":"doctor"}' 2>/dev/null)" || HTTP_CODE2="000"
       DOCTOR_RESP2="$(cat "$DOCTOR_TMP2" 2>/dev/null)"
       if [ "$HTTP_CODE2" = "409" ]; then
         echo "  Fresh POST returned 409; waiting 15s and retrying once..." >&2
         sleep 15
         HTTP_CODE2="$(curl -s -o "$DOCTOR_TMP2" -w "%{http_code}" --connect-timeout 5 --max-time 90 \
-          -X POST "$BASE_URL/api/exec" -H "Content-Type: application/json" -H "x-openclaw-token: $ADMIN_TOKEN" \
+          -X POST "$BASE_URL/api/exec" -H "Content-Type: application/json" -H "x-openclaw-token: $ADMIN_TOKEN" $DOD_HEADER \
           -d '{"action":"doctor"}' 2>/dev/null)" || HTTP_CODE2="000"
         DOCTOR_RESP2="$(cat "$DOCTOR_TMP2" 2>/dev/null)"
       fi
       rm -f "$DOCTOR_TMP2"
       if [ -n "$DOCTOR_RESP2" ] && [ "$HTTP_CODE2" = "200" ] && check_ok "$DOCTOR_RESP2" && echo "$DOCTOR_RESP2" | grep -q "All checks passed"; then
-        echo "  PASS: fresh doctor run passed (after 409 in-flight failure)"
+        echo "  PASS: fresh doctor run passed (after join FAIL, 1 rerun)"
         echo "$DOCTOR_RESP2" >"$DOD_ARTIFACT_DIR/exec_doctor.json"
         DOCTOR_PASS=1
       else
@@ -278,7 +303,7 @@ except Exception:
         RESULTS="${RESULTS}doctor_exec=409_then_fresh_fail "
       fi
     else
-      echo "  FAIL: doctor 409 — no PASS from /api/runs within 90s" >&2
+      echo "  FAIL: doctor 409 — no PASS from join/poll within 90s" >&2
       FAILURES=$((FAILURES + 1))
       RESULTS="${RESULTS}doctor_exec=409_poll_timeout "
     fi

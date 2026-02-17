@@ -19,8 +19,9 @@ ARTIFACTS_DIR="$ROOT_DIR/artifacts"
 DEPLOY_DIR="$ARTIFACTS_DIR/deploy"
 DOD_DIR="$ARTIFACTS_DIR/dod"
 
-# Error classes that require code fix — do NOT retry
-FAIL_CLOSED_CLASSES="console_build_failed|missing_route_dod_last|docker_compose_failed|console_compose_failed|update_state_failed|update_state_missing|verification_failed|dod_failed|git_fetch_failed|hostd_install_failed|deploy_lock_held|deploy_script_contains_push|push_capability_detected"
+# Error classes that require code fix — do NOT retry. Joinable 409 (ALREADY_RUNNING/doctor 409) is retryable.
+FAIL_CLOSED_CLASSES="console_build_failed|missing_route_dod_last|docker_compose_failed|console_compose_failed|update_state_failed|update_state_missing|verification_failed|git_fetch_failed|hostd_install_failed|deploy_lock_held|deploy_script_contains_push|push_capability_detected"
+# dod_failed is fail-closed UNLESS subclass is joinable 409 (then retry)
 
 write_triage() {
   local run_id="$1" attempt="$2" err_class="$3" failing_step="$4" next_action="$5"
@@ -63,12 +64,41 @@ classify_error() {
   local run_id="$1"
   local deploy_result="$DEPLOY_DIR/$run_id/deploy_result.json"
   if [ -f "$deploy_result" ]; then
-    python3 -c "
+    local err_class
+    err_class="$(python3 -c "
 import json, sys
 with open('$deploy_result') as f:
     d = json.load(f)
 print(d.get('error_class', 'unknown'))
-" 2>/dev/null || echo "unknown"
+" 2>/dev/null)" || err_class="unknown"
+    # If dod_failed, check if joinable 409 (doctor 409 / ALREADY_RUNNING) — then retryable
+    if [ "$err_class" = "dod_failed" ]; then
+      local dod_result dod_log
+      dod_result=""
+      for d in $(ls -1dt "$DOD_DIR"/[0-9]* 2>/dev/null | head -1); do
+        [ -f "$d/dod_result.json" ] && dod_result="$d/dod_result.json" && break
+      done
+      if [ -n "$dod_result" ] && [ -f "$dod_result" ]; then
+        _DOD_RESULT_PATH="$dod_result" python3 -c "
+import json, sys, os
+path = os.environ.get('_DOD_RESULT_PATH', '')
+if path and os.path.isfile(path):
+    with open(path) as f:
+        d = json.load(f)
+    s = (d.get('summary') or '') + ' ' + str(d.get('checks') or {})
+    if 'doctor_exec=409' in s or '409_poll' in s or '409_then_fresh' in s:
+        sys.exit(0)
+sys.exit(1)
+" 2>/dev/null && { echo "dod_failed_joinable_409"; return; }
+      fi
+      if [ -f "$DEPLOY_DIR/$run_id/dod.log" ]; then
+        if grep -q "409\|ALREADY_RUNNING\|active_run_id\|joining" "$DEPLOY_DIR/$run_id/dod.log" 2>/dev/null; then
+          echo "dod_failed_joinable_409"
+          return
+        fi
+      fi
+    fi
+    echo "$err_class"
   else
     echo "unknown"
   fi
@@ -106,9 +136,22 @@ for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
     ERR_CLASS="$(classify_error "$LATEST_RUN_ID")"
     echo "deploy_pipeline FAILED: error_class=$ERR_CLASS" >&2
 
+    # dod_failed_joinable_409 is retryable (safe: wait/backoff + re-run DoD)
+    if [ "$ERR_CLASS" = "dod_failed_joinable_409" ]; then
+      echo "RETRYABLE: $ERR_CLASS (joinable 409 collision); safe remediation then retry" >&2
+      safe_remediate "$ERR_CLASS"
+      continue
+    fi
     if echo "$ERR_CLASS" | grep -qE "$FAIL_CLOSED_CLASSES"; then
       echo "FAIL-CLOSED: $ERR_CLASS requires code fix. No retry." >&2
       write_triage "$LATEST_RUN_ID" "$attempt" "$ERR_CLASS" "deploy_pipeline" "Fix $ERR_CLASS in code and re-run deploy"
+      echo "$DEPLOY_DIR/$LATEST_RUN_ID/triage.json"
+      exit 2
+    fi
+    # dod_failed (non-joinable) is also fail-closed
+    if [ "$ERR_CLASS" = "dod_failed" ]; then
+      echo "FAIL-CLOSED: dod_failed (non-joinable). No retry." >&2
+      write_triage "$LATEST_RUN_ID" "$attempt" "$ERR_CLASS" "deploy_pipeline" "Fix DoD checks and re-run deploy"
       echo "$DEPLOY_DIR/$LATEST_RUN_ID/triage.json"
       exit 2
     fi

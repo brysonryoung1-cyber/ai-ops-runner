@@ -102,6 +102,18 @@ echo "  Run ID: $RUN_ID"
 echo "  Artifacts: $DEPLOY_ARTIFACT_DIR"
 echo ""
 
+# --- Maintenance mode: prevent background doctor/timer during deploy ---
+MAINTENANCE_FILE="$ROOT_DIR/artifacts/.maintenance_mode"
+mkdir -p "$(dirname "$MAINTENANCE_FILE")"
+echo "{\"maintenance_mode\": true, \"deploy_run_id\": \"$RUN_ID\"}" >"$MAINTENANCE_FILE"
+echo "  Maintenance mode ON (deploy_run_id=$RUN_ID)"
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl stop openclaw-doctor.timer 2>/dev/null || true
+  echo "  Stopped openclaw-doctor.timer (if present)"
+fi
+export OPENCLAW_DEPLOY_RUN_ID="$RUN_ID"
+echo ""
+
 # --- Step 1: Assert production pull-only ---
 STEP="assert_production_pull_only"
 echo "==> Step 1: Assert production pull-only"
@@ -260,6 +272,14 @@ DOD_POINTER=""
 for d in $(ls -1dt "$ROOT_DIR/artifacts/dod"/[0-9]* 2>/dev/null | head -1); do
   [ -f "$d/dod_result.json" ] && DOD_POINTER="artifacts/dod/$(basename "$d")/dod_result.json" && break
 done
+
+# --- Clear maintenance mode and restart doctor timer (deploy success) ---
+rm -f "$ROOT_DIR/artifacts/.maintenance_mode"
+echo "  Maintenance mode OFF"
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl start openclaw-doctor.timer 2>/dev/null || true
+  echo "  Started openclaw-doctor.timer (if present)"
+fi
 
 # --- Success artifact ---
 python3 -c "

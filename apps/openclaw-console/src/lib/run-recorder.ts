@@ -120,6 +120,7 @@ export function writeRunRecord(record: RunRecord): string | null {
 
 /**
  * Build a RunRecord from action execution results.
+ * @param runId — optional; when provided (e.g. from action lock) use for single-flight join semantics.
  */
 export function buildRunRecord(
   action: string,
@@ -127,10 +128,11 @@ export function buildRunRecord(
   finishedAt: Date,
   exitCode: number | null,
   ok: boolean,
-  errorMsg: string | null
+  errorMsg: string | null,
+  runId?: string
 ): RunRecord {
   return {
-    run_id: generateRunId(),
+    run_id: runId ?? generateRunId(),
     project_id: resolveProjectId(action),
     action,
     started_at: startedAt.toISOString(),

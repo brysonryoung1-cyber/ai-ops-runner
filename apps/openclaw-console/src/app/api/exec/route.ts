@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { readFileSync, existsSync } from "fs";
+import { join } from "path";
 import { executeAction, checkConnectivity } from "@/lib/hostd";
 import { acquireLock, releaseLock } from "@/lib/action-lock";
 import {
@@ -64,6 +66,24 @@ function validateOrigin(req: NextRequest): NextResponse | null {
     },
     { status: 403 }
   );
+}
+
+/** Read maintenance mode state (deploy pipeline sets/clears). DoD requests with matching deploy_run_id are allowed. */
+function getMaintenanceMode(): { maintenance_mode: boolean; deploy_run_id?: string } {
+  try {
+    const repoRoot = process.env.OPENCLAW_REPO_ROOT || process.cwd();
+    const path = join(repoRoot, "artifacts", ".maintenance_mode");
+    if (!existsSync(path)) return { maintenance_mode: false };
+    const raw = readFileSync(path, "utf-8").trim();
+    if (!raw) return { maintenance_mode: false };
+    const data = JSON.parse(raw) as { maintenance_mode?: boolean; deploy_run_id?: string };
+    return {
+      maintenance_mode: data.maintenance_mode === true,
+      deploy_run_id: typeof data.deploy_run_id === "string" ? data.deploy_run_id : undefined,
+    };
+  } catch {
+    return { maintenance_mode: false };
+  }
 }
 
 /**
@@ -147,17 +167,42 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Action lock — prevent overlapping execution
-  if (!acquireLock(actionName)) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: `Action "${actionName}" is already running. Wait for it to complete.`,
-      },
-      { status: 409 }
-    );
+  // Maintenance mode: block non-DoD doctor triggers during deploy
+  if (actionName === "doctor") {
+    const maintenance = getMaintenanceMode();
+    if (maintenance.maintenance_mode && maintenance.deploy_run_id) {
+      const dodRun = req.headers.get("x-openclaw-dod-run");
+      if (dodRun !== maintenance.deploy_run_id) {
+        return NextResponse.json(
+          { ok: false, error_class: "MAINTENANCE_MODE", action: "doctor" },
+          { status: 503 }
+        );
+      }
+    }
   }
 
+  // Action lock — single-flight + join: 409 includes active_run_id for poll /api/runs?id=<run_id>
+  const lockResult = acquireLock(actionName);
+  if (!lockResult.acquired) {
+    const existing = lockResult.existing;
+    const payload = existing
+      ? {
+          ok: false,
+          error_class: "ALREADY_RUNNING",
+          action: actionName,
+          active_run_id: existing.runId,
+          started_at: new Date(existing.startedAt).toISOString(),
+        }
+      : {
+          ok: false,
+          error_class: "ALREADY_RUNNING",
+          action: actionName,
+          error: `Action "${actionName}" is already running. Wait for it to complete.`,
+        };
+    return NextResponse.json(payload, { status: 409 });
+  }
+
+  const runId = lockResult.runId!;
   const actor = deriveActor(req.headers.get("x-openclaw-token"));
   const params = { action: actionName };
   const startedAt = new Date();
@@ -194,14 +239,15 @@ export async function POST(req: NextRequest) {
       ...(errorForRecord != null && { error: errorForRecord }),
     });
 
-    // Write run record (even on action failure — fail-closed recorder)
+    // Write run record (even on action failure — fail-closed recorder); use lock runId for join semantics
     const runRecord = buildRunRecord(
       actionName,
       startedAt,
       finishedAt,
       result.exitCode,
       result.ok,
-      errorForRecord
+      errorForRecord,
+      runId
     );
     writeRunRecord(runRecord);
 
@@ -222,14 +268,15 @@ export async function POST(req: NextRequest) {
       ...(errorMsg && { error: errorMsg }),
     });
 
-    // Write run record even on internal errors (fail-closed)
+    // Write run record even on internal errors (fail-closed); use same runId
     const runRecord = buildRunRecord(
       actionName,
       startedAt,
       finishedAt,
       null,
       false,
-      errorMsg
+      errorMsg,
+      runId
     );
     writeRunRecord(runRecord);
 

@@ -86,6 +86,16 @@ if [ -f "$DUG" ] && [ -x "$DUG" ]; then
   else
     fail "deploy_until_green must respect max attempts"
   fi
+  if grep -q "dod_failed_joinable_409" "$DUG" && grep -q "RETRYABLE" "$DUG"; then
+    pass "deploy_until_green retries on joinable 409 (dod_failed_joinable_409)"
+  else
+    fail "deploy_until_green must retry on dod_failed_joinable_409, fail-closed on other dod_failed"
+  fi
+  if grep -q "dod_failed" "$DUG" && grep -q "FAIL-CLOSED.*dod_failed" "$DUG"; then
+    pass "deploy_until_green fail-closes on non-joinable dod_failed"
+  else
+    fail "deploy_until_green must fail-close on dod_failed when not joinable"
+  fi
 else
   fail "deploy_until_green.sh not found or not executable"
 fi

@@ -41,8 +41,8 @@ else
 fi
 
 # Test 3: DoD uses sufficient timeout for doctor (>= 45s)
-if grep -q "max-time 60\|max-time 45" "$OPS_DIR/dod_production.sh"; then
-  pass "dod_production.sh uses adequate doctor timeout (45–60s)"
+if grep -q "max-time 90\|max-time 60\|max-time 45" "$OPS_DIR/dod_production.sh"; then
+  pass "dod_production.sh uses adequate doctor timeout (≥45s)"
 else
   fail "dod_production.sh doctor timeout may be too short"
 fi
@@ -54,6 +54,48 @@ else
   fail "dod_production.sh missing bounded poll timeout"
 fi
 
+# Test 4b: DoD joins via active_run_id on 409 (single-flight join semantics)
+if grep -q "active_run_id" "$OPS_DIR/dod_production.sh" && grep -q "api/runs?id=" "$OPS_DIR/dod_production.sh"; then
+  pass "dod_production.sh joins active_run_id via GET /api/runs?id= on 409"
+else
+  fail "dod_production.sh must join active_run_id on 409 (GET /api/runs?id=)"
+fi
+
+# Test 4c: DoD passes x-openclaw-dod-run during deploy (maintenance mode allow)
+if grep -q "x-openclaw-dod-run\|OPENCLAW_DEPLOY_RUN_ID" "$OPS_DIR/dod_production.sh"; then
+  pass "dod_production.sh passes DOD run header for maintenance mode"
+else
+  fail "dod_production.sh must pass x-openclaw-dod-run when OPENCLAW_DEPLOY_RUN_ID set"
+fi
+
+echo ""
+
+# ── Section 1b: /api/exec 409 joinable (single-flight) ───────────
+echo "=== /api/exec 409 joinable ==="
+EXEC_ROUTE="$REPO_ROOT/apps/openclaw-console/src/app/api/exec/route.ts"
+if [ -f "$EXEC_ROUTE" ]; then
+  if grep -q "ALREADY_RUNNING" "$EXEC_ROUTE" && grep -q "active_run_id" "$EXEC_ROUTE"; then
+    pass "/api/exec returns error_class ALREADY_RUNNING and active_run_id on 409"
+  else
+    fail "/api/exec must return 409 with active_run_id for join semantics"
+  fi
+  if grep -q "MAINTENANCE_MODE\|maintenance_mode" "$EXEC_ROUTE"; then
+    pass "/api/exec checks maintenance mode for doctor"
+  else
+    fail "/api/exec must support maintenance mode (MAINTENANCE_MODE) for doctor"
+  fi
+else
+  fail "exec route not found"
+fi
+echo ""
+
+# ── Section 1c: deploy_pipeline maintenance mode ──────────────────
+echo "=== deploy_pipeline maintenance mode ==="
+if grep -q "maintenance_mode\|\.maintenance_mode" "$OPS_DIR/deploy_pipeline.sh" && grep -q "openclaw-doctor.timer" "$OPS_DIR/deploy_pipeline.sh"; then
+  pass "deploy_pipeline sets maintenance mode and stops doctor timer during deploy"
+else
+  fail "deploy_pipeline must set maintenance mode and stop openclaw-doctor.timer during deploy"
+fi
 echo ""
 
 # ── Section 2: /api/dod/last route ───────────────────────────────
