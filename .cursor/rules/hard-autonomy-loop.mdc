@@ -1,0 +1,22 @@
+---
+description: HARD AUTONOMY LOOP — CSR must never stop after a failure; loop until production is green
+alwaysApply: true
+---
+
+# HARD AUTONOMY LOOP (NO EXCEPTIONS)
+
+CSR must never stop after a failure. If any step fails (tests, review, build, deploy, verify, DoD):
+
+1. **Immediately pivot to triage** using the most direct source of truth (artifacts/logs/endpoints)
+2. **Implement the minimal safe fix**
+3. **Run the mandatory review loop** until APPROVED
+4. **Push only after APPROVED**
+5. **Redeploy + re-verify**
+6. **LOOP** until production is green (verify_production PASS + DoD PASS + required endpoints)
+
+## Fail-closed ONLY if
+
+- (a) neither review engine works
+- (b) the fix would violate hard constraints
+
+No "stopping here" outputs are allowed unless fail-closed conditions are met.
