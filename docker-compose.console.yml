@@ -26,7 +26,7 @@ services:
       AIOPS_HOST: "${AIOPS_HOST}"
       RUNNER_API_URL: "${RUNNER_API_URL:-http://127.0.0.1:8000}"
       AIOPS_USER: "root"
-      OPENCLAW_ARTIFACTS_ROOT: "/var/openclaw_artifacts"
+      OPENCLAW_ARTIFACTS_ROOT: "/app/artifacts"
       OPENCLAW_REPO_ROOT: "/app"
     restart: unless-stopped
     read_only: true
@@ -37,7 +37,6 @@ services:
       - ./config:/app/config:ro
       - ./docs:/app/docs:ro
       - ./artifacts:/app/artifacts:rw
-      - ./artifacts:/var/openclaw_artifacts:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8787/ || exit 1"]
       interval: 30s
