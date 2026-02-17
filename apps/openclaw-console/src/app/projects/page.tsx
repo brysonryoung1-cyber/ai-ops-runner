@@ -117,82 +117,102 @@ export default function ProjectsPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {projects.map((project) => {
             const status = statusColor(project);
+            const projectHref = `/projects/${encodeURIComponent(project.id)}`;
             return (
-              <GlassCard key={project.id}>
-                <div className="p-5 pb-3">
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex-1 min-w-0">
-                      <h3 className="text-sm font-semibold text-white/95 truncate">{project.name}</h3>
-                      <p className="text-xs text-white/60 mt-0.5 line-clamp-2">{project.description}</p>
+              <Link
+                key={project.id}
+                href={projectHref}
+                className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--glass-bg)] rounded-2xl"
+                aria-label={`Open project ${project.id}`}
+              >
+                <GlassCard>
+                  <div className="p-5 pb-3">
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-sm font-semibold text-white/95 truncate">{project.name}</h3>
+                        <p className="text-xs text-white/60 mt-0.5 line-clamp-2">{project.description}</p>
+                      </div>
+                      <div className="flex items-center gap-2 ml-3 flex-shrink-0">
+                        <StatusDot variant={status.dot} />
+                        <span className={`text-xs font-medium ${status.labelColor}`}>{status.label}</span>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 ml-3 flex-shrink-0">
-                      <StatusDot variant={status.dot} />
-                      <span className={`text-xs font-medium ${status.labelColor}`}>{status.label}</span>
+
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {project.tags.map((tag) => (
+                        <span key={tag} className="inline-flex px-2 py-0.5 text-[10px] font-medium text-white/60 bg-white/10 rounded-full">
+                          {tag}
+                        </span>
+                      ))}
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap gap-1.5 mt-2">
-                    {project.tags.map((tag) => (
-                      <span key={tag} className="inline-flex px-2 py-0.5 text-[10px] font-medium text-white/60 bg-white/10 rounded-full">
-                        {tag}
+                  <div className="border-t border-white/10" />
+
+                  <div className="px-5 py-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <p className="text-[10px] font-semibold text-white/50 uppercase tracking-wider mb-0.5">Last Run</p>
+                        {project.last_run ? (
+                          <div>
+                            <p className="text-xs text-white/90 font-medium">{formatRelativeTime(project.last_run.finished_at)}</p>
+                            <p className={`text-[10px] ${project.last_run.status === "success" ? "text-emerald-400" : "text-red-400"}`}>
+                              {project.last_run.action} — {project.last_run.status}
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-white/50">No runs yet</p>
+                        )}
+                      </div>
+
+                      <div>
+                        <p className="text-[10px] font-semibold text-white/50 uppercase tracking-wider mb-0.5">Schedule</p>
+                        {project.schedules.length > 0 ? (
+                          <p className="text-xs text-white/90">{project.schedules[0].label}</p>
+                        ) : (
+                          <p className="text-xs text-white/50">On-demand</p>
+                        )}
+                      </div>
+                    </div>
+
+                    {project.last_run?.error_summary && (
+                      <div className="mt-2 p-2 rounded-lg bg-red-500/10 border border-red-500/20">
+                        <p className="text-[10px] font-semibold text-red-300 uppercase tracking-wider mb-0.5">Last Error</p>
+                        <p className="text-xs text-red-200 line-clamp-2">{project.last_run.error_summary}</p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="border-t border-white/10 px-5 py-2.5 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-white/50">
+                        {project.workflows.length} workflow{project.workflows.length !== 1 ? "s" : ""}
                       </span>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="border-t border-white/10" />
-
-                <div className="px-5 py-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <p className="text-[10px] font-semibold text-white/50 uppercase tracking-wider mb-0.5">Last Run</p>
-                      {project.last_run ? (
-                        <div>
-                          <p className="text-xs text-white/90 font-medium">{formatRelativeTime(project.last_run.finished_at)}</p>
-                          <p className={`text-[10px] ${project.last_run.status === "success" ? "text-emerald-400" : "text-red-400"}`}>
-                            {project.last_run.action} — {project.last_run.status}
-                          </p>
-                        </div>
-                      ) : (
-                        <p className="text-xs text-white/50">No runs yet</p>
+                      <span className="text-white/40">·</span>
+                      <span className="text-[10px] text-white/50">
+                        {project.notification_flags.channels.join(", ") || "no alerts"}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {project.last_run && (
+                        <Link
+                          href={`/runs?project=${project.id}`}
+                          className="text-[11px] font-medium text-blue-400 hover:text-blue-300 focus:outline-none focus-visible:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          View runs
+                        </Link>
                       )}
-                    </div>
-
-                    <div>
-                      <p className="text-[10px] font-semibold text-white/50 uppercase tracking-wider mb-0.5">Schedule</p>
-                      {project.schedules.length > 0 ? (
-                        <p className="text-xs text-white/90">{project.schedules[0].label}</p>
-                      ) : (
-                        <p className="text-xs text-white/50">On-demand</p>
-                      )}
+                      <span
+                        className="text-[11px] font-medium text-blue-400 hover:text-blue-300"
+                        aria-hidden="true"
+                      >
+                        Open →
+                      </span>
                     </div>
                   </div>
-
-                  {project.last_run?.error_summary && (
-                    <div className="mt-2 p-2 rounded-lg bg-red-500/10 border border-red-500/20">
-                      <p className="text-[10px] font-semibold text-red-300 uppercase tracking-wider mb-0.5">Last Error</p>
-                      <p className="text-xs text-red-200 line-clamp-2">{project.last_run.error_summary}</p>
-                    </div>
-                  )}
-                </div>
-
-                <div className="border-t border-white/10 px-5 py-2.5 flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] text-white/50">
-                      {project.workflows.length} workflow{project.workflows.length !== 1 ? "s" : ""}
-                    </span>
-                    <span className="text-white/40">·</span>
-                    <span className="text-[10px] text-white/50">
-                      {project.notification_flags.channels.join(", ") || "no alerts"}
-                    </span>
-                  </div>
-                  {project.last_run && (
-                    <Link href={`/runs?project=${project.id}`} className="text-[11px] font-medium text-blue-400 hover:text-blue-300">
-                      View runs
-                    </Link>
-                  )}
-                </div>
-              </GlassCard>
+                </GlassCard>
+              </Link>
             );
           })}
         </div>

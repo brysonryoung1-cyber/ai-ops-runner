@@ -342,19 +342,44 @@ else
   fail "AI panel missing fingerprint masking"
 fi
 
+# Test 33a: Project details dynamic route exists (navigable tiles)
+if [[ -f "$REPO_ROOT/apps/openclaw-console/src/app/projects/[projectId]/page.tsx" ]]; then
+  pass "project details route exists at projects/[projectId]/page.tsx"
+else
+  fail "project details route missing (projects tiles must be navigable)"
+fi
+
+# Test 33b: Projects page links to project details and has Open affordance
+if grep -q '/projects/\${encodeURIComponent(project.id)}' "$REPO_ROOT/apps/openclaw-console/src/app/projects/page.tsx" && \
+   grep -q 'Open' "$REPO_ROOT/apps/openclaw-console/src/app/projects/page.tsx" && \
+   grep -q 'aria-label.*Open project' "$REPO_ROOT/apps/openclaw-console/src/app/projects/page.tsx"; then
+  pass "projects page has Link to project details and Open/aria-label"
+else
+  fail "projects page missing navigable project cards (Link + Open + a11y)"
+fi
+
+# Test 33c: Project details page includes Connectors and Phase 0 for Soma
+if grep -q 'Connectors' "$REPO_ROOT/apps/openclaw-console/src/app/projects/[projectId]/page.tsx" && \
+   grep -q 'Phase 0\|soma_kajabi_phase0' "$REPO_ROOT/apps/openclaw-console/src/app/projects/[projectId]/page.tsx" && \
+   grep -q 'ConnectorsCard\|Connectors' "$REPO_ROOT/apps/openclaw-console/src/app/projects/[projectId]/page.tsx"; then
+  pass "project details page includes Connectors UI and Phase 0 for Soma"
+else
+  fail "project details page must include Connectors panel and Phase 0 action"
+fi
+
 # ── Section 5: Security Invariants ─────────────────────────────
 
 echo ""
 echo "=== Security Invariant Tests ==="
 
-# Test 33: Middleware unchanged (token auth preserved)
+# Test 34: Middleware unchanged (token auth preserved)
 if grep -q 'X-OpenClaw-Token\|x-openclaw-token' "$REPO_ROOT/apps/openclaw-console/src/middleware.ts"; then
   pass "middleware token auth preserved"
 else
   fail "middleware token auth broken"
 fi
 
-# Test 34: Allowlist module untouched (no arbitrary commands added)
+# Test 35: Allowlist module untouched (no arbitrary commands added)
 # Count actual action entries in the ALLOWLIST record (keys ending with colon + space + {)
 ALLOWLIST_ACTIONS=$(grep -c "name:" "$REPO_ROOT/apps/openclaw-console/src/lib/allowlist.ts" || true)
 if [[ "$ALLOWLIST_ACTIONS" -le 30 ]]; then
@@ -363,7 +388,7 @@ else
   fail "allowlist unexpectedly large ($ALLOWLIST_ACTIONS actions)"
 fi
 
-# Test 35: No raw secrets in new files
+# Test 36: No raw secrets in new files
 if ! grep -rn "sk-[a-zA-Z0-9]\{20,\}" "$REPO_ROOT/config/projects.json" "$REPO_ROOT/apps/openclaw-console/src/lib/run-recorder.ts" "$REPO_ROOT/apps/openclaw-console/src/lib/projects.ts" 2>/dev/null; then
   pass "no raw secrets in new files"
 else
