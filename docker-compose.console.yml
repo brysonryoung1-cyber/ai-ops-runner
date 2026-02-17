@@ -3,11 +3,12 @@
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.console.yml up -d --build
 #
-# The console binds to 127.0.0.1:8787 ONLY.
-# Expose to tailnet via: sudo tailscale serve --bg --https=443 http://127.0.0.1:8787
-# NEVER bind to 0.0.0.0.
+# Console uses network_mode: host so it can reach hostd at 127.0.0.1:8877 (hostd binds
+# 127.0.0.1 only). Console listens on 127.0.0.1:8787. Expose to tailnet via:
+#   sudo tailscale serve --bg --https=443 http://127.0.0.1:8787
+# NEVER bind console to 0.0.0.0.
 #
-# Host Executor (hostd): console calls host.docker.internal:8877. No SSH.
+# Host Executor (hostd): console calls http://127.0.0.1:8877. No SSH.
 # Artifacts: read-only mount from host artifacts dir.
 
 services:
@@ -15,18 +16,15 @@ services:
     build:
       context: ./apps/openclaw-console
       dockerfile: Dockerfile
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    ports:
-      - "127.0.0.1:8787:3000"
+    network_mode: host
     environment:
-      PORT: "3000"
-      HOSTNAME: "0.0.0.0"
+      PORT: "8787"
+      HOSTNAME: "127.0.0.1"
       OPENCLAW_CONSOLE_TOKEN: "${OPENCLAW_CONSOLE_TOKEN}"
       OPENCLAW_ADMIN_TOKEN: "${OPENCLAW_ADMIN_TOKEN}"
-      OPENCLAW_HOSTD_URL: "http://host.docker.internal:8877"
+      OPENCLAW_HOSTD_URL: "http://127.0.0.1:8877"
       AIOPS_HOST: "${AIOPS_HOST}"
-      RUNNER_API_URL: "${RUNNER_API_URL:-http://test_runner_api:8000}"
+      RUNNER_API_URL: "${RUNNER_API_URL:-http://127.0.0.1:8000}"
       AIOPS_USER: "root"
       OPENCLAW_ARTIFACTS_ROOT: "/var/openclaw_artifacts"
       OPENCLAW_REPO_ROOT: "/app"
@@ -41,7 +39,7 @@ services:
       - ./artifacts:/app/artifacts:rw
       - ./artifacts:/var/openclaw_artifacts:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/ || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8787/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

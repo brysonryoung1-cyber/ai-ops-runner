@@ -3,6 +3,7 @@
 openclaw_hostd — Host-local allowlisted executor. No SSH.
 Binds 127.0.0.1:8877 only. Auth via X-OpenClaw-Admin-Token from
 /etc/ai-ops-runner/secrets/openclaw_admin_token. Fail-closed everywhere.
+Console reaches hostd via host network (network_mode: host).
 """
 from __future__ import annotations
 
