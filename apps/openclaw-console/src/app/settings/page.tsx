@@ -1,10 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { GlassButton } from "@/components/glass";
 
 export default function SettingsPage() {
   const [copyStatus, setCopyStatus] = useState<"idle" | "copying" | "copied" | "error">("idle");
+  const [bundleStatus, setBundleStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [bundleLink, setBundleLink] = useState<string | null>(null);
 
   const copyDebugInfo = async () => {
     setCopyStatus("copying");
@@ -52,7 +55,7 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      <div className="glass-surface rounded-2xl p-6">
+      <div className="glass-surface rounded-2xl p-6 mb-6">
         <h3 className="text-sm font-semibold text-white/95 mb-3">Diagnostics</h3>
         <p className="text-xs text-white/60 mb-4">
           Copy debug information to clipboard for troubleshooting. Includes build SHA, route map, and artifact health. No secrets are included.
@@ -63,6 +66,46 @@ export default function SettingsPage() {
           {copyStatus === "copied" && "Copied!"}
           {copyStatus === "error" && "Copy failed"}
         </GlassButton>
+      </div>
+
+      <div id="support-bundle" className="glass-surface rounded-2xl p-6">
+        <h3 className="text-sm font-semibold text-white/95 mb-3">Support Bundle</h3>
+        <p className="text-xs text-white/60 mb-4">
+          Generate a one-click support bundle with ui health, DoD, failing runs, docker status, guard/hostd journals. Stored in artifacts/support_bundle/.
+        </p>
+        <GlassButton
+          onClick={async () => {
+            setBundleStatus("loading");
+            setBundleLink(null);
+            try {
+              const res = await fetch("/api/support/bundle", { method: "POST" });
+              const data = await res.json();
+              if (data.ok && data.permalink) {
+                setBundleLink(data.permalink);
+                setBundleStatus("done");
+              } else {
+                setBundleStatus("error");
+              }
+            } catch {
+              setBundleStatus("error");
+            }
+          }}
+          disabled={bundleStatus === "loading"}
+          size="sm"
+        >
+          {bundleStatus === "idle" && "Generate Support Bundle"}
+          {bundleStatus === "loading" && "Generating…"}
+          {bundleStatus === "done" && "Done"}
+          {bundleStatus === "error" && "Failed"}
+        </GlassButton>
+        {bundleLink && (
+          <Link
+            href={bundleLink}
+            className="mt-3 inline-block text-xs text-blue-400 hover:text-blue-300"
+          >
+            View bundle →
+          </Link>
+        )}
       </div>
     </div>
   );

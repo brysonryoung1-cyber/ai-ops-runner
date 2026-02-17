@@ -126,14 +126,19 @@ export default function ProjectDetailsPage() {
       if (!projectId || project?.id !== "soma_kajabi") return;
       telemetryClick("/projects/soma_kajabi", action);
       setConnectorLoading(action);
+      const CONNECTOR_TIMEOUT_MS = 35000;
+      const controller = new AbortController();
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
       try {
         const headers: Record<string, string> = { "Content-Type": "application/json" };
         if (token) headers["X-OpenClaw-Token"] = token;
+        timeoutId = setTimeout(() => controller.abort(), CONNECTOR_TIMEOUT_MS);
         const res = await fetch(`/api/projects/${projectId}/run`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ action }),
-        });
+            method: "POST",
+            headers,
+            body: JSON.stringify({ action }),
+            signal: controller.signal,
+          });
         const data = await res.json();
         const result: ConnectorResult = {
           ok: data.ok === true,
@@ -168,18 +173,25 @@ export default function ProjectDetailsPage() {
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        const isTimeout = err instanceof Error && err.name === "AbortError";
         telemetryError("/projects/soma_kajabi", action, msg);
-        setToast({ type: "error", message: "UI_ACTION_FAILED — check telemetry artifacts." });
+        setToast({
+          type: "error",
+          message: isTimeout
+            ? "Request timed out — View last run artifacts to debug."
+            : "UI_ACTION_FAILED — check telemetry artifacts.",
+        });
         clearToastAfter(8000);
         setConnectorResults((prev) => ({
           ...prev,
           [action]: {
             ok: false,
-            error_class: "UI_ACTION_FAILED",
+            error_class: isTimeout ? "CONNECTOR_TIMEOUT" : "UI_ACTION_FAILED",
             message: msg,
           },
         }));
       } finally {
+        if (timeoutId !== undefined) clearTimeout(timeoutId);
         setConnectorLoading(null);
       }
     },
@@ -327,6 +339,11 @@ export default function ProjectDetailsPage() {
             nextStepsBootstrap={connectorResults["soma_kajabi_bootstrap_start"]?.next_steps}
             nextStepsGmail={connectorResults["soma_kajabi_gmail_connect_start"]?.next_steps}
             variant="glass"
+            artifactDir={
+              project.id === "soma_kajabi"
+                ? connectorResults["soma_connectors_status"]?.artifact_dir
+                : (results["soma_connectors_status"] as ConnectorResult)?.artifact_dir
+            }
           />
           <div className="mb-6">
             <h3 className="text-lg font-semibold text-white/95 mb-3">Phase 0</h3>

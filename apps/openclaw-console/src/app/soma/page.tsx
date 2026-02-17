@@ -92,12 +92,16 @@ export default function SomaPage() {
   const [lastAction, setLastAction] = useState<string | null>(null);
   const [connected, setConnected] = useState<boolean | null>(null);
 
-  // Check connectivity on mount
+  // Check connectivity via server-mediated endpoint; 3s hard timeout
   useEffect(() => {
-    fetch("/api/exec?check=connectivity")
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 3000);
+    fetch("/api/host-executor/status", { signal: controller.signal })
       .then((r) => r.json())
-      .then((d) => setConnected(d.ok))
-      .catch(() => setConnected(false));
+      .then((d) => setConnected(d.ok === true))
+      .catch(() => setConnected(false))
+      .finally(() => clearTimeout(t));
+    return () => controller.abort();
   }, []);
 
   // Auto-load status and connector status
@@ -146,11 +150,15 @@ export default function SomaPage() {
       {connected === false && (
         <div className="mb-6 p-4 rounded-apple bg-red-50 border border-red-200">
           <p className="text-sm font-semibold text-apple-red">
-            Host Executor Unreachable
+            Host Executor unreachable
           </p>
           <p className="text-xs text-apple-muted mt-2">
             Ensure hostd is running on the host (127.0.0.1:8877).
           </p>
+          <div className="flex gap-3 mt-2">
+            <a href="/settings" className="text-xs text-blue-600 hover:underline">Copy UI debug</a>
+            <a href="/settings#support-bundle" className="text-xs text-blue-600 hover:underline">Generate Support Bundle</a>
+          </div>
         </div>
       )}
 

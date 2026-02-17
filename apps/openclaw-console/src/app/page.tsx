@@ -186,46 +186,37 @@ export default function OverviewPage() {
     top_project: { id: string; usd: number };
   } | null>(null);
 
-  // Check connectivity on mount; show "Degraded" only after N consecutive failures (avoid flapping)
-  const CONSECUTIVE_FAILURES_FOR_DEGRADED = 3;
-  const hostdFailureCountRef = useRef(0);
+  // Check connectivity via server-mediated endpoint; 3s hard timeout
+  const HOST_STATUS_TIMEOUT_MS = 3000;
   useEffect(() => {
     let cancelled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined = undefined;
-    const runCheck = () => {
-      fetch("/api/exec?check=connectivity")
-        .then((r) => r.json())
-        .then((d) => {
-          if (cancelled) return;
-          if (d.ok) {
-            hostdFailureCountRef.current = 0;
-            setConnected(true);
-            setConnError(null);
-            return;
-          }
-          hostdFailureCountRef.current += 1;
-          if (hostdFailureCountRef.current >= CONSECUTIVE_FAILURES_FOR_DEGRADED) {
-            setConnected(false);
-            setConnError(d.error ?? "Host Executor unreachable");
-          } else {
-            timeoutId = setTimeout(runCheck, 5000);
-          }
-        })
-        .catch(() => {
-          if (cancelled) return;
-          hostdFailureCountRef.current += 1;
-          if (hostdFailureCountRef.current >= CONSECUTIVE_FAILURES_FOR_DEGRADED) {
-            setConnected(false);
-            setConnError("Cannot reach the console API");
-          } else {
-            timeoutId = setTimeout(runCheck, 5000);
-          }
-        });
-    };
-    runCheck();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), HOST_STATUS_TIMEOUT_MS);
+    fetch("/api/host-executor/status", { signal: controller.signal })
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled) return;
+        if (d.ok) {
+          setConnected(true);
+          setConnError(null);
+          return;
+        }
+        setConnected(false);
+        setConnError(d.message_redacted ?? d.error ?? "Host Executor unreachable");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setConnected(false);
+        setConnError(
+          err.name === "AbortError"
+            ? "Host Executor check timed out (3s)"
+            : "Cannot reach the console API"
+        );
+      })
+      .finally(() => clearTimeout(timeoutId));
     return () => {
       cancelled = true;
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      controller.abort();
     };
   }, []);
 
@@ -411,9 +402,17 @@ export default function OverviewPage() {
       {/* Connection banner */}
       {connected === false && (
         <div className="mb-6 p-4 rounded-2xl glass-surface border border-red-500/20">
-          <p className="text-sm font-semibold text-red-300">Host Executor Degraded</p>
+          <p className="text-sm font-semibold text-red-300">Host Executor unreachable</p>
           <p className="text-xs text-red-200/80 mt-1">{connError}</p>
           <p className="text-xs text-white/50 mt-2">Ensure hostd is running on the host (127.0.0.1:8877).</p>
+          <div className="flex gap-3 mt-2">
+            <Link href="/settings" className="text-xs text-blue-300 hover:text-blue-200">
+              Copy UI debug
+            </Link>
+            <Link href="/settings#support-bundle" className="text-xs text-blue-300 hover:text-blue-200">
+              Generate Support Bundle
+            </Link>
+          </div>
         </div>
       )}
 

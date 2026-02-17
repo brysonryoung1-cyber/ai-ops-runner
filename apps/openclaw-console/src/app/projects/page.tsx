@@ -160,6 +160,12 @@ export default function ProjectsPage() {
                             <p className={`text-[10px] ${project.last_run.status === "success" ? "text-emerald-400" : "text-red-400"}`}>
                               {project.last_run.action} — {project.last_run.status}
                             </p>
+                            <Link
+                              href={`/runs?project=${encodeURIComponent(project.id)}`}
+                              className="text-[10px] text-blue-400 hover:text-blue-300 mt-0.5 inline-block"
+                            >
+                              View run →
+                            </Link>
                           </div>
                         ) : (
                           <p className="text-xs text-white/50">No runs yet</p>
@@ -178,8 +184,16 @@ export default function ProjectsPage() {
 
                     {project.last_run?.error_summary && (
                       <div className="mt-2 p-2 rounded-lg bg-red-500/10 border border-red-500/20">
-                        <p className="text-[10px] font-semibold text-red-300 uppercase tracking-wider mb-0.5">Last Error</p>
+                        <p className="text-[10px] font-semibold text-red-300 uppercase tracking-wider mb-0.5">
+                          Last Error {project.last_run.finished_at ? `· ${formatRelativeTime(project.last_run.finished_at)}` : ""}
+                        </p>
                         <p className="text-xs text-red-200 line-clamp-2">{project.last_run.error_summary}</p>
+                        <Link
+                          href={`/artifacts/runs/${encodeURIComponent(project.last_run.run_id)}`}
+                          className="text-[10px] text-blue-400 hover:text-blue-300 mt-1 inline-block"
+                        >
+                          View run artifacts →
+                        </Link>
                       </div>
                     )}
                   </div>

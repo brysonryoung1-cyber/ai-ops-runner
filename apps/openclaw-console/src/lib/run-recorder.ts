@@ -219,11 +219,12 @@ export function getRunRecord(runId: string): RunRecord | null {
 
 /**
  * Get the most recent run for a specific project.
- * Returns null if no runs found.
+ * Only returns runs where resolveProjectId(action) === projectId to avoid
+ * stale/misleading attribution (e.g. infra_openclaw showing soma_kajabi_*).
  */
 export function getLastRunForProject(projectId: string): RunRecord | null {
   const runs = listRunRecords(500);
-  return runs.find((r) => r.project_id === projectId) || null;
+  return runs.find((r) => r.project_id === projectId && resolveProjectId(r.action) === projectId) || null;
 }
 
 /**

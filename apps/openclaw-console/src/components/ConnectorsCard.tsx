@@ -1,5 +1,7 @@
 "use client";
 
+import { useCallback, useState } from "react";
+
 /** Result from run route or legacy exec (for status display). */
 export type ConnectorResult = {
   ok: boolean;
@@ -38,6 +40,29 @@ export function parseConnectorsStatus(
   }
 }
 
+function CopyButton({ value, label }: { value: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // ignore
+    }
+  }, [value]);
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      aria-label={`Copy ${label}`}
+      className="ml-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-white/10 hover:bg-white/20"
+    >
+      {copied ? "Copied!" : "Copy"}
+    </button>
+  );
+}
+
 interface ConnectorsCardProps {
   /** Status result (soma_connectors_status) for kajabi/gmail badges */
   result?: ConnectorResult;
@@ -49,6 +74,8 @@ interface ConnectorsCardProps {
   /** Next steps from gmail connect start */
   nextStepsGmail?: ConnectorResult["next_steps"];
   variant?: "glass" | "apple";
+  /** When status/action fails: show View run link */
+  artifactDir?: string;
 }
 
 const CONNECTOR_ACTIONS: { key: string; label: string; loadingLabel: string; primary?: boolean }[] = [
@@ -67,6 +94,7 @@ export default function ConnectorsCard({
   nextStepsBootstrap,
   nextStepsGmail,
   variant = "apple",
+  artifactDir,
 }: ConnectorsCardProps) {
   const status = parseConnectorsStatus(result?.stdout, result?.result_summary);
 
@@ -135,16 +163,46 @@ export default function ConnectorsCard({
         <div className={`mt-3 p-2 rounded text-xs ${variant === "glass" ? "bg-white/5 text-white/80" : "bg-gray-50 text-gray-700"}`}>
           <p className="font-medium mb-1">Kajabi next steps</p>
           {nextStepsBootstrap.instruction && <p>{nextStepsBootstrap.instruction}</p>}
-          {nextStepsBootstrap.verification_url && <p className="mt-1 break-all">URL: {nextStepsBootstrap.verification_url}</p>}
-          {nextStepsBootstrap.user_code && <p>Code: {nextStepsBootstrap.user_code}</p>}
+          {nextStepsBootstrap.verification_url && (
+            <p className="mt-1 break-all flex items-center gap-1">
+              URL: {nextStepsBootstrap.verification_url}
+              <CopyButton value={nextStepsBootstrap.verification_url} label="URL" />
+            </p>
+          )}
+          {nextStepsBootstrap.user_code && (
+            <p className="flex items-center gap-1">
+              Code: {nextStepsBootstrap.user_code}
+              <CopyButton value={nextStepsBootstrap.user_code} label="Code" />
+            </p>
+          )}
         </div>
       )}
       {(nextStepsGmail?.instruction || nextStepsGmail?.verification_url || nextStepsGmail?.user_code) && (
         <div className={`mt-3 p-2 rounded text-xs ${variant === "glass" ? "bg-white/5 text-white/80" : "bg-gray-50 text-gray-700"}`}>
           <p className="font-medium mb-1">Gmail next steps</p>
           {nextStepsGmail.instruction && <p>{nextStepsGmail.instruction}</p>}
-          {nextStepsGmail.verification_url && <p className="mt-1 break-all">URL: {nextStepsGmail.verification_url}</p>}
-          {nextStepsGmail.user_code && <p>Code: {nextStepsGmail.user_code}</p>}
+          {nextStepsGmail.verification_url && (
+            <p className="mt-1 break-all flex items-center gap-1">
+              URL: {nextStepsGmail.verification_url}
+              <CopyButton value={nextStepsGmail.verification_url} label="URL" />
+            </p>
+          )}
+          {nextStepsGmail.user_code && (
+            <p className="flex items-center gap-1">
+              Code: {nextStepsGmail.user_code}
+              <CopyButton value={nextStepsGmail.user_code} label="Code" />
+            </p>
+          )}
+        </div>
+      )}
+      {result && !result.ok && (result.error_class || result.message) && (
+        <div className={`mt-3 p-2 rounded text-xs ${variant === "glass" ? "bg-red-500/10 text-red-200" : "bg-red-50 text-red-700"}`}>
+          <p className="font-medium mb-0.5">{result.error_class ?? "Error"}: {result.message ?? "Action failed"}</p>
+          {artifactDir && (
+            <a href={`/artifacts?path=${encodeURIComponent(artifactDir)}`} className="text-blue-500 hover:underline mt-1 inline-block">
+              View last run artifacts →
+            </a>
+          )}
         </div>
       )}
     </div>

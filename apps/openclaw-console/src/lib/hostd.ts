@@ -208,12 +208,13 @@ export async function executeAction(actionName: string): Promise<HostdResult> {
   }
 }
 
-const HEALTH_RETRIES = 3;
-const HEALTH_RETRY_DELAY_MS = 500;
+const HEALTH_RETRIES = 2;
+const HEALTH_RETRY_DELAY_MS = 300;
+const HEALTH_TIMEOUT_MS = 2500;
 
 /**
  * Quick connectivity check: GET hostd /health (no token).
- * Retries up to HEALTH_RETRIES with backoff to avoid false "unreachable" on transient timeouts.
+ * Uses short timeout to avoid infinite "Checking…" in UI.
  */
 export async function checkConnectivity(): Promise<{
   ok: boolean;
@@ -235,7 +236,7 @@ export async function checkConnectivity(): Promise<{
     try {
       const res = await fetch(`${baseUrl}/health`, {
         method: "GET",
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
       });
       if (!res.ok) {
         lastError = `Hostd health returned ${res.status}`;
