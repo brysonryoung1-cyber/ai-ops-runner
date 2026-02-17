@@ -313,8 +313,9 @@ export async function POST(
           const ns = parsed.next_steps as Record<string, unknown>;
           nextSteps = {
             instruction: typeof ns.instruction === "string" ? ns.instruction : undefined,
-            verification_url: ns.verification_url ?? null,
-            user_code: ns.user_code ?? null,
+            verification_url:
+              typeof ns.verification_url === "string" ? ns.verification_url : null,
+            user_code: typeof ns.user_code === "string" ? ns.user_code : null,
           };
         }
         if (!nextSteps) {
