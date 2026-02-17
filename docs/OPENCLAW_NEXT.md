@@ -1,3 +1,3 @@
 # Next Action
 
-Run soma_kajabi Phase 0 snapshot+harvest and confirm artifacts populate.
+Enable soma_kajabi Phase 0: set `projects.soma_kajabi.kill_switch` to `false` in `config/project_state.json`, then run Phase 0 snapshot actions.

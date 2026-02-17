@@ -92,7 +92,7 @@ else
   run false "verify_production.sh not found"
 fi
 
-# --- deploy_pipeline: installs hostd (idempotent) ---
+# --- deploy_pipeline: installs hostd (idempotent), console build fail-closed ---
 if [ -f "$DEPLOY" ]; then
   if grep -q "install_openclaw_hostd" "$DEPLOY"; then
     run true "deploy_pipeline runs install_openclaw_hostd"
@@ -103,6 +103,11 @@ if [ -f "$DEPLOY" ]; then
     run true "deploy_pipeline runs DoD (dod_production.sh) after verify"
   else
     run false "deploy_pipeline should run dod_production.sh after verify_production"
+  fi
+  if grep -q "console_build_failed" "$DEPLOY" && grep -q "console_route_gate" "$DEPLOY"; then
+    run true "deploy_pipeline fail-closed on console build and route gate"
+  else
+    run false "deploy_pipeline must fail-closed on console build + /api/dod/last gate"
   fi
 fi
 

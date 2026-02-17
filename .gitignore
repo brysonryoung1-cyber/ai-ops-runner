@@ -15,6 +15,7 @@ venv/
 .pytest_cache/
 .mypy_cache/
 review_packets/
+.cursor/
 
 # OpenClaw Console
 apps/openclaw-console/node_modules/

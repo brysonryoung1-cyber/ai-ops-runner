@@ -4,7 +4,7 @@
 
 - **Project**: OpenClaw (ai-ops-runner)
 - **Goal summary**: Self-updating project brain; repo + HQ canonical; no ChatGPT memory reliance.
-- **Last verified VPS HEAD**: 3be7e2f
+- **Last verified VPS HEAD**: b64b7aa
 - **Last deploy**: —
 - **Last doctor**: FAIL
 - **Last guard**: —
@@ -16,16 +16,6 @@
 ## Definition-of-Done (DoD)
 
 - **DoD script**: `ops/dod_production.sh` — executable checks: hostd /health, /api/ai-status, /api/llm/status, /api/project/state, POST /api/exec action=doctor (PASS), /api/artifacts/list dirs > 0, no hard-fail strings (ENOENT, spawn ssh, Host Executor Unreachable).
-- **Pipeline enforcement**: `ops/deploy_pipeline.sh` runs DoD at Step 5b (after verify_production); deploy fails if DoD exits non-zero. No bypass flags.
+- **Pipeline enforcement**: `ops/deploy_pipeline.sh` runs DoD at Step 5b (after verify_production and **console route gate**); deploy fails if DoD exits non-zero. No bypass flags. **Bug fix (2025-02)**: Removed `|| true` that allowed console build to fail silently; added explicit console build step and /api/dod/last route gate; deploy now fail-closed on TS/build/route issues.
 - **Proof artifacts**: `artifacts/dod/<run_id>/dod_result.json` (redacted; no secrets). Linked from deploy_result.artifacts.dod_result and served via GET `/api/dod/last`.
-
-## soma_kajabi Phase 0 Project
-
-- **Project**: soma_kajabi (Phase 0 read-only)
-- **Artifacts**: `artifacts/soma_kajabi/phase0/<run_id>/`
-  - `kajabi_library_snapshot.json` — Home + Practitioner structure (or unknown schema on fail-closed)
-  - `gmail_harvest.jsonl` — Emails from:(Zane McCourtney) has:attachment
-  - `video_manifest.csv` — email_id, subject, file_name, status (unmapped/mapped_to_existing_lesson/raw_needs_review)
-  - `result.json` — ok, error_class, recommended_next_action, artifact_paths
-- **Kill switch**: `projects.soma_kajabi.kill_switch` in config/project_state.json (default true)
-- **Enable**: Set `kill_switch` to false in config/project_state.json
+- **Production deploy entrypoint**: `ops/deploy_until_green.sh` — retries safe remediations until green; fail-closed on build/route issues with triage.json.

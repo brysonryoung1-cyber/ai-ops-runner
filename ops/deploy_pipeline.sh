@@ -136,15 +136,10 @@ else
 fi
 echo ""
 
-# --- Step 3: Docker compose ---
-STEP="docker_compose"
-echo "==> Step 3: docker compose up -d --build"
-if ! docker compose up -d --build 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/docker.log"; then
-  write_fail "$STEP" "docker_compose_failed" "Fix Docker build/run and re-run deploy" "artifacts/deploy/$RUN_ID/docker.log"
-  exit 2
-fi
-# Console stack if present
+# --- Step 3a: Explicit console build (fail-closed; no || true bypass) ---
 if [ -f "docker-compose.console.yml" ]; then
+  STEP="console_build"
+  echo "==> Step 3a: Build openclaw_console image"
   CONSOLE_TOKEN=""
   [ -f /etc/ai-ops-runner/secrets/openclaw_console_token ] && CONSOLE_TOKEN="$(cat /etc/ai-ops-runner/secrets/openclaw_console_token 2>/dev/null | tr -d '[:space:]')"
   export OPENCLAW_CONSOLE_TOKEN="$CONSOLE_TOKEN"
@@ -155,7 +150,28 @@ if [ -f "docker-compose.console.yml" ]; then
   export OPENCLAW_ADMIN_TOKEN="${ADMIN_TOKEN}"
   AIOPS_HOST="$(tailscale ip -4 2>/dev/null | head -n1 | tr -d '[:space:]')"
   [ -n "$AIOPS_HOST" ] && export AIOPS_HOST
-  docker compose -f docker-compose.yml -f docker-compose.console.yml up -d --build 2>&1 | tee -a "$DEPLOY_ARTIFACT_DIR/docker.log" || true
+  if ! docker compose -f docker-compose.yml -f docker-compose.console.yml build openclaw_console 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/console_build.log"; then
+    echo "console_build_failed" >"$DEPLOY_ARTIFACT_DIR/console_build_failed"
+    write_fail "$STEP" "console_build_failed" "Fix openclaw-console build/typecheck and re-run deploy" "artifacts/deploy/$RUN_ID/console_build.log"
+    exit 2
+  fi
+  echo "  Console build: PASS"
+  echo ""
+fi
+
+# --- Step 3b: Docker compose ---
+STEP="docker_compose"
+echo "==> Step 3b: docker compose up -d --build"
+if ! docker compose up -d --build 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/docker.log"; then
+  write_fail "$STEP" "docker_compose_failed" "Fix Docker build/run and re-run deploy" "artifacts/deploy/$RUN_ID/docker.log"
+  exit 2
+fi
+# Console stack if present (image already built above; no bypass)
+if [ -f "docker-compose.console.yml" ]; then
+  if ! docker compose -f docker-compose.yml -f docker-compose.console.yml up -d --build 2>&1 | tee -a "$DEPLOY_ARTIFACT_DIR/docker.log"; then
+    write_fail "console_compose" "console_compose_failed" "Fix console compose and re-run deploy" "artifacts/deploy/$RUN_ID/docker.log"
+    exit 2
+  fi
 fi
 echo "  Docker: done"
 echo ""
@@ -185,6 +201,28 @@ if ! "$SCRIPT_DIR/verify_production.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/verify.
   exit 2
 fi
 echo "  Verify: PASS"
+echo ""
+
+# --- Step 5a: Console route gate (/api/dod/last must exist; no 404) ---
+STEP="console_route_gate"
+echo "==> Step 5a: Console route gate (/api/ai-status, /api/dod/last)"
+ROUTE_BASE="${OPENCLAW_VERIFY_BASE_URL:-http://127.0.0.1:8787}"
+AI_STATUS_BODY="$(curl -sf --connect-timeout 5 --max-time 10 "$ROUTE_BASE/api/ai-status" 2>/dev/null)" || true
+if [ -z "$AI_STATUS_BODY" ]; then
+  write_fail "$STEP" "console_ai_status_unreachable" "Console /api/ai-status unreachable; fix console service and re-run deploy" "artifacts/deploy/$RUN_ID/verify.log"
+  exit 2
+fi
+if ! echo "$AI_STATUS_BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') is True else 1)" 2>/dev/null; then
+  write_fail "$STEP" "console_ai_status_not_ok" "Console /api/ai-status ok != true; fix console health and re-run deploy" "artifacts/deploy/$RUN_ID/verify.log"
+  exit 2
+fi
+DOD_HTTP="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "$ROUTE_BASE/api/dod/last" 2>/dev/null)" || DOD_HTTP="000"
+if [ "$DOD_HTTP" != "200" ]; then
+  echo "missing_route_dod_last" >"$DEPLOY_ARTIFACT_DIR/missing_route_dod_last"
+  write_fail "$STEP" "missing_route_dod_last" "GET /api/dod/last returned $DOD_HTTP (expect 200); console route missing or broken" "artifacts/deploy/$RUN_ID/verify.log"
+  exit 2
+fi
+echo "  Console route gate: PASS (/api/ai-status ok:true, /api/dod/last 200)"
 echo ""
 
 # --- Step 5b: Definition-of-Done (executable DoD; fail deploy if any check fails) ---

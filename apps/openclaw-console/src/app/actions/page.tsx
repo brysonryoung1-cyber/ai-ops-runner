@@ -1,7 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import ActionButton from "@/components/ActionButton";
+
+/** Normalize unknown values to safe ReactNode. Never render raw secrets. */
+function toSafeReactNode(value: unknown): ReactNode {
+  if (value == null) return null;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (value instanceof Error) return value.message;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
 import CollapsibleOutput from "@/components/CollapsibleOutput";
 import { useExec, ExecResult } from "@/lib/hooks";
 import { GlassCard, StatusDot, Pill } from "@/components/glass";
@@ -118,19 +130,19 @@ export default function ActionsPage() {
               </span>
             </div>
 
-            {(lastResult.error || (lastResult as Record<string, unknown>).error_class) && (
+            {Boolean(lastResult.error || (lastResult as unknown as Record<string, unknown>).error_class) && (
               <div className="px-5 py-3 bg-red-500/10 border-b border-red-500/20">
-                <p className="text-xs text-red-200">{lastResult.error}</p>
-                {(lastResult as Record<string, unknown>).error_class && (
+                <p className="text-xs text-red-200">{toSafeReactNode(lastResult.error ?? "")}</p>
+                {(lastResult as unknown as Record<string, unknown>).error_class != null ? (
                   <p className="text-xs text-red-300 mt-1">
-                    error_class: {(lastResult as Record<string, unknown>).error_class as string}
+                    error_class: {toSafeReactNode((lastResult as unknown as Record<string, unknown>).error_class)}
                   </p>
-                )}
-                {(lastResult as Record<string, unknown>).recommended_next_action && (
+                ) : null}
+                {(lastResult as unknown as Record<string, unknown>).recommended_next_action != null ? (
                   <p className="text-xs text-amber-200 mt-1">
-                    recommended_next_action: {(lastResult as Record<string, unknown>).recommended_next_action as string}
+                    recommended_next_action: {toSafeReactNode((lastResult as unknown as Record<string, unknown>).recommended_next_action)}
                   </p>
-                )}
+                ) : null}
               </div>
             )}
 
