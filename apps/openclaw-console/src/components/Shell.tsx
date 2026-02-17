@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTarget } from "@/lib/target-context";
 import StatusDot from "./glass/StatusDot";
+import HydrationBadge from "./HydrationBadge";
 
 const NAV_ITEMS = [
   { href: "/", label: "Overview" },
@@ -51,6 +52,8 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           </span>
         )}
         <div className="hidden md:flex items-center gap-2 ml-auto">
+          <HydrationBadge />
+          <span className="text-white/20 mx-1">|</span>
           <StatusDot variant="idle" />
           <span className="text-[10px] text-white/50">Doctor</span>
           <StatusDot variant="idle" />
@@ -72,7 +75,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             ${navOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}
           `}
         >
-        <nav className="flex-1 px-3 py-4">
+        <nav className="flex-1 px-3 py-4" aria-label="Main navigation">
           <ul className="space-y-0.5">
             {NAV_ITEMS.map((item) => {
               const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
@@ -81,6 +84,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
                   <Link
                     href={item.href}
                     onClick={() => setNavOpen(false)}
+                    aria-current={active ? "page" : undefined}
                     className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium transition-all duration-150
                       ${active ? "bg-white/15 text-white" : "text-white/70 hover:bg-white/10 hover:text-white/90"}
                     `}

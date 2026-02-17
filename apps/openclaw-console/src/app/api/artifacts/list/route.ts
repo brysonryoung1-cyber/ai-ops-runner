@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readdirSync, statSync, existsSync } from "fs";
-import { join } from "path";
+import { join, resolve, relative } from "path";
 
 function getArtifactsRoot(): string {
   if (process.env.OPENCLAW_ARTIFACTS_ROOT) return process.env.OPENCLAW_ARTIFACTS_ROOT;
@@ -11,12 +11,15 @@ const MAX_ENTRIES = 50;
 
 /**
  * Resolve path under root; reject path traversal. Returns null if invalid.
+ * Uses path.relative to ensure the resolved path is strictly within root.
  */
 function safeJoin(root: string, ...segments: string[]): string | null {
-  const resolved = join(root, ...segments);
-  const normalized = join(resolved);
-  if (!normalized.startsWith(join(root))) return null;
-  return normalized;
+  const absRoot = resolve(root);
+  const resolved = resolve(root, ...segments);
+  const rel = relative(absRoot, resolved);
+  if (rel.startsWith("..") || rel.startsWith("/")) return null;
+  if (!resolved.startsWith(absRoot + "/") && resolved !== absRoot) return null;
+  return resolved;
 }
 
 /**
@@ -43,6 +46,19 @@ export async function GET(req: NextRequest) {
     if (!allowedHost) {
       return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
     }
+  }
+
+  // Stub mode for testing without real artifacts directory
+  if (process.env.OPENCLAW_UI_STUB === "1") {
+    return NextResponse.json({
+      ok: true,
+      dirs: [
+        { name: "ui_telemetry" },
+        { name: "runs" },
+        { name: "hostd" },
+        { name: "pred_markets" },
+      ],
+    });
   }
 
   const ARTIFACTS_ROOT = getArtifactsRoot();

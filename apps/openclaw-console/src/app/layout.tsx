@@ -4,8 +4,10 @@ import { join } from "path";
 import { homedir } from "os";
 import "./globals.css";
 import Shell from "@/components/Shell";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import { TokenProvider } from "@/lib/token-context";
 import { TargetProvider, type TargetInfo } from "@/lib/target-context";
+import { ToastProvider } from "@/components/Toast";
 
 export const metadata: Metadata = {
   title: "OpenClaw HQ",
@@ -46,7 +48,11 @@ export default function RootLayout({
       <body className="font-sans antialiased">
         <TokenProvider token={token}>
           <TargetProvider target={target}>
-            <Shell>{children}</Shell>
+            <ToastProvider>
+              <Shell>
+                <ErrorBoundary>{children}</ErrorBoundary>
+              </Shell>
+            </ToastProvider>
           </TargetProvider>
         </TokenProvider>
       </body>

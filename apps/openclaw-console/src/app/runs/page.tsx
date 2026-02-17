@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useToken } from "@/lib/token-context";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { Suspense } from "react";
 
 interface RunData {
@@ -125,12 +126,12 @@ function RunsContent() {
         </div>
         <div className="flex items-center gap-2">
           {projectFilter && (
-            <a
+            <Link
               href="/runs"
               className="text-xs font-medium text-white/60 hover:text-white/90"
             >
               Clear filter
-            </a>
+            </Link>
           )}
           <button
             onClick={fetchRuns}
@@ -175,40 +176,62 @@ function RunsContent() {
                     return (
                       <li
                         key={run.run_id}
-                        onClick={() => setSelectedRun(isSelected ? null : run)}
-                        className={`flex items-center justify-between px-4 py-3 cursor-pointer transition-colors ${isSelected ? "bg-white/10" : "hover:bg-white/5"}`}
+                        className={`transition-colors ${isSelected ? "bg-white/10" : "hover:bg-white/5"}`}
                       >
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <span
-                            className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                              run.status === "success"
-                                ? "bg-emerald-500"
-                                : run.status === "failure"
-                                  ? "bg-red-500"
-                                  : "bg-amber-500"
-                            }`}
-                          />
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium text-white/90">
-                                {run.action}
-                              </span>
-                              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${badge.bg} ${badge.text}`}>
-                                {badge.label}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2 mt-0.5">
-                              <span className="text-[10px] text-white/50">{run.project_id}</span>
-                              <span className="text-[10px] text-white/50">·</span>
-                              <span className="text-[10px] text-white/50">
-                                {formatDuration(run.duration_ms)}
-                              </span>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedRun(isSelected ? null : run)}
+                          className="w-full flex items-center justify-between px-4 py-3 cursor-pointer text-left"
+                        >
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <span
+                              className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                run.status === "success"
+                                  ? "bg-emerald-500"
+                                  : run.status === "failure"
+                                    ? "bg-red-500"
+                                    : "bg-amber-500"
+                              }`}
+                            />
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-medium text-white/90">
+                                  {run.action}
+                                </span>
+                                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${badge.bg} ${badge.text}`}>
+                                  {badge.label}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <span className="text-[10px] text-white/50">{run.project_id}</span>
+                                <span className="text-[10px] text-white/50">·</span>
+                                <span className="text-[10px] text-white/50">
+                                  {formatDuration(run.duration_ms)}
+                                </span>
+                              </div>
                             </div>
                           </div>
+                          <span className="text-[11px] text-white/50 flex-shrink-0 ml-3">
+                            {formatRelativeTime(run.finished_at)}
+                          </span>
+                        </button>
+                        {/* Anchor link for no-JS fallback */}
+                        <div className="px-4 pb-2 -mt-1 flex items-center gap-3">
+                          {run.artifact_paths.length > 0 && (
+                            <Link
+                              href={`/artifacts/runs/${encodeURIComponent(run.run_id)}`}
+                              className="text-[10px] font-medium text-blue-400 hover:text-blue-300"
+                            >
+                              View artifacts →
+                            </Link>
+                          )}
+                          <Link
+                            href={`/runs?id=${encodeURIComponent(run.run_id)}`}
+                            className="text-[10px] font-medium text-white/40 hover:text-white/70"
+                          >
+                            Permalink
+                          </Link>
                         </div>
-                        <span className="text-[11px] text-white/50 flex-shrink-0 ml-3">
-                          {formatRelativeTime(run.finished_at)}
-                        </span>
                       </li>
                     );
                   })}
@@ -269,7 +292,9 @@ function RunsContent() {
                       Project
                     </p>
                     <p className="text-xs text-white/90 mt-0.5 font-mono">
-                      {selectedRun.project_id}
+                      <Link href={`/projects/${encodeURIComponent(selectedRun.project_id)}`} className="text-blue-400 hover:text-blue-300">
+                        {selectedRun.project_id}
+                      </Link>
                     </p>
                   </div>
                   <div>
@@ -318,8 +343,13 @@ function RunsContent() {
                     </p>
                     <ul className="space-y-1">
                       {selectedRun.artifact_paths.map((path, i) => (
-                        <li key={i} className="text-xs text-white/90 font-mono bg-white/5 rounded px-2 py-1">
-                          {path}
+                        <li key={i}>
+                          <Link
+                            href={`/artifacts/${path.split("/").map(encodeURIComponent).join("/")}`}
+                            className="text-xs text-blue-400 hover:text-blue-300 font-mono bg-white/5 rounded px-2 py-1 block"
+                          >
+                            {path}
+                          </Link>
                         </li>
                       ))}
                     </ul>

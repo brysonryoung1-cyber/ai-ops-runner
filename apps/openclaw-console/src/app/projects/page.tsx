@@ -123,7 +123,14 @@ export default function ProjectsPage() {
                 <div className="p-5 pb-3">
                     <div className="flex items-start justify-between mb-2">
                       <div className="flex-1 min-w-0">
-                        <h3 className="text-sm font-semibold text-white/95 truncate">{project.name}</h3>
+                        <h3 className="text-sm font-semibold truncate">
+                          <Link
+                            href={projectHref}
+                            className="text-white/95 hover:text-blue-300 transition-colors"
+                          >
+                            {project.name}
+                          </Link>
+                        </h3>
                         <p className="text-xs text-white/60 mt-0.5 line-clamp-2">{project.description}</p>
                       </div>
                       <div className="flex items-center gap-2 ml-3 flex-shrink-0">
