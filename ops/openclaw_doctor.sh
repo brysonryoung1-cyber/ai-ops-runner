@@ -441,10 +441,29 @@ fi
 
 # --- 9b. Host Executor (hostd) — HQ uses hostd instead of SSH ---
 echo "--- Host Executor (hostd) ---"
-if curl -sSf --connect-timeout 2 "http://127.0.0.1:8877/health" >/dev/null 2>&1; then
+HOSTD_OK=0
+for attempt in 1 2 3; do
+  if curl -sSf --connect-timeout 2 "http://127.0.0.1:8877/health" >/dev/null 2>&1; then
+    HOSTD_OK=1
+    break
+  fi
+  [ "$attempt" -lt 3 ] && sleep 1
+done
+if [ "$HOSTD_OK" -eq 1 ]; then
   pass "hostd reachable on 127.0.0.1:8877"
 else
-  fail "hostd not reachable (127.0.0.1:8877) — HQ Actions/Artifacts require hostd"
+  # One restart attempt, then recheck
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl restart openclaw-hostd 2>/dev/null || true
+    sleep 2
+    if curl -sSf --connect-timeout 2 "http://127.0.0.1:8877/health" >/dev/null 2>&1; then
+      pass "hostd reachable after restart (127.0.0.1:8877)"
+      HOSTD_OK=1
+    fi
+  fi
+  if [ "$HOSTD_OK" -ne 1 ]; then
+    fail "hostd not reachable (127.0.0.1:8877) — HQ Actions/Artifacts require hostd"
+  fi
 fi
 
 # --- 10. Project State Files (fail-closed: repo is canonical brain) ---
@@ -474,6 +493,33 @@ else
     fi
   fi
   [ "$STATE_PASS" -eq 1 ] && pass "Project state files present (OPENCLAW_CURRENT.md, OPENCLAW_NEXT.md)"
+fi
+
+# --- 10b. UI Acceptance Gate (Zane Phase gating) ---
+echo "--- UI Acceptance Gate ---"
+STATE_JSON="$ROOT_DIR/config/project_state.json"
+UI_ACCEPTED=""
+NEXT_POINTS_TO_ZANE=""
+if [ -f "$STATE_JSON" ]; then
+  UI_ACCEPTED="$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$STATE_JSON'))
+    v = d.get('ui_accepted')
+    print('true' if v is True else 'false')
+except Exception:
+    print('false')
+" 2>/dev/null || echo "false")"
+fi
+if [ -f "$NEXT_MD" ] && [ -s "$NEXT_MD" ]; then
+  if grep -qiE 'Zane|phase\s*0|phase\s*1|phase\s*2' "$NEXT_MD" 2>/dev/null; then
+    NEXT_POINTS_TO_ZANE="1"
+  fi
+fi
+if [ "$NEXT_POINTS_TO_ZANE" = "1" ] && [ "$UI_ACCEPTED" != "true" ]; then
+  fail "UI not accepted: OPENCLAW_NEXT.md points to Zane Phase but ui_accepted is not true. Complete docs/OPENCLAW_UI_ACCEPTANCE.md and set config/project_state.json ui_accepted=true before starting Zane Phase."
+else
+  pass "UI acceptance gate OK"
 fi
 
 # --- 11. Guard Timer Health ---

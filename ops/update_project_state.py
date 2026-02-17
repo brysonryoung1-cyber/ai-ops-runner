@@ -133,6 +133,9 @@ def load_current_state(root: Path) -> dict:
         "zane_agent_phase": 0,
         "next_action_id": "",
         "next_action_text": "",
+        "ui_accepted": False,
+        "ui_accepted_at": None,
+        "ui_accepted_commit": None,
     }
 
 
@@ -157,6 +160,7 @@ def main() -> int:
     state["llm_primary_model"] = primary_m
     state["llm_fallback_provider"] = fallback_p
     state["llm_fallback_model"] = fallback_m
+    # ui_accepted, ui_accepted_at, ui_accepted_commit are preserved from load_current_state (set manually)
     if os.environ.get("OPENCLAW_DEPLOY_TIMESTAMP"):
         state["last_deploy_timestamp"] = os.environ.get("OPENCLAW_DEPLOY_TIMESTAMP")
     if os.environ.get("OPENCLAW_NEXT_ACTION_ID"):
@@ -182,6 +186,7 @@ def main() -> int:
 - **Last doctor**: {state.get('last_doctor_result') or '—'}
 - **Last guard**: {state.get('last_guard_result') or '—'}
 - **Zane phase**: {state.get('zane_agent_phase', 0)}
+- **UI accepted**: {state.get('ui_accepted')} (at: {state.get('ui_accepted_at') or '—'}, commit: {state.get('ui_accepted_commit') or '—'})
 - **LLM primary**: {state.get('llm_primary_provider', 'openai')} / {state.get('llm_primary_model', 'gpt-4o-mini')}
 - **LLM fallback**: {state.get('llm_fallback_provider', 'mistral')} / {state.get('llm_fallback_model', 'labs-devstral-small-2512')}
 """
@@ -212,6 +217,9 @@ def main() -> int:
         "zane_agent_phase": state.get("zane_agent_phase"),
         "next_action_id": state.get("next_action_id"),
         "next_action_text": state.get("next_action_text"),
+        "ui_accepted": state.get("ui_accepted"),
+        "ui_accepted_at": state.get("ui_accepted_at"),
+        "ui_accepted_commit": state.get("ui_accepted_commit"),
     }
     (state_artifacts / "state.json").write_text(
         json.dumps(snapshot, indent=2), encoding="utf-8"

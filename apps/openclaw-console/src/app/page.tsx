@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import StatusCard from "@/components/StatusCard";
 import CollapsibleOutput from "@/components/CollapsibleOutput";
@@ -86,6 +86,9 @@ interface ProjectState {
   zane_agent_phase?: number;
   next_action_id?: string | null;
   next_action_text?: string | null;
+  ui_accepted?: boolean | null;
+  ui_accepted_at?: string | null;
+  ui_accepted_commit?: string | null;
 }
 
 function deriveStatus(result?: ExecResult, loading?: boolean): CardStatus {
@@ -177,18 +180,47 @@ export default function OverviewPage() {
     duration_ms: number;
   }[]>([]);
 
-  // Check connectivity on mount
+  // Check connectivity on mount; show "Degraded" only after N consecutive failures (avoid flapping)
+  const CONSECUTIVE_FAILURES_FOR_DEGRADED = 3;
+  const hostdFailureCountRef = useRef(0);
   useEffect(() => {
-    fetch("/api/exec?check=connectivity")
-      .then((r) => r.json())
-      .then((d) => {
-        setConnected(d.ok);
-        if (!d.ok) setConnError(d.error);
-      })
-      .catch(() => {
-        setConnected(false);
-        setConnError("Cannot reach the console API");
-      });
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined = undefined;
+    const runCheck = () => {
+      fetch("/api/exec?check=connectivity")
+        .then((r) => r.json())
+        .then((d) => {
+          if (cancelled) return;
+          if (d.ok) {
+            hostdFailureCountRef.current = 0;
+            setConnected(true);
+            setConnError(null);
+            return;
+          }
+          hostdFailureCountRef.current += 1;
+          if (hostdFailureCountRef.current >= CONSECUTIVE_FAILURES_FOR_DEGRADED) {
+            setConnected(false);
+            setConnError(d.error ?? "Host Executor unreachable");
+          } else {
+            timeoutId = setTimeout(runCheck, 5000);
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          hostdFailureCountRef.current += 1;
+          if (hostdFailureCountRef.current >= CONSECUTIVE_FAILURES_FOR_DEGRADED) {
+            setConnected(false);
+            setConnError("Cannot reach the console API");
+          } else {
+            timeoutId = setTimeout(runCheck, 5000);
+          }
+        });
+    };
+    runCheck();
+    return () => {
+      cancelled = true;
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    };
   }, []);
 
   // Fetch AI provider status
@@ -350,7 +382,7 @@ export default function OverviewPage() {
       {/* Connection banner */}
       {connected === false && (
         <div className="mb-6 p-4 rounded-2xl glass-surface border border-red-500/20">
-          <p className="text-sm font-semibold text-red-300">Host Executor Unreachable</p>
+          <p className="text-sm font-semibold text-red-300">Host Executor Degraded</p>
           <p className="text-xs text-red-200/80 mt-1">{connError}</p>
           <p className="text-xs text-white/50 mt-2">Ensure hostd is running on the host (127.0.0.1:8877).</p>
         </div>
@@ -403,6 +435,16 @@ export default function OverviewPage() {
               <div>
                 <span className="text-white/50 uppercase tracking-wider">Last deploy</span>
                 <p className="text-white/90 mt-0.5">{projectState.last_deploy_timestamp || "—"}</p>
+              </div>
+              <div>
+                <span className="text-white/50 uppercase tracking-wider">UI accepted</span>
+                <p className="text-white/90 mt-0.5">
+                  {projectState.ui_accepted === true
+                    ? `Yes (${projectState.ui_accepted_at ?? ""} @ ${projectState.ui_accepted_commit ?? ""})`
+                    : projectState.ui_accepted === false
+                      ? "No"
+                      : "—"}
+                </p>
               </div>
               <div>
                 <span className="text-white/50 uppercase tracking-wider">Last guard / doctor</span>

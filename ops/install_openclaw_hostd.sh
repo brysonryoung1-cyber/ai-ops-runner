@@ -23,7 +23,9 @@ Type=simple
 ExecStart=$PYTHON $ROOT_DIR/ops/openclaw_hostd.py
 WorkingDirectory=$ROOT_DIR
 Restart=always
-RestartSec=5
+RestartSec=1
+TimeoutStartSec=10
+TimeoutStopSec=10
 
 [Install]
 WantedBy=multi-user.target

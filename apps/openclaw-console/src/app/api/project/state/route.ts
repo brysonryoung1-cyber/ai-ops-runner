@@ -24,6 +24,9 @@ interface ProjectState {
   zane_agent_phase?: number;
   next_action_id?: string | null;
   next_action_text?: string | null;
+  ui_accepted?: boolean | null;
+  ui_accepted_at?: string | null;
+  ui_accepted_commit?: string | null;
 }
 
 interface ProjectStateResponse {

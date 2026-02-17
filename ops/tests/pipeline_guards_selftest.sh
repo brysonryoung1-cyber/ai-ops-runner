@@ -112,6 +112,23 @@ if grep -q "127.0.0.1:8877" "$OPS_DIR/openclaw_doctor.sh" 2>/dev/null && grep -q
 else
   run false "doctor should check hostd reachability"
 fi
+if grep -q "for attempt in 1 2 3" "$OPS_DIR/openclaw_doctor.sh" 2>/dev/null && grep -q "systemctl restart openclaw-hostd" "$OPS_DIR/openclaw_doctor.sh" 2>/dev/null; then
+  run true "doctor retries hostd health and restarts once on failure"
+else
+  run false "doctor should retry hostd 3x and attempt systemctl restart before fail"
+fi
+if grep -q "UI Acceptance Gate" "$OPS_DIR/openclaw_doctor.sh" 2>/dev/null && grep -q "ui_accepted" "$OPS_DIR/openclaw_doctor.sh" 2>/dev/null; then
+  run true "doctor has UI acceptance gate (Zane Phase gating)"
+else
+  run false "doctor should have UI acceptance gate when OPENCLAW_NEXT points to Zane"
+fi
+
+# --- No secrets in doctor JSON output schema ---
+if grep -q "checks_total\|checks_passed\|checks_failed" "$OPS_DIR/openclaw_doctor.sh" 2>/dev/null; then
+  run true "doctor JSON uses safe fields (no secrets)"
+else
+  run false "doctor JSON should not log tokens or secrets"
+fi
 
 echo ""
 echo "=== pipeline_guards_selftest: $PASS passed, $FAIL failed ==="

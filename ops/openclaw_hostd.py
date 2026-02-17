@@ -12,9 +12,27 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
+
+
+def get_version() -> str:
+    """Short git SHA if in repo, else VERSION."""
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if r.returncode == 0 and r.stdout and len(r.stdout.strip()) >= 7:
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return VERSION
 
 
 def constant_time_compare(a: str, b: str) -> bool:
@@ -244,9 +262,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == "/health":
+            start_time = getattr(Handler, "_start_time", None)
+            uptime_seconds = int(time.monotonic() - start_time) if start_time is not None else 0
+            version = getattr(Handler, "_version", None) or get_version()
             self.send_json(200, {
                 "ok": True,
-                "version": VERSION,
+                "version": version,
+                "uptime_seconds": uptime_seconds,
                 "time": datetime.now(timezone.utc).isoformat(),
             })
             return
@@ -299,7 +321,10 @@ def main() -> int:
     if not os.path.isdir(ROOT_DIR):
         sys.stderr.write(f"ROOT_DIR {ROOT_DIR} not found; run on VPS.\n")
         return 1
+    start_time = time.monotonic()
     server = HTTPServer((HOST, PORT), Handler)
+    Handler._start_time = start_time  # type: ignore[attr-defined]
+    Handler._version = get_version()  # type: ignore[attr-defined]
     sys.stderr.write(f"openclaw_hostd listening on {HOST}:{PORT}\n")
     try:
         server.serve_forever()

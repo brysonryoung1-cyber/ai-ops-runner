@@ -142,8 +142,12 @@ export async function executeAction(actionName: string): Promise<HostdResult> {
   }
 }
 
+const HEALTH_RETRIES = 3;
+const HEALTH_RETRY_DELAY_MS = 500;
+
 /**
  * Quick connectivity check: GET hostd /health (no token).
+ * Retries up to HEALTH_RETRIES with backoff to avoid false "unreachable" on transient timeouts.
  */
 export async function checkConnectivity(): Promise<{
   ok: boolean;
@@ -160,32 +164,34 @@ export async function checkConnectivity(): Promise<{
     };
   }
 
-  try {
-    const res = await fetch(`${baseUrl}/health`, {
-      method: "GET",
-      signal: AbortSignal.timeout(5000),
-    });
-    const durationMs = Date.now() - start;
-    if (!res.ok) {
-      return {
-        ok: false,
-        error: `Hostd health returned ${res.status}`,
-        durationMs,
-      };
+  let lastError: string | undefined;
+  for (let attempt = 1; attempt <= HEALTH_RETRIES; attempt++) {
+    try {
+      const res = await fetch(`${baseUrl}/health`, {
+        method: "GET",
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) {
+        lastError = `Hostd health returned ${res.status}`;
+        if (attempt < HEALTH_RETRIES) await new Promise((r) => setTimeout(r, HEALTH_RETRY_DELAY_MS));
+        continue;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (data?.ok === true) {
+        return { ok: true, durationMs: Date.now() - start };
+      }
+      lastError = "Health check did not return ok";
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      lastError = `Host Executor unreachable: ${message}`;
     }
-    const data = await res.json().catch(() => ({}));
-    return {
-      ok: data?.ok === true,
-      error: data?.ok === true ? undefined : "Health check did not return ok",
-      durationMs,
-    };
-  } catch (err) {
-    const durationMs = Date.now() - start;
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      ok: false,
-      error: `Host Executor unreachable: ${message}`,
-      durationMs,
-    };
+    if (attempt < HEALTH_RETRIES) {
+      await new Promise((r) => setTimeout(r, HEALTH_RETRY_DELAY_MS));
+    }
   }
+  return {
+    ok: false,
+    error: lastError,
+    durationMs: Date.now() - start,
+  };
 }
