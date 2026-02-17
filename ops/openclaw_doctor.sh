@@ -512,8 +512,11 @@ except Exception:
 " 2>/dev/null || echo "false")"
 fi
 if [ -f "$NEXT_MD" ] && [ -s "$NEXT_MD" ]; then
-  if grep -qiE 'Zane|phase\s*0|phase\s*1|phase\s*2' "$NEXT_MD" 2>/dev/null; then
-    NEXT_POINTS_TO_ZANE="1"
+  # Exclude soma_kajabi (has its own kill_switch gate)
+  if ! grep -qi 'soma_kajabi' "$NEXT_MD" 2>/dev/null; then
+    if grep -qiE 'Zane|phase\s*0|phase\s*1|phase\s*2' "$NEXT_MD" 2>/dev/null; then
+      NEXT_POINTS_TO_ZANE="1"
+    fi
   fi
 fi
 if [ "$NEXT_POINTS_TO_ZANE" = "1" ] && [ "$UI_ACCEPTED" != "true" ]; then
