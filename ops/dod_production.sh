@@ -158,13 +158,35 @@ elif [ -z "$ADMIN_TOKEN" ]; then
   RESULTS="${RESULTS}doctor_exec=no_token "
 else
   # Doctor can take ~30–45s; use 90s request timeout; on 409, poll /api/runs for completion (90s)
+  # On unreachable/timeout, retry once after 10s (transient post-deploy readiness).
   DOCTOR_TMP="$(mktemp)"
-  HTTP_CODE="$(curl -s -o "$DOCTOR_TMP" -w "%{http_code}" --connect-timeout 5 --max-time 90 \
-    -X POST "$BASE_URL/api/exec" \
-    -H "Content-Type: application/json" \
-    -H "x-openclaw-token: $ADMIN_TOKEN" \
-    -d '{"action":"doctor"}' 2>/dev/null)" || HTTP_CODE="000"
-  DOCTOR_RESP="$(cat "$DOCTOR_TMP" 2>/dev/null)"
+  DOCTOR_ATTEMPT=1
+  DOCTOR_MAX_ATTEMPTS=2
+  while [ "$DOCTOR_ATTEMPT" -le "$DOCTOR_MAX_ATTEMPTS" ]; do
+    HTTP_CODE="$(curl -s -o "$DOCTOR_TMP" -w "%{http_code}" --connect-timeout 5 --max-time 90 \
+      -X POST "$BASE_URL/api/exec" \
+      -H "Content-Type: application/json" \
+      -H "x-openclaw-token: $ADMIN_TOKEN" \
+      -d '{"action":"doctor"}' 2>/dev/null)" || HTTP_CODE="000"
+    DOCTOR_RESP="$(cat "$DOCTOR_TMP" 2>/dev/null)"
+    if [ -n "$DOCTOR_RESP" ] && [ "$HTTP_CODE" = "200" ]; then
+      break
+    fi
+    if [ "$HTTP_CODE" = "409" ]; then
+      break
+    fi
+    if [ -z "$DOCTOR_RESP" ] || [ "$HTTP_CODE" = "000" ]; then
+      if [ "$DOCTOR_ATTEMPT" -lt "$DOCTOR_MAX_ATTEMPTS" ]; then
+        echo "  (attempt $DOCTOR_ATTEMPT/$DOCTOR_MAX_ATTEMPTS: unreachable; retrying in 10s...)" >&2
+        sleep 10
+        DOCTOR_ATTEMPT=$((DOCTOR_ATTEMPT + 1))
+      else
+        break
+      fi
+    else
+      break
+    fi
+  done
   rm -f "$DOCTOR_TMP"
 
   if [ -n "$DOCTOR_RESP" ] && [ "$HTTP_CODE" = "200" ]; then
