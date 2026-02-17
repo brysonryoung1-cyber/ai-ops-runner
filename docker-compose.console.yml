@@ -6,25 +6,30 @@
 # The console binds to 127.0.0.1:8787 ONLY.
 # Expose to tailnet via: sudo tailscale serve --bg --https=443 http://127.0.0.1:8787
 # NEVER bind to 0.0.0.0.
+#
+# Host Executor (hostd): console calls host.docker.internal:8877. No SSH.
+# Artifacts: read-only mount from host artifacts dir.
 
 services:
   openclaw_console:
     build:
       context: ./apps/openclaw-console
       dockerfile: Dockerfile
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:8787:3000"
     environment:
       PORT: "3000"
       HOSTNAME: "0.0.0.0"
-      # Note: inside the container, Next.js binds to 0.0.0.0:3000,
-      # but Docker only publishes to 127.0.0.1:8787 on the host.
-      # The container is NOT accessible from outside the host.
       OPENCLAW_CONSOLE_TOKEN: "${OPENCLAW_CONSOLE_TOKEN}"
       OPENCLAW_ADMIN_TOKEN: "${OPENCLAW_ADMIN_TOKEN}"
+      OPENCLAW_HOSTD_URL: "http://host.docker.internal:8877"
       AIOPS_HOST: "${AIOPS_HOST}"
       RUNNER_API_URL: "${RUNNER_API_URL:-http://test_runner_api:8000}"
       AIOPS_USER: "root"
+      OPENCLAW_ARTIFACTS_ROOT: "/var/openclaw_artifacts"
+      OPENCLAW_REPO_ROOT: "/app"
     restart: unless-stopped
     read_only: true
     tmpfs:
@@ -34,6 +39,7 @@ services:
       - ./config:/app/config:ro
       - ./docs:/app/docs:ro
       - ./artifacts:/app/artifacts:rw
+      - ./artifacts:/var/openclaw_artifacts:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/ || exit 1"]
       interval: 30s

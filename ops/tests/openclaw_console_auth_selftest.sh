@@ -208,6 +208,42 @@ else
   fi
 fi
 
+# --- Test 24: Exec route uses hostd (no SSH) — no spawn ssh / execFile ssh in action paths ---
+if grep -q "from \"@/lib/hostd\"" "$ROUTE" && ! grep -q "from \"@/lib/ssh\"" "$ROUTE"; then
+  pass "Exec route imports hostd, not ssh"
+else
+  fail "Exec route must use Host Executor (hostd), not SSH"
+fi
+SMS_ROUTE="$CONSOLE_DIR/src/app/api/sms/route.ts"
+if [ -f "$SMS_ROUTE" ] && grep -q "from \"@/lib/hostd\"" "$SMS_ROUTE" && ! grep -q "from \"@/lib/ssh\"" "$SMS_ROUTE"; then
+  pass "SMS route uses hostd, not ssh"
+else
+  fail "SMS route must use hostd, not ssh"
+fi
+
+# --- Test 25: No execFile with ssh in API routes (regression guard) ---
+if FILES_WITH_EXECFILE="$(grep -rl "execFile" "$CONSOLE_DIR/src/app/api" 2>/dev/null)" && [ -n "$FILES_WITH_EXECFILE" ]; then
+  if echo "$FILES_WITH_EXECFILE" | xargs grep -l '"ssh"' 2>/dev/null; then
+    fail "API routes must not spawn ssh (execFile with ssh)"
+  else
+    pass "No spawn ssh in API action code paths"
+  fi
+else
+  pass "No spawn ssh in API action code paths"
+fi
+
+# --- Test 26: Artifacts list API prevents path traversal ---
+ARTIFACTS_LIST="$CONSOLE_DIR/src/app/api/artifacts/list/route.ts"
+if [ -f "$ARTIFACTS_LIST" ]; then
+  if grep -q "safeJoin\|startsWith\|\.\." "$ARTIFACTS_LIST" && grep -q "OPENCLAW_ARTIFACTS_ROOT\|getArtifactsRoot" "$ARTIFACTS_LIST"; then
+    pass "Artifacts list API has path traversal protection"
+  else
+    fail "Artifacts list must restrict to artifacts root (path traversal)"
+  fi
+else
+  fail "Artifacts list route not found"
+fi
+
 # --- Summary ---
 echo ""
 echo "=== Console Auth Selftest: $TESTS_PASSED/$TESTS_RUN passed ==="

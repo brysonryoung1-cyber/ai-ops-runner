@@ -144,10 +144,10 @@ export default function SomaPage() {
       {connected === false && (
         <div className="mb-6 p-4 rounded-apple bg-red-50 border border-red-200">
           <p className="text-sm font-semibold text-apple-red">
-            SSH Connection Failed
+            Host Executor Unreachable
           </p>
           <p className="text-xs text-apple-muted mt-2">
-            Ensure Tailscale is running and you can reach aiops-1.
+            Ensure hostd is running on the host (127.0.0.1:8877).
           </p>
         </div>
       )}
@@ -294,7 +294,7 @@ export default function SomaPage() {
       <div className="mt-6 p-4 rounded-apple bg-gray-50 border border-apple-border">
         <p className="text-xs text-apple-muted">
           <span className="font-semibold">Security:</span> All Soma operations
-          run via allowlisted SSH commands over Tailscale. Kajabi session tokens
+          run via allowlisted Host Executor actions. Kajabi session tokens
           and Gmail credentials are stored in /etc/ai-ops-runner/secrets/ (mode
           600, root-only). No plaintext passwords in the repo.
         </p>

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { executeAction } from "@/lib/ssh";
+import { executeAction } from "@/lib/hostd";
 import { writeAuditEntry, hashParams } from "@/lib/audit";
 import { createHmac, timingSafeEqual } from "crypto";
 
@@ -194,7 +194,7 @@ export async function POST(req: NextRequest) {
     error: undefined,
   });
 
-  // Route the SMS command to the VPS Python handler via SSH
+  // Route the SMS command via Host Executor (hostd)
   const command = body.trim().toUpperCase().replace(/\s+/g, "_");
 
   // Map SMS commands to console actions

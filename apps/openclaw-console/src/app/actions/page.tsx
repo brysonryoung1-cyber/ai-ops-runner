@@ -27,7 +27,7 @@ const ACTIONS: ActionDef[] = [
     action: "apply",
     label: "Apply OpenClaw (Remote)",
     description:
-      "Sync repo, rebuild Docker, apply SSH fix, and verify — all in one shot",
+      "Sync repo, rebuild Docker, and verify — all in one shot (run from ship host, not VPS)",
     variant: "danger",
   },
   {
@@ -77,7 +77,7 @@ export default function ActionsPage() {
     <div>
       <div className="mb-8">
         <h2 className="text-2xl font-bold text-white/95 tracking-tight">Actions</h2>
-        <p className="text-sm text-white/60 mt-1">Execute allowlisted operations on aiops-1 via Tailscale SSH</p>
+        <p className="text-sm text-white/60 mt-1">Execute allowlisted operations via Host Executor (localhost)</p>
       </div>
 
       {/* Action buttons */}
@@ -153,7 +153,7 @@ export default function ActionsPage() {
         <p className="text-xs text-white/60">
           <span className="font-semibold">Security:</span> Only allowlisted
           commands are executed. No arbitrary command execution. All traffic goes
-          over Tailscale SSH. The console binds to 127.0.0.1 only. API requires
+          via Host Executor (hostd on localhost). The console binds to 127.0.0.1 only. API requires
           X-OpenClaw-Token header when configured.
         </p>
       </div>

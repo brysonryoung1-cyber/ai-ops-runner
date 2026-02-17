@@ -123,6 +123,18 @@ GIT_HEAD="$(git rev-parse --short HEAD)"
 echo "  HEAD: $GIT_HEAD"
 echo ""
 
+# --- Step 2b: Install hostd (idempotent) ---
+echo "==> Step 2b: Install openclaw-hostd"
+if [ -f "$SCRIPT_DIR/install_openclaw_hostd.sh" ]; then
+  if ! "$SCRIPT_DIR/install_openclaw_hostd.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/hostd_install.log"; then
+    write_fail "hostd_install" "hostd_install_failed" "Fix install_openclaw_hostd.sh and re-run deploy" "artifacts/deploy/$RUN_ID/hostd_install.log"
+    exit 2
+  fi
+else
+  echo "  (install_openclaw_hostd.sh not found — skip)"
+fi
+echo ""
+
 # --- Step 3: Docker compose ---
 STEP="docker_compose"
 echo "==> Step 3: docker compose up -d --build"

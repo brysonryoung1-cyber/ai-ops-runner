@@ -133,7 +133,7 @@ export default function Sidebar() {
       {/* Footer */}
       <div className="px-5 py-4 border-t border-apple-border">
         <p className="text-[11px] text-apple-muted">
-          Tailscale-only &middot; 127.0.0.1
+          Host Executor &middot; 127.0.0.1
         </p>
       </div>
     </aside>

@@ -343,22 +343,22 @@ export default function OverviewPage() {
           Control Center
         </h2>
         <p className="text-sm text-white/60 mt-1">
-          OpenClaw HQ — System health for aiops-1 via Tailscale SSH
+          OpenClaw HQ — System health for aiops-1 via Host Executor (localhost)
         </p>
       </div>
 
       {/* Connection banner */}
       {connected === false && (
         <div className="mb-6 p-4 rounded-2xl glass-surface border border-red-500/20">
-          <p className="text-sm font-semibold text-red-300">SSH Connection Failed</p>
+          <p className="text-sm font-semibold text-red-300">Host Executor Unreachable</p>
           <p className="text-xs text-red-200/80 mt-1">{connError}</p>
-          <p className="text-xs text-white/50 mt-2">Ensure Tailscale is running and you can reach aiops-1.</p>
+          <p className="text-xs text-white/50 mt-2">Ensure hostd is running on the host (127.0.0.1:8877).</p>
         </div>
       )}
 
       {connected === null && (
         <div className="mb-6 p-4 rounded-2xl glass-surface border border-blue-500/20">
-          <p className="text-sm text-blue-300 font-medium">Checking SSH connectivity…</p>
+          <p className="text-sm text-blue-300 font-medium">Checking Host Executor connectivity…</p>
         </div>
       )}
 
@@ -562,7 +562,7 @@ export default function OverviewPage() {
         </StatusCard>
 
         <StatusCard
-          title="SSH Bind"
+          title="Port audit"
           status={
             loading === "ports"
               ? "loading"
@@ -574,7 +574,7 @@ export default function OverviewPage() {
                     ? "fail"
                     : "warn"
           }
-          subtitle={portInfo?.sshBind || "Port audit for sshd binding"}
+          subtitle={portInfo?.sshBind || "Listening ports (sshd binding check)"}
         >
           {portsResult && (
             <CollapsibleOutput

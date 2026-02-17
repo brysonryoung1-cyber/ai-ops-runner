@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { executeAction, checkConnectivity } from "@/lib/ssh";
+import { executeAction, checkConnectivity } from "@/lib/hostd";
 import { acquireLock, releaseLock } from "@/lib/action-lock";
 import {
   writeAuditEntry,
@@ -70,13 +70,13 @@ function validateOrigin(req: NextRequest): NextResponse | null {
  * POST /api/exec
  * Body: { "action": "doctor" | "apply" | "guard" | "ports" | "timer" | "journal" | "artifacts" }
  *
- * Executes an allowlisted SSH command against the configured AIOPS host.
+ * Executes an allowlisted action via Host Executor (hostd on localhost). No SSH.
  * Returns structured JSON with stdout, stderr, exit code, and timing.
  *
  * Protected by:
  *  1. Token auth (middleware — X-OpenClaw-Token header)
  *  2. Origin validation (CSRF — this handler)
- *  3. Command allowlist (ssh.ts / allowlist.ts)
+ *  3. Command allowlist (allowlist.ts) + hostd allowlist
  *  4. Action lock (prevents overlapping execution)
  *  5. Audit log (durable entry for every action)
  */
@@ -163,7 +163,7 @@ export async function POST(req: NextRequest) {
   const startedAt = new Date();
 
   try {
-    // executeAction validates the allowlist internally (fail-closed)
+    // executeAction validates allowlist and calls hostd (fail-closed)
     const result = await executeAction(actionName);
 
     const finishedAt = new Date();
@@ -229,7 +229,7 @@ export async function POST(req: NextRequest) {
 
 /**
  * GET /api/exec?check=connectivity
- * Quick SSH connectivity probe.
+ * Quick Host Executor (hostd) connectivity probe.
  *
  * Protected by:
  *  1. Token auth (middleware)

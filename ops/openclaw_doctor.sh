@@ -439,6 +439,14 @@ else
   pass "Port check unavailable (console bind check skipped)"
 fi
 
+# --- 9b. Host Executor (hostd) — HQ uses hostd instead of SSH ---
+echo "--- Host Executor (hostd) ---"
+if curl -sSf --connect-timeout 2 "http://127.0.0.1:8877/health" >/dev/null 2>&1; then
+  pass "hostd reachable on 127.0.0.1:8877"
+else
+  fail "hostd not reachable (127.0.0.1:8877) — HQ Actions/Artifacts require hostd"
+fi
+
 # --- 10. Project State Files (fail-closed: repo is canonical brain) ---
 echo "--- Project State Files ---"
 CURRENT_MD="$ROOT_DIR/docs/OPENCLAW_CURRENT.md"

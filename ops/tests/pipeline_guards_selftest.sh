@@ -92,6 +92,27 @@ else
   run false "verify_production.sh not found"
 fi
 
+# --- deploy_pipeline: installs hostd (idempotent) ---
+if [ -f "$DEPLOY" ]; then
+  if grep -q "install_openclaw_hostd" "$DEPLOY"; then
+    run true "deploy_pipeline runs install_openclaw_hostd"
+  else
+    run false "deploy_pipeline should run install_openclaw_hostd"
+  fi
+fi
+
+# --- hostd installer and doctor check exist ---
+if [ -f "$OPS_DIR/install_openclaw_hostd.sh" ] && [ -x "$OPS_DIR/install_openclaw_hostd.sh" ]; then
+  run true "install_openclaw_hostd.sh exists and executable"
+else
+  run false "install_openclaw_hostd.sh must exist and be executable"
+fi
+if grep -q "127.0.0.1:8877" "$OPS_DIR/openclaw_doctor.sh" 2>/dev/null && grep -q "hostd" "$OPS_DIR/openclaw_doctor.sh" 2>/dev/null; then
+  run true "doctor checks hostd reachability"
+else
+  run false "doctor should check hostd reachability"
+fi
+
 echo ""
 echo "=== pipeline_guards_selftest: $PASS passed, $FAIL failed ==="
 if [ "$FAIL" -gt 0 ]; then

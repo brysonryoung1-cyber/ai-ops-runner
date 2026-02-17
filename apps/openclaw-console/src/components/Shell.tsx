@@ -93,7 +93,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           </ul>
         </nav>
           <div className="mt-auto px-4 py-4 border-t border-white/10">
-            <p className="text-[11px] text-white/50">Tailscale-only · 127.0.0.1</p>
+            <p className="text-[11px] text-white/50">Host Executor · 127.0.0.1</p>
           </div>
         </aside>
 
