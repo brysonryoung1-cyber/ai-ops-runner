@@ -440,7 +440,9 @@ export default function OverviewPage() {
                 <span className="text-white/50 uppercase tracking-wider">UI accepted</span>
                 <p className="text-white/90 mt-0.5">
                   {projectState.ui_accepted === true
-                    ? `Yes (${projectState.ui_accepted_at ?? ""} @ ${projectState.ui_accepted_commit ?? ""})`
+                    ? [projectState.ui_accepted_at, projectState.ui_accepted_commit].some(Boolean)
+                      ? `Yes (${projectState.ui_accepted_at ?? "—"} @ ${projectState.ui_accepted_commit ?? "—"})`
+                      : "Yes"
                     : projectState.ui_accepted === false
                       ? "No"
                       : "—"}
