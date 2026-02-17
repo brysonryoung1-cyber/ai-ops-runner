@@ -135,6 +135,19 @@ else:
 " 2>/dev/null || echo "")"
 
   if [ -z "$json_output" ]; then
+    # Fallback: Codex sometimes returns plain "APPROVED" or "BLOCKED"
+    local raw_trimmed
+    raw_trimmed="$(echo "$raw_content" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | head -1)"
+    if [ "$raw_trimmed" = "APPROVED" ]; then
+      echo '{"verdict":"APPROVED","blockers":[],"non_blocking":["Codex returned plain APPROVED; minimal verdict written"],"tests_run":"bundle"}' > "$verdict_file"
+      rm -f "$raw_output_file"
+      return 0
+    fi
+    if [ "$raw_trimmed" = "BLOCKED" ]; then
+      echo '{"verdict":"BLOCKED","blockers":["Codex returned BLOCKED without details"],"non_blocking":[],"tests_run":"bundle"}' > "$verdict_file"
+      rm -f "$raw_output_file"
+      return 0
+    fi
     echo "ERROR: Failed to extract valid JSON from Codex output" >&2
     echo "Raw output saved to ${raw_output_file}" >&2
     return 1
