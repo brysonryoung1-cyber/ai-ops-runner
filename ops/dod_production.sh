@@ -157,12 +157,17 @@ elif [ -z "$ADMIN_TOKEN" ]; then
   FAILURES=$((FAILURES + 1))
   RESULTS="${RESULTS}doctor_exec=no_token "
 else
-  # Doctor can take ~30s; use longer timeout than default CURL_OPTS (15s)
-  DOCTOR_RESP="$(curl -sf --connect-timeout 5 --max-time 45 -X POST "$BASE_URL/api/exec" \
+  # Doctor can take ~30–45s; use 60s request timeout; on 409, poll /api/runs for completion (90s)
+  DOCTOR_TMP="$(mktemp)"
+  HTTP_CODE="$(curl -s -o "$DOCTOR_TMP" -w "%{http_code}" --connect-timeout 5 --max-time 60 \
+    -X POST "$BASE_URL/api/exec" \
     -H "Content-Type: application/json" \
     -H "x-openclaw-token: $ADMIN_TOKEN" \
-    -d '{"action":"doctor"}' 2>/dev/null)" || true
-  if [ -n "$DOCTOR_RESP" ]; then
+    -d '{"action":"doctor"}' 2>/dev/null)" || HTTP_CODE="000"
+  DOCTOR_RESP="$(cat "$DOCTOR_TMP" 2>/dev/null)"
+  rm -f "$DOCTOR_TMP"
+
+  if [ -n "$DOCTOR_RESP" ] && [ "$HTTP_CODE" = "200" ]; then
     echo "$DOCTOR_RESP" >"$DOD_ARTIFACT_DIR/exec_doctor.json"
     if check_ok "$DOCTOR_RESP"; then
       if echo "$DOCTOR_RESP" | grep -q "All checks passed"; then
@@ -178,10 +183,66 @@ else
       FAILURES=$((FAILURES + 1))
       RESULTS="${RESULTS}doctor_exec=not_ok "
     fi
-  else
-    echo "  FAIL: /api/exec doctor unreachable or empty response" >&2
+  elif [ "$HTTP_CODE" = "409" ]; then
+    # Doctor already running — poll /api/runs for completion (source of truth)
+    echo "  409: doctor already running; polling /api/runs for completion (90s max)"
+    POLL_START="$(date +%s)"
+    POLL_END=$((POLL_START + 90))
+    POLL_PASS=0
+    echo "{\"ok\":false,\"skipped\":\"409_conflict\",\"note\":\"polling_api_runs\"}" >"$DOD_ARTIFACT_DIR/exec_doctor.json"
+    while [ "$(date +%s)" -lt "$POLL_END" ]; do
+      RUNS_JSON="$(curl -sf --connect-timeout 5 --max-time 10 -H "x-openclaw-token: $ADMIN_TOKEN" "$BASE_URL/api/runs?limit=20" 2>/dev/null)" || true
+      if [ -n "$RUNS_JSON" ]; then
+        # Find most recent doctor run that completed in our polling window
+        DOCTOR_RUN="$(echo "$RUNS_JSON" | python3 -c "
+import sys,json
+try:
+    d=json.load(sys.stdin)
+    runs=d.get('runs') or []
+    for r in runs:
+        if r.get('action')=='doctor':
+            st=r.get('status')
+            ec=r.get('exit_code')
+            if st=='success' and ec==0:
+                print('PASS')
+            elif st in ('failure','error'):
+                print('FAIL')
+            else:
+                print('PENDING')
+            sys.exit(0)
+    print('NONE')
+except Exception:
+    print('NONE')
+" 2>/dev/null)" || DOCTOR_RUN="NONE"
+        if [ "$DOCTOR_RUN" = "PASS" ]; then
+          echo "  PASS: doctor run completed (polled /api/runs)"
+          POLL_PASS=1
+          echo '{"ok":true,"source":"api_runs_poll","note":"doctor_run_completed"}' >"$DOD_ARTIFACT_DIR/exec_doctor.json"
+          break
+        elif [ "$DOCTOR_RUN" = "FAIL" ]; then
+          echo "  FAIL: doctor run reported failure (polled /api/runs)" >&2
+          break
+        fi
+      fi
+      sleep 5
+    done
+    if [ "$POLL_PASS" -eq 1 ]; then
+      DOCTOR_PASS=1
+    else
+      echo "  FAIL: doctor 409 — no PASS from /api/runs within 90s" >&2
+      FAILURES=$((FAILURES + 1))
+      RESULTS="${RESULTS}doctor_exec=409_poll_timeout "
+    fi
+  elif [ -z "$DOCTOR_RESP" ] || [ "$HTTP_CODE" = "000" ]; then
+    echo "  FAIL: /api/exec doctor unreachable or timeout" >&2
+    [ -n "$DOCTOR_RESP" ] && echo "$DOCTOR_RESP" >"$DOD_ARTIFACT_DIR/exec_doctor.json" || echo '{"ok":false,"error":"unreachable"}' >"$DOD_ARTIFACT_DIR/exec_doctor.json"
     FAILURES=$((FAILURES + 1))
     RESULTS="${RESULTS}doctor_exec=unreachable "
+  else
+    echo "$DOCTOR_RESP" >"$DOD_ARTIFACT_DIR/exec_doctor.json"
+    echo "  FAIL: /api/exec doctor HTTP $HTTP_CODE" >&2
+    FAILURES=$((FAILURES + 1))
+    RESULTS="${RESULTS}doctor_exec=http_${HTTP_CODE} "
   fi
 fi
 echo ""

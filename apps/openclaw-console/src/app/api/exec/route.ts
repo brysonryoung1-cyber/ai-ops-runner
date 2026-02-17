@@ -191,7 +191,7 @@ export async function POST(req: NextRequest) {
       params_hash: hashParams(params),
       exit_code: result.exitCode,
       duration_ms: result.durationMs,
-      error: errorForRecord,
+      ...(errorForRecord != null && { error: errorForRecord }),
     });
 
     // Write run record (even on action failure — fail-closed recorder)
@@ -219,7 +219,7 @@ export async function POST(req: NextRequest) {
       params_hash: hashParams(params),
       exit_code: null,
       duration_ms,
-      error: errorMsg,
+      ...(errorMsg && { error: errorMsg }),
     });
 
     // Write run record even on internal errors (fail-closed)
