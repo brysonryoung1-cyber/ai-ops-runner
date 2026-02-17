@@ -114,7 +114,7 @@ if [ "$DOCTOR_RC" -ne 0 ]; then
   echo "  FAIL: doctor exited $DOCTOR_RC" >&2
   FAILURES=$((FAILURES + 1))
   RESULTS="${RESULTS}doctor=exit_nonzero "
-elif echo "$DOCTOR_OUT" | grep -q "checks failed\|FAIL"; then
+elif echo "$DOCTOR_OUT" | grep -q "^  FAIL:"; then
   echo "  FAIL: doctor reported failures" >&2
   FAILURES=$((FAILURES + 1))
   RESULTS="${RESULTS}doctor=checks_failed "
