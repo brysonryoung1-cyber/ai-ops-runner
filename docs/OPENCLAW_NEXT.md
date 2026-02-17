@@ -1,9 +1,7 @@
 # Next Action
 
-Generate Phase 1 plan artifact for mapping videos→lessons; still no writes.
+**Single next action:** Connect Kajabi + Gmail and run Phase0 until baseline PASS.
 
----
-
-## Upcoming: pred_markets phase0 mirror (blocked until commanded)
-
-After ship: run connectors config check then run mirror once. Project is registered; kill_switch is ON by default. No trading/execution code.
+- Use Soma Connectors UI (Kajabi Bootstrap, Gmail Connect) or server route `POST /api/projects/soma_kajabi/run`; proof in `artifacts/ui_smoke_prod/<run_id>/`.
+- Do not unlock orb.backtest.* until Soma Phase0 baseline PASS + gate flipped.
+- pred_markets phase0 mirror remains available (read-only); no trading/execution code.

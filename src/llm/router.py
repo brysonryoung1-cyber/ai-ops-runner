@@ -333,6 +333,8 @@ class ModelRouter:
             trace_id=request.trace_id,
             response_format=request.response_format,
             essential=getattr(request, "essential", False),
+            project_id=getattr(request, "project_id", "openclaw"),
+            action=getattr(request, "action", request.purpose),
         )
 
         response = provider.generate_text(routed_request)
@@ -398,6 +400,8 @@ class ModelRouter:
             purpose="review",
             trace_id=request.trace_id,
             response_format=request.response_format,
+            project_id=getattr(request, "project_id", "openclaw"),
+            action=getattr(request, "action", "review"),
         )
 
         # Try primary (OpenAI)
@@ -456,6 +460,8 @@ class ModelRouter:
             purpose="review",
             trace_id=request.trace_id,
             response_format=request.response_format,
+            project_id=getattr(request, "project_id", "openclaw"),
+            action="review_fallback",
         )
 
         try:

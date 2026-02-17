@@ -4,19 +4,7 @@ import { executeAction } from "@/lib/hostd";
 import { acquireLock, releaseLock } from "@/lib/action-lock";
 import { writeAuditEntry, deriveActor, hashParams } from "@/lib/audit";
 import { buildRunRecord, writeRunRecord, generateRunId } from "@/lib/run-recorder";
-
-/** Actions allowed per project (fail-closed). Browser never receives admin tokens. */
-const PROJECT_ACTIONS: Record<string, ReadonlySet<string>> = {
-  soma_kajabi: new Set([
-    "soma_connectors_status",
-    "soma_kajabi_bootstrap_start",
-    "soma_kajabi_bootstrap_status",
-    "soma_kajabi_bootstrap_finalize",
-    "soma_kajabi_gmail_connect_start",
-    "soma_kajabi_gmail_connect_status",
-    "soma_kajabi_gmail_connect_finalize",
-  ]),
-};
+import { PROJECT_ACTIONS } from "@/lib/action_registry.generated";
 
 function validateOrigin(req: NextRequest): NextResponse | null {
   const origin = req.headers.get("origin");

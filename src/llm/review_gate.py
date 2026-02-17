@@ -89,6 +89,8 @@ def run_review(bundle_path: str, verdict_path: str) -> str:
         purpose="review",
         trace_id=f"review_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
         response_format={"type": "json_object"},
+        project_id="openclaw",
+        action="review",
     )
 
     try:

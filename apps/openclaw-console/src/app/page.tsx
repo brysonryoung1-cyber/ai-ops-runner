@@ -732,24 +732,29 @@ export default function OverviewPage() {
           </div>
           <div className="p-5">
             {costSummary ? (
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                <div>
-                  <p className="text-white/50 text-xs">Today</p>
-                  <p className="text-white/95 font-medium">${costSummary.today_usd.toFixed(2)}</p>
-                </div>
-                <div>
-                  <p className="text-white/50 text-xs">MTD</p>
-                  <p className="text-white/95 font-medium">${costSummary.mtd_usd.toFixed(2)}</p>
-                </div>
-                <div>
-                  <p className="text-white/50 text-xs">Last 7d</p>
-                  <p className="text-white/95 font-medium">${costSummary.last_7_days_usd.toFixed(2)}</p>
-                </div>
-                <div>
-                  <p className="text-white/50 text-xs">Top project</p>
-                  <p className="text-white/95 font-medium truncate" title={costSummary.top_project.id}>
-                    {costSummary.top_project.id || "—"} ${costSummary.top_project.usd.toFixed(2)}
-                  </p>
+              <div className="space-y-3">
+                {(costSummary as { guard_tripped?: boolean }).guard_tripped && (
+                  <p className="text-amber-400 text-xs font-medium">Cost guard tripped — only doctor/deploy/DoD and Soma Phase0 discovery allowed.</p>
+                )}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                  <div>
+                    <p className="text-white/50 text-xs">Today</p>
+                    <p className="text-white/95 font-medium">${costSummary.today_usd.toFixed(2)}</p>
+                  </div>
+                  <div>
+                    <p className="text-white/50 text-xs">MTD</p>
+                    <p className="text-white/95 font-medium">${costSummary.mtd_usd.toFixed(2)}</p>
+                  </div>
+                  <div>
+                    <p className="text-white/50 text-xs">Last 7d</p>
+                    <p className="text-white/95 font-medium">${costSummary.last_7_days_usd.toFixed(2)}</p>
+                  </div>
+                  <div>
+                    <p className="text-white/50 text-xs">Top project</p>
+                    <p className="text-white/95 font-medium truncate" title={costSummary.top_project.id}>
+                      {costSummary.top_project.id || "—"} ${costSummary.top_project.usd.toFixed(2)}
+                    </p>
+                  </div>
                 </div>
               </div>
             ) : (

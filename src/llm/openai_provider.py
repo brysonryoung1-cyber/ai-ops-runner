@@ -77,7 +77,12 @@ class OpenAIProvider(BaseProvider):
     """
 
     def __init__(self, api_base: str = DEFAULT_API_BASE):
-        self._api_base = api_base.rstrip("/")
+        # Env override for LiteLLM proxy (private-only; e.g. http://127.0.0.1:4000/v1)
+        litellm_url = os.environ.get("OPENCLAW_LITELLM_PROXY_URL", "").strip()
+        if litellm_url:
+            self._api_base = litellm_url.rstrip("/").removesuffix("/v1") + "/v1"
+        else:
+            self._api_base = api_base.rstrip("/")
 
     @property
     def provider_name(self) -> str:
@@ -115,6 +120,12 @@ class OpenAIProvider(BaseProvider):
             payload["max_tokens"] = request.max_tokens
         if request.response_format:
             payload["response_format"] = request.response_format
+        # LiteLLM spend attribution when using proxy: user = project_id, metadata.action = action
+        payload["user"] = getattr(request, "project_id", "openclaw")
+        if "4000" in self._api_base or "litellm" in self._api_base.lower():
+            action_val = getattr(request, "action", None) or request.purpose
+            if action_val:
+                payload["metadata"] = {"action": action_val}
 
         url = f"{self._api_base}/chat/completions"
         req = urllib.request.Request(

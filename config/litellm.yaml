@@ -1,0 +1,53 @@
+# LiteLLM Proxy config — single unified private LLM endpoint (BYOK).
+# Bind 127.0.0.1 only; keys from host secrets mount. Redis cache for idempotent prompts.
+# Budgets enforced at proxy; OpenClaw cost_guard.json remains second-line.
+
+model_list:
+  # Default cheap model (OpenClaw general)
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+    model_info:
+      mode: chat
+      max_tokens: 4096
+  # Review model (Codex diff-only); restrict to review actions via metadata
+  - model_name: gpt-4o-mini-review
+    litellm_params:
+      model: openai/gpt-4o-mini
+    model_info:
+      mode: chat
+      max_tokens: 600
+  # Fallback when OpenAI unavailable (Mistral)
+  - model_name: mistral-fallback
+    litellm_params:
+      model: mistral/labs-devstral-small-2512
+    model_info:
+      mode: chat
+      max_tokens: 4096
+
+router_settings:
+  fallbacks:
+    - openai/gpt-4o-mini: [mistral/labs-devstral-small-2512]
+
+litellm_settings:
+  # Redis cache (idempotent prompts only; do NOT cache anything containing secrets)
+  cache: true
+  cache_params:
+    type: redis
+    host: "127.0.0.1"
+    port: 6379
+    namespace: litellm.openclaw.cache
+    ttl: 600
+  # Budgets: hard deny when exceeded (first-line throttle)
+  max_budget: 100
+  budget_duration: 1d
+  # Request timeout
+  request_timeout: 120
+  # No DB required for basic spend tracking (in-memory/Redis)
+  disable_spend_logs: false
+
+general_settings:
+  # Master key optional when using pass-through keys from secrets
+  completion_model: gpt-4o-mini
+  # Enforce user param for spend attribution (project_id)
+  enforce_user_param: true

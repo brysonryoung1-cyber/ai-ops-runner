@@ -96,6 +96,31 @@ function buildSummary(records: UsageRecord[]): Record<string, unknown> {
   };
 }
 
+function loadGuardLimits(repoRoot: string): { hourly_usd_limit: number; daily_usd_limit: number } {
+  const defaults = { hourly_usd_limit: 20, daily_usd_limit: 100 };
+  for (const name of ["cost_guard.json", "llm.json"]) {
+    const path = join(repoRoot, "config", name);
+    if (!existsSync(path)) continue;
+    try {
+      const data = JSON.parse(readFileSync(path, "utf-8"));
+      if (name === "cost_guard.json") {
+        return {
+          hourly_usd_limit: Number(data.hourly_usd_limit) || defaults.hourly_usd_limit,
+          daily_usd_limit: Number(data.daily_usd_limit) || defaults.daily_usd_limit,
+        };
+      }
+      const budget = data.budget || data;
+      return {
+        hourly_usd_limit: Number(budget.hourly_usd_limit) || defaults.hourly_usd_limit,
+        daily_usd_limit: Number(budget.daily_usd_limit) || defaults.daily_usd_limit,
+      };
+    } catch {
+      continue;
+    }
+  }
+  return defaults;
+}
+
 export async function GET(req: NextRequest) {
   const origin = req.headers.get("origin");
   const secFetchSite = req.headers.get("sec-fetch-site");
@@ -109,6 +134,19 @@ export async function GET(req: NextRequest) {
   }
   const repoRoot = getRepoRoot();
   const records = parseUsageJsonl(repoRoot);
-  const summary = buildSummary(records);
+  const summary = buildSummary(records) as Record<string, unknown>;
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const hourKey = now.toISOString().slice(0, 13);
+  const todayUsd = records
+    .filter((r) => (r.date || (r.timestamp_utc || "").slice(0, 10)) === today)
+    .reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
+  const lastHourUsd = records
+    .filter((r) => (r.hour || (r.timestamp_utc || "").slice(0, 13)) === hourKey)
+    .reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
+  const { hourly_usd_limit, daily_usd_limit } = loadGuardLimits(repoRoot);
+  summary.guard_tripped = lastHourUsd >= hourly_usd_limit || todayUsd >= daily_usd_limit;
+  summary.hourly_limit_usd = hourly_usd_limit;
+  summary.daily_limit_usd = daily_usd_limit;
   return NextResponse.json(summary);
 }

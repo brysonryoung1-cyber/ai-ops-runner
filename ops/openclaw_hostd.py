@@ -49,193 +49,67 @@ MAX_STDOUT_BYTES = 2 * 1024 * 1024
 MAX_STDERR_BYTES = 512 * 1024
 
 
+def _load_allowlist_from_registry() -> dict:
+    """Load allowlist from config/action_registry.json (single source of truth)."""
+    path = os.path.join(ROOT_DIR, "config", "action_registry.json")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    actions = data.get("actions") or []
+    allowlist = {}
+    for entry in actions:
+        aid = entry.get("id")
+        if not aid or not isinstance(entry.get("cmd_template"), str):
+            continue
+        cmd_template = entry["cmd_template"].replace("${ROOT_DIR}", ROOT_DIR)
+        allowlist[aid] = {
+            "cmd": ["bash", "-c", cmd_template],
+            "timeout_sec": int(entry.get("timeout_sec", 60)),
+        }
+    return allowlist if allowlist else None
+
+
 def _allowlist() -> dict:
-    """Build allowlist with ROOT_DIR so CI can set OPENCLAW_REPO_ROOT."""
+    """Build allowlist from registry; fallback to legacy inline dict if registry missing."""
+    reg = _load_allowlist_from_registry()
+    if reg is not None:
+        return reg
+    # Legacy fallback when config/action_registry.json not present
     return {
-        "deploy_and_verify": {
-            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/deploy_pipeline.sh"],
-            "timeout_sec": 900,
-        },
-        "doctor": {
-            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/openclaw_doctor.sh"],
-            "timeout_sec": 180,
-        },
-        "apply": {
-            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/openclaw_apply_remote.sh"],
-            "timeout_sec": 120,
-        },
-        "port_audit": {
-            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/show_port_audit.sh"],
-            "timeout_sec": 60,
-        },
-        "tail_guard_log": {
-            "cmd": [
-                "bash",
-                "-c",
-                "journalctl -u openclaw-guard.service -n 200 --no-pager",
-            ],
-            "timeout_sec": 30,
-        },
-        "timer": {
-            "cmd": ["systemctl", "status", "openclaw-guard.timer", "--no-pager"],
-            "timeout_sec": 10,
-        },
-        "guard": {
-            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && sudo ./ops/openclaw_install_guard.sh"],
-            "timeout_sec": 30,
-        },
-        "llm_doctor": {
-            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m src.llm.doctor"],
-            "timeout_sec": 30,
-        },
-        "soma_snapshot_home": {
-            "cmd": [
-                "bash",
-                "-c",
-                f'cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.snapshot --product "Home User Library"',
-            ],
-            "timeout_sec": 120,
-        },
-        "soma_snapshot_practitioner": {
-            "cmd": [
-                "bash",
-                "-c",
-                f'cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.snapshot --product "Practitioner Library"',
-            ],
-            "timeout_sec": 120,
-        },
-        "soma_harvest": {
-            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.harvest"],
-            "timeout_sec": 180,
-        },
-        "soma_mirror": {
-            "cmd": [
-                "bash",
-                "-c",
-                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.mirror --dry-run",
-            ],
-            "timeout_sec": 60,
-        },
-        "soma_status": {
-            "cmd": [
-                "bash",
-                "-c",
-                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.sms status",
-            ],
-            "timeout_sec": 15,
-        },
-        "soma_kajabi_phase0": {
-            "cmd": [
-                "bash",
-                "-c",
-                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.phase0_runner",
-            ],
-            "timeout_sec": 300,
-        },
-        "soma_connectors_status": {
-            "cmd": [
-                "bash",
-                "-c",
-                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.connectors_status",
-            ],
-            "timeout_sec": 15,
-        },
-        "soma_kajabi_bootstrap_start": {
-            "cmd": [
-                "bash",
-                "-c",
-                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.bootstrap kajabi start",
-            ],
-            "timeout_sec": 30,
-        },
-        "soma_kajabi_bootstrap_status": {
-            "cmd": [
-                "bash",
-                "-c",
-                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.bootstrap kajabi status",
-            ],
-            "timeout_sec": 10,
-        },
-        "soma_kajabi_bootstrap_finalize": {
-            "cmd": [
-                "bash",
-                "-c",
-                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.bootstrap kajabi finalize",
-            ],
-            "timeout_sec": 30,
-        },
-        "soma_kajabi_gmail_connect_start": {
-            "cmd": [
-                "bash",
-                "-c",
-                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.gmail_connect start",
-            ],
-            "timeout_sec": 30,
-        },
-        "soma_kajabi_gmail_connect_status": {
-            "cmd": [
-                "bash",
-                "-c",
-                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.gmail_connect status",
-            ],
-            "timeout_sec": 10,
-        },
-        "soma_kajabi_gmail_connect_finalize": {
-            "cmd": [
-                "bash",
-                "-c",
-                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.gmail_connect finalize",
-            ],
-            "timeout_sec": 60,
-        },
-        "soma_last_errors": {
-            "cmd": [
-                "bash",
-                "-c",
-                f'cd {ROOT_DIR} && python3 -c "from services.soma_kajabi_sync.sms import get_last_errors; errs=get_last_errors(5); print(chr(10).join(f\\"{{e[\'timestamp\'][:16]}}: {{e[\'message\']}}\\" for e in errs) if errs else \'No recent errors.\')"',
-            ],
-            "timeout_sec": 10,
-        },
-        "sms_status": {
-            "cmd": [
-                "bash",
-                "-c",
-                f"cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.sms test",
-            ],
-            "timeout_sec": 15,
-        },
-        "artifacts": {
-            "cmd": [
-                "bash",
-                "-c",
-                f"ls -1dt {ROOT_DIR}/artifacts/* 2>/dev/null | head -n 15 && echo '---' && du -sh {ROOT_DIR}/artifacts/* 2>/dev/null | sort -h | tail -n 15",
-            ],
-            "timeout_sec": 10,
-        },
-        "orb.backtest.bulk": {
-            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/scripts/orb_backtest_bulk.sh"],
-            "timeout_sec": 600,
-        },
-        "orb.backtest.confirm_nt8": {
-            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/scripts/orb_backtest_confirm_nt8.sh"],
-            "timeout_sec": 120,
-        },
-        "pred_markets.mirror.run": {
-            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.pred_markets.run mirror_run"],
-            "timeout_sec": 300,
-        },
-        "pred_markets.mirror.backfill": {
-            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.pred_markets.run mirror_backfill"],
-            "timeout_sec": 600,
-        },
-        "pred_markets.report.health": {
-            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.pred_markets.run report_health"],
-            "timeout_sec": 60,
-        },
-        "pred_markets.report.daily": {
-            "cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.pred_markets.run report_daily"],
-            "timeout_sec": 60,
-        },
+        "doctor": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/openclaw_doctor.sh"], "timeout_sec": 180},
+        "apply": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/openclaw_apply_remote.sh"], "timeout_sec": 120},
+        "port_audit": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/show_port_audit.sh"], "timeout_sec": 60},
+        "tail_guard_log": {"cmd": ["bash", "-c", "journalctl -u openclaw-guard.service -n 200 --no-pager"], "timeout_sec": 30},
+        "timer": {"cmd": ["systemctl", "status", "openclaw-guard.timer", "--no-pager"], "timeout_sec": 10},
+        "guard": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && sudo ./ops/openclaw_install_guard.sh"], "timeout_sec": 30},
+        "llm_doctor": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m src.llm.doctor"], "timeout_sec": 30},
+        "deploy_and_verify": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/deploy_pipeline.sh"], "timeout_sec": 900},
+        "soma_connectors_status": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.connectors_status"], "timeout_sec": 15},
+        "soma_kajabi_bootstrap_start": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.bootstrap kajabi start"], "timeout_sec": 30},
+        "soma_kajabi_bootstrap_status": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.bootstrap kajabi status"], "timeout_sec": 10},
+        "soma_kajabi_bootstrap_finalize": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.bootstrap kajabi finalize"], "timeout_sec": 30},
+        "soma_kajabi_gmail_connect_start": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.gmail_connect start"], "timeout_sec": 30},
+        "soma_kajabi_gmail_connect_status": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.gmail_connect status"], "timeout_sec": 10},
+        "soma_kajabi_gmail_connect_finalize": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.gmail_connect finalize"], "timeout_sec": 60},
+        "soma_kajabi_phase0": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.soma_kajabi.phase0_runner"], "timeout_sec": 300},
+        "soma_snapshot_home": {"cmd": ["bash", "-c", f'cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.snapshot --product "Home User Library"'], "timeout_sec": 120},
+        "soma_snapshot_practitioner": {"cmd": ["bash", "-c", f'cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.snapshot --product "Practitioner Library"'], "timeout_sec": 120},
+        "soma_harvest": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.harvest"], "timeout_sec": 180},
+        "soma_mirror": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.mirror --dry-run"], "timeout_sec": 60},
+        "soma_status": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.sms status"], "timeout_sec": 15},
+        "soma_last_errors": {"cmd": ["bash", "-c", f'cd {ROOT_DIR} && python3 -c "from services.soma_kajabi_sync.sms import get_last_errors; errs=get_last_errors(5); print(chr(10).join(f\\"{{e[\'timestamp\'][:16]}}: {{e[\'message\']}}\\" for e in errs) if errs else \'No recent errors.\')"'], "timeout_sec": 10},
+        "sms_status": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.soma_kajabi_sync.sms test"], "timeout_sec": 15},
+        "artifacts": {"cmd": ["bash", "-c", f"ls -1dt {ROOT_DIR}/artifacts/* 2>/dev/null | head -n 15 && echo '---' && du -sh {ROOT_DIR}/artifacts/* 2>/dev/null | sort -h | tail -n 15"], "timeout_sec": 10},
+        "orb.backtest.bulk": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/scripts/orb_backtest_bulk.sh"], "timeout_sec": 600},
+        "orb.backtest.confirm_nt8": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/scripts/orb_backtest_confirm_nt8.sh"], "timeout_sec": 120},
+        "pred_markets.mirror.run": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.pred_markets.run mirror_run"], "timeout_sec": 300},
+        "pred_markets.mirror.backfill": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.pred_markets.run mirror_backfill"], "timeout_sec": 600},
+        "pred_markets.report.health": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.pred_markets.run report_health"], "timeout_sec": 60},
+        "pred_markets.report.daily": {"cmd": ["bash", "-c", f"cd {ROOT_DIR} && python3 -m services.pred_markets.run report_daily"], "timeout_sec": 60},
     }
 
 

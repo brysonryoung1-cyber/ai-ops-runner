@@ -2,7 +2,10 @@
  * Host Executor (hostd) client — no SSH.
  * Calls OPENCLAW_HOSTD_URL for health and exec. Auth via X-OpenClaw-Admin-Token.
  * Fail-closed: no URL or no token for admin actions => clear errors.
+ * ACTION_TO_HOSTD from config/action_registry.json (single source of truth).
  */
+
+import { ACTION_TO_HOSTD } from "./action_registry.generated";
 
 export interface HostdResult {
   ok: boolean;
@@ -19,40 +22,6 @@ export interface HostdResult {
   error_class?: string;
   required_condition?: string;
 }
-
-const ACTION_TO_HOSTD: Record<string, string> = {
-  doctor: "doctor",
-  apply: "apply",
-  deploy_and_verify: "deploy_and_verify",
-  ports: "port_audit",
-  journal: "tail_guard_log",
-  timer: "timer",
-  guard: "guard",
-  llm_doctor: "llm_doctor",
-  soma_snapshot_home: "soma_snapshot_home",
-  soma_snapshot_practitioner: "soma_snapshot_practitioner",
-  soma_harvest: "soma_harvest",
-  soma_mirror: "soma_mirror",
-  soma_kajabi_phase0: "soma_kajabi_phase0",
-  soma_status: "soma_status",
-  soma_last_errors: "soma_last_errors",
-  sms_status: "sms_status",
-  artifacts: "artifacts",
-  "orb.backtest.bulk": "orb.backtest.bulk",
-  "orb.backtest.confirm_nt8": "orb.backtest.confirm_nt8",
-  "pred_markets.mirror.run": "pred_markets.mirror.run",
-  "pred_markets.mirror.backfill": "pred_markets.mirror.backfill",
-  "pred_markets.report.health": "pred_markets.report.health",
-  "pred_markets.report.daily": "pred_markets.report.daily",
-  // Soma connectors (server-side only; browser never calls hostd directly)
-  soma_connectors_status: "soma_connectors_status",
-  soma_kajabi_bootstrap_start: "soma_kajabi_bootstrap_start",
-  soma_kajabi_bootstrap_status: "soma_kajabi_bootstrap_status",
-  soma_kajabi_bootstrap_finalize: "soma_kajabi_bootstrap_finalize",
-  soma_kajabi_gmail_connect_start: "soma_kajabi_gmail_connect_start",
-  soma_kajabi_gmail_connect_status: "soma_kajabi_gmail_connect_status",
-  soma_kajabi_gmail_connect_finalize: "soma_kajabi_gmail_connect_finalize",
-};
 
 export const HOSTD_ACTIONS = Object.keys(ACTION_TO_HOSTD);
 

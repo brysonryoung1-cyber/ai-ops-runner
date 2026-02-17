@@ -47,6 +47,9 @@ def _check_provider_direct(
         max_tokens=5,
         purpose="general",
         trace_id="doctor",
+        essential=True,
+        project_id="openclaw",
+        action="doctor",
     )
     try:
         resp = provider.generate_text(request)

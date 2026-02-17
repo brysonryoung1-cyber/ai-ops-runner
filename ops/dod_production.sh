@@ -410,7 +410,7 @@ def extract_keys(path: Path, marker: str) -> set[str]:
     return set(keys)
 
 allowlist = extract_keys(root / 'apps/openclaw-console/src/lib/allowlist.ts', 'export const ALLOWLIST')
-hostd = extract_keys(root / 'apps/openclaw-console/src/lib/hostd.ts', 'const ACTION_TO_HOSTD')
+hostd = extract_keys(root / 'apps/openclaw-console/src/lib/action_registry.generated.ts', 'export const ACTION_TO_HOSTD')
 missing = sorted(allowlist - hostd)
 if missing:
     print('Missing hostd actions:', ', '.join(missing))

@@ -127,6 +127,10 @@ class LLMRequest:
     response_format: dict[str, str] | None = None
     """When True, cost guard is skipped (doctor/deploy/guard)."""
     essential: bool = False
+    """For LiteLLM spend attribution: sent as 'user' param."""
+    project_id: str = "openclaw"
+    """For LiteLLM spend attribution: sent in metadata.action."""
+    action: str = ""
 
 
 @dataclass
