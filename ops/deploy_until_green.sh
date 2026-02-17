@@ -29,6 +29,7 @@ write_triage() {
   mkdir -p "$triage_dir"
   local retryable="false"
   [ "$err_class" = "dod_failed_joinable_409" ] && retryable="true"
+  [ "$err_class" = "dod_failed_doctor_unreachable" ] && retryable="true"
   export _TRIAGE_RUN_ID="$run_id" _TRIAGE_ATTEMPT="$attempt" _TRIAGE_ERR="$err_class" _TRIAGE_STEP="$failing_step" _TRIAGE_NEXT="$next_action" _TRIAGE_DIR="$triage_dir" _DOD_DIR="$DOD_DIR" _TRIAGE_RETRYABLE="$retryable"
   python3 -c "
 import json, os
@@ -82,6 +83,7 @@ print(d.get('error_class', 'unknown'))
         [ -f "$d/dod_result.json" ] && dod_result="$d/dod_result.json" && break
       done
       if [ -n "$dod_result" ] && [ -f "$dod_result" ]; then
+        rc=0
         _DOD_RESULT_PATH="$dod_result" python3 -c "
 import json, sys, os
 path = os.environ.get('_DOD_RESULT_PATH', '')
@@ -94,8 +96,12 @@ if path and os.path.isfile(path):
         sys.exit(0)
     if doc_err in ('409_poll_timeout', '409_then_fresh_fail'):
         sys.exit(0)
+    if doc_err == 'unreachable':
+        sys.exit(2)
 sys.exit(1)
-" 2>/dev/null && { echo "dod_failed_joinable_409"; return; }
+" 2>/dev/null || rc=$?
+        if [ "$rc" -eq 0 ]; then echo "dod_failed_joinable_409"; return; fi
+        if [ "$rc" -eq 2 ]; then echo "dod_failed_doctor_unreachable"; return; fi
       fi
       if [ -f "$DEPLOY_DIR/$run_id/dod.log" ]; then
         if grep -q "409\|ALREADY_RUNNING\|active_run_id\|joining" "$DEPLOY_DIR/$run_id/dod.log" 2>/dev/null; then
@@ -114,6 +120,10 @@ safe_remediate() {
   local err_class="$1"
   echo "  Applying safe remediation for $err_class..." >&2
   case "$err_class" in
+    *unreachable*)
+      echo "  Waiting ${SLEEP_BETWEEN}s for transient unreachable..." >&2
+      sleep "$SLEEP_BETWEEN"
+      ;;
     *hostd*|*HOSTD*|doctor*)
       if command -v systemctl >/dev/null 2>&1; then
         systemctl restart openclaw-hostd 2>/dev/null || true
@@ -142,9 +152,14 @@ for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
     ERR_CLASS="$(classify_error "$LATEST_RUN_ID")"
     echo "deploy_pipeline FAILED: error_class=$ERR_CLASS" >&2
 
-    # dod_failed_joinable_409 is retryable (safe: wait/backoff + re-run DoD)
+    # dod_failed_joinable_409 and dod_failed_doctor_unreachable are retryable (transient)
     if [ "$ERR_CLASS" = "dod_failed_joinable_409" ]; then
       echo "RETRYABLE: $ERR_CLASS (joinable 409 collision); safe remediation then retry" >&2
+      safe_remediate "$ERR_CLASS"
+      continue
+    fi
+    if [ "$ERR_CLASS" = "dod_failed_doctor_unreachable" ]; then
+      echo "RETRYABLE: $ERR_CLASS (post-deploy exec unreachable); safe remediation then retry" >&2
       safe_remediate "$ERR_CLASS"
       continue
     fi
