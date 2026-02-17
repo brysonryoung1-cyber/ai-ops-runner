@@ -157,7 +157,8 @@ elif [ -z "$ADMIN_TOKEN" ]; then
   FAILURES=$((FAILURES + 1))
   RESULTS="${RESULTS}doctor_exec=no_token "
 else
-  DOCTOR_RESP="$(curl $CURL_OPTS -X POST "$BASE_URL/api/exec" \
+  # Doctor can take ~30s; use longer timeout than default CURL_OPTS (15s)
+  DOCTOR_RESP="$(curl -sf --connect-timeout 5 --max-time 45 -X POST "$BASE_URL/api/exec" \
     -H "Content-Type: application/json" \
     -H "x-openclaw-token: $ADMIN_TOKEN" \
     -d '{"action":"doctor"}' 2>/dev/null)" || true
