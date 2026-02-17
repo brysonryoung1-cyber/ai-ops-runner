@@ -41,7 +41,7 @@ else
 fi
 
 # Test 3: DoD uses sufficient timeout for doctor (>= 45s)
-if grep -q "max-time 90\|max-time 60\|max-time 45" "$OPS_DIR/dod_production.sh"; then
+if grep -q "max-time 200\|max-time 150\|max-time 90\|max-time 60\|max-time 45" "$OPS_DIR/dod_production.sh"; then
   pass "dod_production.sh uses adequate doctor timeout (≥45s)"
 else
   fail "dod_production.sh doctor timeout may be too short"

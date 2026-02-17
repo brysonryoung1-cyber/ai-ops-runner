@@ -58,7 +58,7 @@ def _allowlist() -> dict:
         },
         "doctor": {
             "cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/openclaw_doctor.sh"],
-            "timeout_sec": 120,
+            "timeout_sec": 180,
         },
         "apply": {
             "cmd": ["bash", "-c", f"cd {ROOT_DIR} && ./ops/openclaw_apply_remote.sh"],

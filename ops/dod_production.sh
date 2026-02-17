@@ -160,13 +160,13 @@ else
   # DoD header: allow doctor during maintenance mode (deploy pipeline sets OPENCLAW_DEPLOY_RUN_ID)
   DOD_HEADER=""
   [ -n "${OPENCLAW_DEPLOY_RUN_ID:-}" ] && DOD_HEADER="-H x-openclaw-dod-run: $OPENCLAW_DEPLOY_RUN_ID"
-  # Doctor can take ~30–45s; use 90s request timeout; on 409 with active_run_id, JOIN that run (poll /api/runs?id=).
+  # Doctor can take ~30–180s on cold/busy hosts; use 200s request timeout; on 409 with active_run_id, JOIN that run (poll /api/runs?id=).
   # On unreachable/timeout, retry once after 10s (transient post-deploy readiness).
   DOCTOR_TMP="$(mktemp)"
   DOCTOR_ATTEMPT=1
   DOCTOR_MAX_ATTEMPTS=2
   while [ "$DOCTOR_ATTEMPT" -le "$DOCTOR_MAX_ATTEMPTS" ]; do
-    HTTP_CODE="$(curl -s -o "$DOCTOR_TMP" -w "%{http_code}" --connect-timeout 5 --max-time 90 \
+    HTTP_CODE="$(curl -s -o "$DOCTOR_TMP" -w "%{http_code}" --connect-timeout 5 --max-time 200 \
       -X POST "$BASE_URL/api/exec" \
       -H "Content-Type: application/json" \
       -H "x-openclaw-token: $ADMIN_TOKEN" \
@@ -280,7 +280,7 @@ except Exception: print('NONE')
     elif [ "$POLL_GOT_FAIL" -eq 1 ]; then
       # Exactly one rerun after join FAIL: single fresh POST (no spam). If 409, do not retry again — cap total.
       DOCTOR_TMP2="$(mktemp)"
-      HTTP_CODE2="$(curl -s -o "$DOCTOR_TMP2" -w "%{http_code}" --connect-timeout 5 --max-time 90 \
+      HTTP_CODE2="$(curl -s -o "$DOCTOR_TMP2" -w "%{http_code}" --connect-timeout 5 --max-time 200 \
         -X POST "$BASE_URL/api/exec" -H "Content-Type: application/json" -H "x-openclaw-token: $ADMIN_TOKEN" $DOD_HEADER \
         -d '{"action":"doctor"}' 2>/dev/null)" || HTTP_CODE2="000"
       DOCTOR_RESP2="$(cat "$DOCTOR_TMP2" 2>/dev/null)"
