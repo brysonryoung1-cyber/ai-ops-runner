@@ -355,9 +355,46 @@ else
   fi
   CODEX_CMD_RECORD="$CODEX_CMD exec --full-auto -s read-only --output-last-message <verdict>"
 
+  try_openclaw_fallback() {
+    echo "==> Running openclaw_codex_review.sh (direct API)..." >&2
+    if ! "$SCRIPT_DIR/openclaw_codex_review.sh" --since "$SINCE_SHA" >/dev/null 2>&1; then
+      echo "ERROR: openclaw_codex_review.sh failed" >&2
+      return 1
+    fi
+    local latest_verdict
+    latest_verdict="$(ls -t "$ROOT_DIR"/artifacts/codex_review/*/CODEX_VERDICT.json 2>/dev/null | head -1)"
+    if [ -z "$latest_verdict" ] || [ ! -f "$latest_verdict" ]; then
+      echo "ERROR: No verdict from openclaw_codex_review.sh" >&2
+      return 1
+    fi
+    python3 - "$latest_verdict" "$VERDICT_FILE" "$SINCE_SHA" "$HEAD_SHA" "$GENERATED_AT" "$REVIEW_MODE" <<'PYEOF'
+import json, sys
+src, dest, since, to, gen_at, mode = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]
+with open(src) as f:
+    v = json.load(f)
+v["meta"] = {
+    "since_sha": since,
+    "to_sha": to,
+    "generated_at": gen_at,
+    "review_mode": mode,
+    "simulated": False,
+    "codex_cli": {"version": "api", "command": "openclaw_codex_review.sh"}
+}
+with open(dest, "w") as f:
+    json.dump(v, f, indent=2)
+PYEOF
+    validate_verdict "$VERDICT_FILE" >/dev/null || return 1
+    echo "  Fallback verdict: $(python3 -c "import json; print(json.load(open('$VERDICT_FILE'))['verdict'])")" >&2
+    return 0
+  }
+
   if [ "$REVIEW_MODE" = "bundle" ]; then
     echo "==> Running Codex review (single bundle)..."
-    run_codex_review "$BUNDLE_FILE" "$VERDICT_FILE"
+    run_codex_review "$BUNDLE_FILE" "$VERDICT_FILE" || CODEX_RC=$?
+    if [ "${CODEX_RC:-0}" -ne 0 ]; then
+      echo "==> Codex CLI failed; trying openclaw_codex_review.sh (direct API) fallback..." >&2
+      try_openclaw_fallback || exit 1
+    fi
   else
     echo "==> Running Codex review (packet mode)..."
     # Generate per-file packets
