@@ -370,8 +370,10 @@ else
     python3 - "$latest_verdict" "$VERDICT_FILE" "$SINCE_SHA" "$HEAD_SHA" "$GENERATED_AT" "$REVIEW_MODE" <<'PYEOF'
 import json, sys
 src, dest, since, to, gen_at, mode = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]
+required_top = ["verdict", "blockers", "non_blocking", "tests_run", "meta"]
 with open(src) as f:
     v = json.load(f)
+v = {k: v[k] for k in required_top if k in v}
 v["meta"] = {
     "since_sha": since,
     "to_sha": to,
