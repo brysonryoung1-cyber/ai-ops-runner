@@ -249,6 +249,38 @@ else:
 PYEOF
 }
 
+is_verdict_metadata_only_range() {
+  local start_sha="$1" head_sha="$2"
+
+  # If any non-metadata file changed, this is real unreviewed work.
+  local diff_files=""
+  diff_files="$(git diff --name-only "$start_sha" "$head_sha")"
+  if [ -z "$diff_files" ]; then
+    return 1
+  fi
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in
+      docs/LAST_APPROVED_VERDICT.json|docs/LAST_REVIEWED_SHA.txt) ;;
+      *) return 1 ;;
+    esac
+  done <<< "$diff_files"
+
+  # Require canonical verdict to explicitly anchor to the start SHA.
+  python3 - "$VERDICT_FILE" "$start_sha" <<'PYEOF' >/dev/null
+import json, sys
+vfile, start = sys.argv[1], sys.argv[2]
+with open(vfile) as f:
+    v = json.load(f)
+if v.get("approved_head_sha") != start:
+    sys.exit(1)
+if v.get("range_end_sha") != start:
+    sys.exit(1)
+if v.get("simulated") is not False:
+    sys.exit(1)
+PYEOF
+}
+
 # ── Review + ship loop ──
 while [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; do
   ATTEMPT=$((ATTEMPT + 1))
@@ -265,6 +297,27 @@ while [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; do
       echo "  origin/main is already at HEAD. Nothing to do."
       exit 0
     fi
+  fi
+
+  if is_verdict_metadata_only_range "$START_SHA" "$HEAD_SHA"; then
+    echo "  No unreviewed code changes since baseline (metadata-only delta)."
+    REMOTE_NOW="$(git rev-parse origin/main 2>/dev/null || echo "")"
+    if [ "$REMOTE_NOW" = "$HEAD_SHA" ]; then
+      echo "  origin/main is already at HEAD. Nothing to do."
+      exit 0
+    fi
+
+    echo ""
+    echo "==> Pushing existing metadata-only commit to origin/main..."
+    OPENCLAW_SHIP=1 git push origin HEAD:refs/heads/main
+    git fetch origin main --no-tags 2>/dev/null || true
+    REMOTE_AFTER="$(git rev-parse origin/main)"
+    if [ "$REMOTE_AFTER" != "$HEAD_SHA" ]; then
+      echo "ERROR: Push verification failed. origin/main=$REMOTE_AFTER, expected=$HEAD_SHA" >&2
+      exit 1
+    fi
+    echo "  Push complete (no new review commit required)."
+    exit 0
   fi
 
   echo "  Review range: ${START_SHA:0:12}..${HEAD_SHA:0:12}"
