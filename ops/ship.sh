@@ -205,20 +205,26 @@ get_owner_repo() {
   fi
 }
 
-# Detect if main requires a PR before merge (required_pull_request_reviews non-null).
-# Returns 0 if PR required, 1 if not or on API failure (fail open to direct push).
+# Detect if we must use PR flow: required_pull_request_reviews set OR verdict-gate is a required check.
+# When verdict-gate is required, direct push is rejected (check runs after push); use PR so check runs on PR.
+# Returns 0 if PR flow required, 1 if not or on API failure (fail open to direct push).
 # ship.sh NEVER calls gh api to change branch protection (no PUT/PATCH/POST/DELETE).
+# Uses POSIX/BSD-safe grep patterns (no \s).
 main_requires_pr() {
   local owner_repo prot_json
   [ -n "${SHIP_TEST_MOCK_PR_REQUIRED:-}" ] && { [ "$SHIP_TEST_MOCK_PR_REQUIRED" = "1" ] && return 0 || return 1; }
   owner_repo="$(get_owner_repo)"
   [ -z "$owner_repo" ] && return 1
   prot_json="$(gh api -H "Accept: application/vnd.github+json" "/repos/$owner_repo/branches/main/protection" 2>/dev/null)" || return 1
+  # PR required by rule
   if echo "$prot_json" | grep -q '"required_pull_request_reviews":[^n]'; then
-    # Could be null; check for actual object (has "url" or "dismissal_restrictions" etc.)
-    if echo "$prot_json" | grep -qE '"required_pull_request_reviews"\s*:\s*\{'; then
+    if echo "$prot_json" | grep -qE '"required_pull_request_reviews"[[:space:]]*:[[:space:]]*\{'; then
       return 0
     fi
+  fi
+  # verdict-gate as required check: direct push would be rejected; use PR so check runs on PR branch
+  if echo "$prot_json" | grep -q '"verdict-gate"'; then
+    return 0
   fi
   return 1
 }
