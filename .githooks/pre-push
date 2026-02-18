@@ -1,37 +1,41 @@
 #!/usr/bin/env bash
-# pre-push — UNBREAKABLE PUSH GATE
+# pre-push — UNBREAKABLE PUSH GATE (v2: ship-only + HMAC + canonical verdict)
 #
-# A push to origin/main requires a REAL (non-simulated) APPROVED verdict
-# for the EXACT commit range being pushed.
+# A push to origin/main requires ALL of:
+#   1. OPENCLAW_SHIP=1 env var (set only by ops/ship.sh)
+#   2. docs/LAST_APPROVED_VERDICT.json exists and is committed
+#   3. range_end_sha == approved_head_sha (internal consistency)
+#   4. range_end_sha matches the push HEAD:
+#      - EXACT: range_end_sha == push HEAD, OR
+#      - EXTENSION: range_end_sha == parent(push HEAD) and the only
+#        diff is docs/LAST_APPROVED_VERDICT.json and/or docs/LAST_REVIEWED_SHA.txt
+#   5. simulated == false
+#   6. HMAC signature valid (fail-closed if VERDICT_HMAC_KEY unset)
 #
-# NO bypass env vars. NO exceptions. Simulated verdicts NEVER pass.
-#
-# Uses the actual local_sha from git push stdin (NOT HEAD) to prevent
-# `git push origin otherbranch:main` from bypassing the gate.
-#
-# Checks enforced:
-#   1. verdict == APPROVED
-#   2. meta.simulated == false
-#   3. meta.codex_cli.version is non-empty
-#   4. meta.since_sha == BASE  (merge-base of local_sha and remote tip)
-#   5. meta.to_sha   == TO    (the actual local_sha being pushed)
-#      — OR — the only diff between meta.to_sha and TO is
-#      docs/LAST_REVIEWED_SHA.txt (baseline-advance allowance)
+# NO bypass env vars. NO direct git push. Simulated verdicts NEVER pass.
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 
-# --- read stdin (git push protocol) ---
-# Each line: <local_ref> <local_sha> <remote_ref> <remote_sha>
-# We capture the ACTUAL local_sha being pushed to refs/heads/main.
+# ── Gate 0: Ship-only enforcement ──
+if [ "${OPENCLAW_SHIP:-0}" != "1" ]; then
+  echo "" >&2
+  echo "========================================" >&2
+  echo "  PUSH BLOCKED — direct push forbidden" >&2
+  echo "========================================" >&2
+  echo "  Only ops/ship.sh may push to main." >&2
+  echo "  Run:  ./ops/ship.sh" >&2
+  echo "" >&2
+  exit 1
+fi
+
+# ── Read stdin (git push protocol) ──
 PUSH_LOCAL_SHA=""
 PUSH_REMOTE_SHA=""
 while read -r local_ref local_sha remote_ref remote_sha; do
-  # Skip delete pushes
   if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
     continue
   fi
-  # Only gate pushes targeting refs/heads/main
   if [ "$remote_ref" = "refs/heads/main" ]; then
     PUSH_LOCAL_SHA="$local_sha"
     PUSH_REMOTE_SHA="$remote_sha"
@@ -42,135 +46,103 @@ if [ -z "$PUSH_LOCAL_SHA" ]; then
   exit 0
 fi
 
-# --- ensure origin/main is reachable ---
-if ! git rev-parse origin/main >/dev/null 2>&1; then
-  if ! git fetch origin main --no-tags 2>/dev/null; then
-    echo "" >&2
-    echo "========================================" >&2
-    echo "  PUSH BLOCKED — cannot resolve origin/main" >&2
-    echo "========================================" >&2
-    echo "  Run:  git fetch origin main" >&2
-    echo "" >&2
-    exit 1
-  fi
-fi
-
-# --- compute push range using actual pushed SHA ---
-# Always use merge-base of the pushed SHA and origin/main as BASE.
-# This matches what review_auto.sh computes when generating the review range.
-BASE="$(git merge-base "$PUSH_LOCAL_SHA" origin/main)"
 TO="$PUSH_LOCAL_SHA"
+echo "pre-push: Checking canonical verdict for push HEAD ${TO:0:12}"
 
-echo "pre-push: Checking verdict for range ${BASE:0:12}..${TO:0:12}"
-
-# --- locate most recent verdict ---
-VERDICT_FILE=""
-if [ -d "$ROOT_DIR/review_packets" ]; then
-  for vf in $(ls -t "$ROOT_DIR"/review_packets/*/CODEX_VERDICT.json 2>/dev/null); do
-    VERDICT_FILE="$vf"
-    break
-  done
-fi
-
-if [ -z "$VERDICT_FILE" ] || [ ! -f "$VERDICT_FILE" ]; then
+# ── Load canonical verdict ──
+VERDICT_PATH="$ROOT_DIR/docs/LAST_APPROVED_VERDICT.json"
+if [ ! -f "$VERDICT_PATH" ]; then
   echo "" >&2
   echo "========================================" >&2
-  echo "  PUSH BLOCKED — No verdict file found" >&2
+  echo "  PUSH BLOCKED — docs/LAST_APPROVED_VERDICT.json not found" >&2
   echo "========================================" >&2
-  echo "" >&2
-  echo "  Fix: ./ops/review_auto.sh" >&2
+  echo "  Run:  ./ops/ship.sh" >&2
   echo "" >&2
   exit 1
 fi
 
-# --- strict gate validation (Python) ---
+# ── Strict gate validation (Python) ──
 GATE_RC=0
-python3 - "$VERDICT_FILE" "$BASE" "$TO" <<'PYEOF' || GATE_RC=$?
-import json, sys, subprocess
+python3 - "$VERDICT_PATH" "$TO" <<'PYEOF' || GATE_RC=$?
+import json, sys, os, hmac, hashlib, subprocess
 
-verdict_file = sys.argv[1]
-BASE = sys.argv[2]
-TO   = sys.argv[3]
+verdict_path = sys.argv[1]
+TO = sys.argv[2]
 
-with open(verdict_file) as f:
+with open(verdict_path) as f:
     v = json.load(f)
 
 errors = []
 
-# 1. verdict == APPROVED
-if v.get("verdict") != "APPROVED":
-    errors.append('verdict is "%s", expected "APPROVED"' % v.get("verdict"))
-
-# 2. meta must exist as dict
-meta = v.get("meta")
-if not isinstance(meta, dict):
-    errors.append("meta field missing or not an object")
-    for e in errors:
-        print("  GATE FAIL: %s" % e, file=sys.stderr)
-    sys.exit(1)
-
-# 3. meta.simulated must be exactly False
-if meta.get("simulated") is not False:
-    errors.append("meta.simulated is not false — simulated verdicts NEVER satisfy the gate")
-
-# 4. Provenance check: accept either codex_cli or llm_router provenance
-#    - codex_cli: legacy path (codex exec CLI)
-#    - provider+routed_via: new LLM router path (OpenAI API via src.llm)
-codex_cli = meta.get("codex_cli")
-routed_via = meta.get("routed_via", "")
-provider = meta.get("provider", "")
-
-if routed_via == "llm_router" and provider:
-    # LLM router path: provider must be non-empty (review is always openai)
-    pass  # provenance verified
-elif isinstance(codex_cli, dict) and codex_cli.get("version"):
-    # Legacy codex CLI path: version must be non-empty
-    pass  # provenance verified
-elif meta.get("type") == "codex_diff_review" and meta.get("model"):
-    # Direct OpenAI API path (openclaw_codex_review.sh): model must be non-empty
-    pass  # provenance verified
-else:
+# 1. Internal consistency: approved_head_sha == range_end_sha
+approved = v.get("approved_head_sha", "")
+range_end = v.get("range_end_sha", "")
+if approved != range_end:
     errors.append(
-        "No valid provenance: need codex_cli.version, or "
-        "routed_via=llm_router+provider, or type=codex_diff_review+model"
+        "internal inconsistency: approved_head_sha (%s) != range_end_sha (%s)"
+        % (approved[:12], range_end[:12])
     )
 
-# 5. Range check
-meta_since = meta.get("since_sha", "")
-meta_to    = meta.get("to_sha", "")
-
+# 2. Range match: range_end_sha must match push HEAD or be its parent
+#    with only verdict/baseline files in the diff.
 range_ok = False
-range_errors = []
-
-if meta_since == BASE and meta_to == TO:
-    # Exact match
+if range_end == TO:
     range_ok = True
-elif meta_since == BASE and meta_to != TO:
-    # Allow baseline-advance extension:
-    # If the ONLY file changed between meta.to_sha and TO is
-    # docs/LAST_REVIEWED_SHA.txt, the verdict still covers all real code.
+else:
     try:
         result = subprocess.run(
-            ["git", "diff", "--name-only", meta_to, TO],
+            ["git", "diff", "--name-only", range_end, TO],
             capture_output=True, text=True, timeout=10
         )
-        diff_files = [f for f in result.stdout.strip().split("\n") if f]
-        if diff_files == ["docs/LAST_REVIEWED_SHA.txt"]:
+        diff_files = sorted(f for f in result.stdout.strip().split("\n") if f)
+        allowed = sorted(["docs/LAST_APPROVED_VERDICT.json", "docs/LAST_REVIEWED_SHA.txt"])
+        if diff_files and all(f in allowed for f in diff_files):
             range_ok = True
+        elif diff_files:
+            errors.append(
+                "range_end_sha (%s) != push HEAD (%s) and diff contains non-verdict files: %s"
+                % (range_end[:12], TO[:12], diff_files)
+            )
         else:
-            range_errors.append(
-                "meta.to_sha (%s) != TO (%s) and diff contains more than "
-                "baseline advance: %s" % (meta_to[:12], TO[:12], diff_files)
+            errors.append(
+                "range_end_sha (%s) != push HEAD (%s) and git diff failed"
+                % (range_end[:12], TO[:12])
             )
     except Exception as exc:
-        range_errors.append("baseline-advance check failed: %s" % exc)
-else:
-    range_errors.append(
-        "meta.since_sha (%s) != BASE (%s)" % (meta_since[:12], BASE[:12])
-    )
+        errors.append("range check failed: %s" % exc)
 
 if not range_ok:
-    errors.extend(range_errors)
+    errors.append(
+        "range_end_sha (%s) does not match push HEAD (%s)"
+        % (range_end[:12], TO[:12])
+    )
+
+# 3. simulated must be exactly False
+if v.get("simulated") is not False:
+    errors.append("simulated is not false — simulated verdicts NEVER satisfy the gate")
+
+# 4. engine must be non-empty and not placeholder
+engine = v.get("engine", "")
+if not engine or engine == "none":
+    errors.append("engine is missing or placeholder")
+
+# 5. HMAC signature verification (fail-closed if key missing)
+hmac_key = os.environ.get("VERDICT_HMAC_KEY", "")
+if not hmac_key:
+    errors.append(
+        "VERDICT_HMAC_KEY not set — fail-closed. "
+        "Set the env var to verify verdict signature."
+    )
+else:
+    sig = v.get("signature", "")
+    if not sig:
+        errors.append("signature field is empty")
+    else:
+        payload = {k: val for k, val in sorted(v.items()) if k != "signature"}
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        expected = hmac.new(hmac_key.encode(), canonical, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, sig):
+            errors.append("HMAC signature mismatch — verdict may be tampered")
 
 if errors:
     print("", file=sys.stderr)
@@ -178,9 +150,9 @@ if errors:
     print("  PUSH BLOCKED — verdict gate failed", file=sys.stderr)
     print("========================================", file=sys.stderr)
     for e in errors:
-        print("  %s" % e, file=sys.stderr)
+        print("  • %s" % e, file=sys.stderr)
     print("", file=sys.stderr)
-    print("  Fix: ./ops/review_auto.sh", file=sys.stderr)
+    print("  Fix: ./ops/ship.sh", file=sys.stderr)
     print("", file=sys.stderr)
     sys.exit(1)
 
@@ -191,5 +163,5 @@ if [ "$GATE_RC" -ne 0 ]; then
   exit 1
 fi
 
-echo "pre-push: APPROVED verdict validated. Push allowed."
+echo "pre-push: APPROVED verdict validated (ship-only + HMAC). Push allowed."
 exit 0

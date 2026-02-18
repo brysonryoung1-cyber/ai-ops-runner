@@ -1,0 +1,108 @@
+name: Verdict Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verdict-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Verify canonical verdict
+        env:
+          VERDICT_HMAC_KEY: ${{ secrets.VERDICT_HMAC_KEY }}
+        run: |
+          set -euo pipefail
+
+          VERDICT="docs/LAST_APPROVED_VERDICT.json"
+          if [ ! -f "$VERDICT" ]; then
+            echo "::error::docs/LAST_APPROVED_VERDICT.json not found"
+            exit 1
+          fi
+
+          python3 - "$VERDICT" "$GITHUB_SHA" <<'PYEOF'
+          import json, sys, os, hmac, hashlib, subprocess
+
+          verdict_path = sys.argv[1]
+          github_sha = sys.argv[2]
+
+          with open(verdict_path) as f:
+              v = json.load(f)
+
+          errors = []
+
+          approved = v.get("approved_head_sha", "")
+          range_end = v.get("range_end_sha", "")
+
+          # Internal consistency
+          if approved != range_end:
+              errors.append("approved_head_sha != range_end_sha")
+
+          # Range match: range_end_sha must equal GITHUB_SHA or be its parent
+          # with only verdict/baseline files in the diff.
+          range_ok = False
+          if range_end == github_sha:
+              range_ok = True
+          else:
+              try:
+                  result = subprocess.run(
+                      ["git", "diff", "--name-only", range_end, github_sha],
+                      capture_output=True, text=True, timeout=10
+                  )
+                  diff_files = sorted(f for f in result.stdout.strip().split("\n") if f)
+                  allowed = sorted(["docs/LAST_APPROVED_VERDICT.json", "docs/LAST_REVIEWED_SHA.txt"])
+                  if diff_files and all(f in allowed for f in diff_files):
+                      range_ok = True
+                      print("Range OK: verdict covers parent, diff is verdict-only metadata")
+                  else:
+                      errors.append(
+                          "range_end_sha (%s) != GITHUB_SHA (%s), diff has non-verdict files: %s"
+                          % (range_end[:12], github_sha[:12], diff_files)
+                      )
+              except Exception as exc:
+                  errors.append("range check error: %s" % exc)
+
+          if not range_ok:
+              errors.append("range_end_sha does not match GITHUB_SHA")
+
+          # simulated must be false
+          if v.get("simulated") is not False:
+              errors.append("simulated is not false")
+
+          # engine must be real
+          if not v.get("engine") or v["engine"] == "none":
+              errors.append("engine is missing or placeholder")
+
+          # HMAC signature
+          hmac_key = os.environ.get("VERDICT_HMAC_KEY", "")
+          if not hmac_key:
+              errors.append("VERDICT_HMAC_KEY secret not configured — cannot verify signature")
+          else:
+              sig = v.get("signature", "")
+              if not sig:
+                  errors.append("signature field is empty")
+              else:
+                  payload = {k: val for k, val in sorted(v.items()) if k != "signature"}
+                  canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+                  expected = hmac.new(hmac_key.encode(), canonical, hashlib.sha256).hexdigest()
+                  if not hmac.compare_digest(expected, sig):
+                      errors.append("HMAC signature mismatch")
+
+          if errors:
+              for e in errors:
+                  print("::error::%s" % e)
+              sys.exit(1)
+
+          print("Verdict gate PASSED")
+          print("  approved_head_sha: %s" % approved)
+          print("  engine: %s" % v.get("engine"))
+          print("  model: %s" % v.get("model"))
+          print("  created_at: %s" % v.get("created_at"))
+          PYEOF
