@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { GlassButton } from "@/components/glass";
 import { useToken } from "@/lib/token-context";
@@ -14,6 +14,19 @@ interface AuthStatus {
   trust_tailscale: boolean;
   console_token_fingerprint: string | null;
   notes: string[];
+}
+
+interface GmailSecretStatus {
+  exists: boolean;
+  fingerprint: string | null;
+}
+
+interface GmailRequirements {
+  ok: boolean;
+  required_redirect_uris?: string[];
+  required_scopes?: string[];
+  filename_expected?: string;
+  app_type?: string;
 }
 
 function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
@@ -37,6 +50,11 @@ export default function SettingsPage() {
   const [bundleLink, setBundleLink] = useState<string | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [gmailSecretStatus, setGmailSecretStatus] = useState<GmailSecretStatus | null>(null);
+  const [gmailRequirements, setGmailRequirements] = useState<GmailRequirements | null>(null);
+  const [gmailInstructionsOpen, setGmailInstructionsOpen] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<"idle" | "uploading" | "success" | "error">("idle");
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/auth/status")
@@ -44,6 +62,29 @@ export default function SettingsPage() {
       .then((data) => setAuthStatus(data))
       .catch((e) => setAuthError(e instanceof Error ? e.message : String(e)));
   }, []);
+
+  const fetchGmailSecretStatus = useCallback(() => {
+    const headers: Record<string, string> = {};
+    if (token) headers["X-OpenClaw-Token"] = token;
+    fetch("/api/connectors/gmail/secret-status", { headers })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.exists !== undefined) setGmailSecretStatus({ exists: data.exists, fingerprint: data.fingerprint ?? null });
+      })
+      .catch(() => setGmailSecretStatus(null));
+  }, [token]);
+
+  const fetchGmailRequirements = useCallback(() => {
+    fetch("/api/connectors/gmail/requirements")
+      .then((r) => r.json())
+      .then((data) => setGmailRequirements(data))
+      .catch(() => setGmailRequirements(null));
+  }, []);
+
+  useEffect(() => {
+    fetchGmailSecretStatus();
+    fetchGmailRequirements();
+  }, [fetchGmailSecretStatus, fetchGmailRequirements]);
 
   const copyDebugInfo = async () => {
     setCopyStatus("copying");
@@ -134,6 +175,111 @@ export default function SettingsPage() {
         <p className="text-sm text-white/70">
           HQ binds to 127.0.0.1 only. Authentication uses X-OpenClaw-Token when configured. Admin actions require OPENCLAW_ADMIN_TOKEN.
         </p>
+      </div>
+
+      {/* Connectors → Gmail OAuth */}
+      <div data-testid="connectors-gmail-oauth" className="glass-surface rounded-2xl p-6 mb-6">
+        <h3 className="text-sm font-semibold text-white/95 mb-3">Connectors → Gmail OAuth</h3>
+        <p className="text-xs text-white/60 mb-4">
+          Upload <code className="bg-white/10 px-1 rounded">gmail_client.json</code> (Google OAuth Desktop / Limited Input Device app). Private-only; allowlisted filename; stored with 0600.
+        </p>
+        <div className="space-y-3 mb-4">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-white/70">Status:</span>
+            {gmailSecretStatus === null ? (
+              <span className="text-xs text-white/50">Loading…</span>
+            ) : gmailSecretStatus.exists ? (
+              <span className="text-xs text-green-400">
+                Present
+                {gmailSecretStatus.fingerprint && (
+                  <span className="ml-1 text-white/50">(fingerprint {gmailSecretStatus.fingerprint})</span>
+                )}
+              </span>
+            ) : (
+              <span className="text-xs text-amber-400">Missing</span>
+            )}
+            <button
+              type="button"
+              onClick={fetchGmailSecretStatus}
+              className="text-[10px] text-blue-400 hover:text-blue-300"
+            >
+              Refresh
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-xs text-white/70 cursor-pointer">
+              <input
+                type="file"
+                accept=".json,application/json"
+                className="sr-only"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file || file.name !== "gmail_client.json") {
+                    setUploadError("Only gmail_client.json is allowlisted.");
+                    setUploadStatus("error");
+                    return;
+                  }
+                  setUploadStatus("uploading");
+                  setUploadError(null);
+                  const headers: Record<string, string> = {};
+                  if (token) headers["X-OpenClaw-Token"] = token;
+                  const form = new FormData();
+                  form.append("file", file);
+                  try {
+                    const res = await fetch("/api/secrets/upload", { method: "POST", headers, body: form });
+                    const data = await res.json();
+                    if (data.ok) {
+                      setUploadStatus("success");
+                      fetchGmailSecretStatus();
+                    } else {
+                      setUploadError((data as { error?: string }).error ?? "Upload failed");
+                      setUploadStatus("error");
+                    }
+                  } catch (err) {
+                    setUploadError(err instanceof Error ? err.message : String(err));
+                    setUploadStatus("error");
+                  }
+                  e.target.value = "";
+                }}
+              />
+              <span className="inline-block px-3 py-1.5 text-xs font-medium rounded bg-white/10 hover:bg-white/20">
+                Choose file
+              </span>
+            </label>
+            {uploadStatus === "uploading" && <span className="text-xs text-white/50">Uploading…</span>}
+            {uploadStatus === "success" && <span className="text-xs text-green-400">Uploaded.</span>}
+            {uploadStatus === "error" && uploadError && (
+              <span className="text-xs text-red-400">{uploadError}</span>
+            )}
+          </div>
+        </div>
+        <details className="mb-3" open={gmailInstructionsOpen} onToggle={(e) => setGmailInstructionsOpen((e.target as HTMLDetailsElement).open)}>
+          <summary className="text-xs font-medium text-white/80 cursor-pointer hover:text-white/95">
+            How to get gmail_client.json
+          </summary>
+          <div className="mt-2 pl-3 border-l border-white/20 text-xs text-white/60 space-y-2">
+            <p>1. Google Cloud Console → APIs &amp; Services → Credentials → Create Credentials → OAuth client ID.</p>
+            <p>2. Application type: Desktop app or TV and Limited Input devices.</p>
+            <p>3. Download JSON and rename to <code className="bg-white/10 px-1">gmail_client.json</code> (or use the downloaded filename if it contains client_id and client_secret).</p>
+            {gmailRequirements?.required_redirect_uris && gmailRequirements.required_redirect_uris.length > 0 && (
+              <p className="mt-2 font-medium text-white/80">Required redirect URI(s) (add in OAuth client if needed):</p>
+            )}
+            {gmailRequirements?.required_redirect_uris?.map((uri, i) => (
+              <p key={i} className="font-mono text-[11px] break-all">{uri}</p>
+            ))}
+            {gmailRequirements?.required_scopes && gmailRequirements.required_scopes.length > 0 && (
+              <p className="mt-2 font-medium text-white/80">Scopes: {gmailRequirements.required_scopes.join(", ")}</p>
+            )}
+          </div>
+        </details>
+        {gmailSecretStatus?.exists && (
+          <p className="text-xs text-white/60">
+            <Link href="/projects/soma_kajabi" className="text-blue-400 hover:text-blue-300">
+              Run Gmail Connect →
+            </Link>
+            {" "}Start device flow, enter user code at the verification URL, then finalize. Then run Phase 0.
+          </p>
+        )}
       </div>
 
       <div className="glass-surface rounded-2xl p-6 mb-6">

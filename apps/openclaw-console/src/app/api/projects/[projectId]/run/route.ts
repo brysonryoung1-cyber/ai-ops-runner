@@ -286,12 +286,22 @@ export async function POST(
     let nextSteps: { instruction?: string; verification_url?: string | null; user_code?: string | null } | undefined;
     let parsedErrorClass: string | undefined;
     let parsedMessage: string | undefined;
+    let requirementsEndpoint: string | undefined;
+    let expectedSecretPathRedacted: string | undefined;
     if (result.stdout) {
       try {
-        const lastLine = result.stdout.trim().split("\n").pop() || "{}";
-        const parsed = JSON.parse(lastLine) as Record<string, unknown>;
+        const trimmed = result.stdout.trim();
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(trimmed) as Record<string, unknown>;
+        } catch {
+          const lastLine = trimmed.split("\n").pop() || "{}";
+          parsed = JSON.parse(lastLine) as Record<string, unknown>;
+        }
         if (typeof parsed.error_class === "string") parsedErrorClass = parsed.error_class;
         if (typeof parsed.message === "string") parsedMessage = parsed.message;
+        if (typeof parsed.requirements_endpoint === "string") requirementsEndpoint = parsed.requirements_endpoint;
+        if (typeof parsed.expected_secret_path_redacted === "string") expectedSecretPathRedacted = parsed.expected_secret_path_redacted;
         if (parsed.result_summary != null) {
           resultSummary = parsed.result_summary;
         } else if ("kajabi" in parsed || "gmail" in parsed) {
@@ -367,16 +377,16 @@ export async function POST(
       (result as { error_class?: string }).error_class ??
       parsedErrorClass ??
       "ACTION_FAILED";
-    return NextResponse.json(
-      {
-        ok: false,
-        error_class: errorClass,
-        message: parsedMessage ?? result.error ?? "Action failed.",
-        run_id: runId,
-        artifact_dir: result.artifact_dir,
-      },
-      { status: 502 }
-    );
+    const errorPayload: Record<string, unknown> = {
+      ok: false,
+      error_class: errorClass,
+      message: parsedMessage ?? result.error ?? "Action failed.",
+      run_id: runId,
+      artifact_dir: result.artifact_dir,
+    };
+    if (requirementsEndpoint) errorPayload.requirements_endpoint = requirementsEndpoint;
+    if (expectedSecretPathRedacted) errorPayload.expected_secret_path_redacted = expectedSecretPathRedacted;
+    return NextResponse.json(errorPayload, { status: 502 });
   } catch (err) {
     const finishedAt = new Date();
     const errorMsg = err instanceof Error ? err.message : String(err);

@@ -23,6 +23,9 @@ function diagnoseCause(info: ForbiddenInfo): string {
   if (ec === "ADMIN_TOKEN_MISSING" || err.includes("admin") || err.includes("deploy+verify")) {
     return "Server missing OPENCLAW_ADMIN_TOKEN (host executor admin actions blocked)";
   }
+  if (ec === "MISSING_GMAIL_CLIENT_JSON") {
+    return "Gmail OAuth client JSON missing. Upload gmail_client.json in Settings → Connectors → Gmail OAuth, or see /api/connectors/gmail/requirements for redirect URIs.";
+  }
   if (err.includes("origin") || err.includes("csrf") || err.includes("forbidden: request origin")) {
     return "Origin/CSRF blocked — request origin could not be verified";
   }

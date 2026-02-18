@@ -50,6 +50,10 @@ def _mask_fingerprint(s: str) -> str:
     return f"{s[:4]}...{s[-4:]}"
 
 
+REQUIREMENTS_ENDPOINT_PATH = "/api/connectors/gmail/requirements"
+EXPECTED_SECRET_PATH_REDACTED = "/etc/ai-ops-runner/secrets/…"
+
+
 def run_device_flow_start(root: Path | None = None) -> dict[str, Any]:
     """Start device flow; return verification_url and user_code (not secrets)."""
     root = root or Path(_repo_root())
@@ -57,7 +61,10 @@ def run_device_flow_start(root: Path | None = None) -> dict[str, Any]:
     if not client:
         return {
             "ok": False,
-            "message": "Add gmail_client.json with client_id and client_secret (Google OAuth Desktop/Limited Input Device app) to config/secrets/ or /etc/ai-ops-runner/secrets/soma_kajabi/.",
+            "error_class": "MISSING_GMAIL_CLIENT_JSON",
+            "message": "Upload gmail_client.json via Settings → Connectors → Gmail OAuth, or place it at the expected secret path.",
+            "requirements_endpoint": REQUIREMENTS_ENDPOINT_PATH,
+            "expected_secret_path_redacted": EXPECTED_SECRET_PATH_REDACTED,
         }
     client_id, client_secret = client
     if not _HAS_URLLIB:

@@ -24,6 +24,7 @@ ops/remote/
 # OpenClaw Console
 apps/openclaw-console/node_modules/
 apps/openclaw-console/.next/
+apps/openclaw-console/tsconfig.tsbuildinfo
 apps/openclaw-console/.env.local
 apps/openclaw-console/artifacts/
 apps/openclaw-console/data/

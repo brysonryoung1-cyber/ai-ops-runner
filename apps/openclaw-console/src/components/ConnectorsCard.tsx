@@ -11,6 +11,8 @@ export type ConnectorResult = {
   artifact_dir?: string;
   error_class?: string;
   message?: string;
+  requirements_endpoint?: string;
+  expected_secret_path_redacted?: string;
   next_steps?: { instruction?: string; verification_url?: string | null; user_code?: string | null };
 };
 
@@ -198,6 +200,14 @@ export default function ConnectorsCard({
       {result && !result.ok && (result.error_class || result.message) && (
         <div className={`mt-3 p-2 rounded text-xs ${variant === "glass" ? "bg-red-500/10 text-red-200" : "bg-red-50 text-red-700"}`}>
           <p className="font-medium mb-0.5">{result.error_class ?? "Error"}: {result.message ?? "Action failed"}</p>
+          {result.error_class === "MISSING_GMAIL_CLIENT_JSON" && (
+            <p className="mt-1">
+              Upload <code className="opacity-90">gmail_client.json</code> in Settings → Connectors → Gmail OAuth.{" "}
+              <a href={result.requirements_endpoint ?? "/api/connectors/gmail/requirements"} className="text-blue-500 hover:underline" target="_blank" rel="noopener noreferrer">
+                Required redirect URIs and scopes →
+              </a>
+            </p>
+          )}
           {artifactDir && (
             <a href={`/artifacts?path=${encodeURIComponent(artifactDir)}`} className="text-blue-500 hover:underline mt-1 inline-block">
               View last run artifacts →

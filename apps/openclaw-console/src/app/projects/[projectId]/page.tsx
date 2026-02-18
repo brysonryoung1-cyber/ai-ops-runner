@@ -148,6 +148,8 @@ export default function ProjectDetailsPage() {
           artifact_dir: data.artifact_dir,
           error_class: data.error_class,
           message: data.message,
+          requirements_endpoint: data.requirements_endpoint,
+          expected_secret_path_redacted: data.expected_secret_path_redacted,
           next_steps: data.next_steps,
         };
         setConnectorResults((prev) => ({ ...prev, [action]: result }));

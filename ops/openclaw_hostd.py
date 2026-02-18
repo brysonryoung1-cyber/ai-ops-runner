@@ -7,11 +7,14 @@ Console reaches hostd via host network (network_mode: host).
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import hmac
 import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -146,6 +149,118 @@ def write_blocked_artifact(run_id: str, action: str) -> None:
         json.dump(blocked_json, f, indent=2)
 
 
+SECRETS_ALLOWLIST_PATH = os.path.join(ROOT_DIR, "configs", "secrets_allowlist.json")
+MAX_SECRET_UPLOAD_BODY = 200_000  # ~128KB base64 + JSON overhead
+
+
+def _load_secrets_allowlist() -> tuple[dict[str, str], int]:
+    """Return (uploads: {filename -> absolute_path}, max_size_bytes). Default 128KB."""
+    default_max = 131072
+    default_uploads = {"gmail_client.json": "/etc/ai-ops-runner/secrets/soma_kajabi/gmail_client.json"}
+    if not os.path.isfile(SECRETS_ALLOWLIST_PATH):
+        return (default_uploads, default_max)
+    try:
+        with open(SECRETS_ALLOWLIST_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        uploads = data.get("uploads")
+        if not isinstance(uploads, dict):
+            return (default_uploads, default_max)
+        out = {}
+        for k, v in uploads.items():
+            if isinstance(k, str) and isinstance(v, str) and k and v and ".." not in k:
+                out[k] = os.path.normpath(v)
+        max_size = int(data.get("max_size_bytes", default_max)) if isinstance(data.get("max_size_bytes"), (int, float)) else default_max
+        return (out if out else default_uploads, max(1, min(max_size, 131072)))
+    except (OSError, json.JSONDecodeError):
+        return (default_uploads, default_max)
+
+
+def _redact_path(p: str) -> str:
+    """Redact path for response; show base dir only."""
+    base = "/etc/ai-ops-runner/secrets"
+    if p.startswith(base):
+        return base + "/…"
+    return "/…"
+
+
+def _fingerprint_prefix(content: bytes) -> str:
+    """Return first 8 chars of sha256 hex (no secrets in value)."""
+    return hashlib.sha256(content).hexdigest()[:8]
+
+
+def _gmail_client_secret_status() -> dict:
+    """Return { exists: bool, fingerprint: str | null }. No secrets."""
+    uploads, _ = _load_secrets_allowlist()
+    path = uploads.get("gmail_client.json")
+    if not path or not os.path.isfile(path):
+        return {"exists": False, "fingerprint": None}
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+        return {"exists": True, "fingerprint": _fingerprint_prefix(raw)}
+    except OSError:
+        return {"exists": False, "fingerprint": None}
+
+
+def handle_secrets_upload(body_raw: bytes) -> tuple[int, dict]:
+    """Validate and write allowlisted secret. Return (status_code, json_body). Never log content."""
+    try:
+        data = json.loads(body_raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return (400, {"ok": False, "error": "Invalid JSON"})
+    if not isinstance(data, dict):
+        return (400, {"ok": False, "error": "Body must be object"})
+    filename = data.get("filename")
+    content_b64 = data.get("content")
+    if not filename or not isinstance(filename, str):
+        return (400, {"ok": False, "error": "Missing filename"})
+    if not content_b64 or not isinstance(content_b64, str):
+        return (400, {"ok": False, "error": "Missing content (base64)"})
+    uploads, max_size = _load_secrets_allowlist()
+    if filename not in uploads:
+        return (403, {"ok": False, "error": "Filename not allowlisted"})
+    target_path = uploads[filename]
+    try:
+        content = base64.b64decode(content_b64, validate=True)
+    except Exception:
+        return (400, {"ok": False, "error": "Invalid base64"})
+    if len(content) > max_size:
+        return (400, {"ok": False, "error": f"Content exceeds {max_size} bytes"})
+    try:
+        parsed = json.loads(content.decode("utf-8"))
+        if not isinstance(parsed, dict):
+            return (400, {"ok": False, "error": "Content must be JSON object"})
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return (400, {"ok": False, "error": "Content is not valid JSON"})
+    parent = os.path.dirname(target_path)
+    try:
+        os.makedirs(parent, mode=0o700, exist_ok=True)
+    except OSError as e:
+        return (500, {"ok": False, "error": "Cannot create secrets dir"})
+    fd, tmp = tempfile.mkstemp(dir=parent, prefix=".upload.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(content)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, target_path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return (500, {"ok": False, "error": "Write failed"})
+    fingerprint = _fingerprint_prefix(content)
+    return (200, {
+        "ok": True,
+        "saved_path": _redact_path(target_path),
+        "fingerprint": fingerprint,
+        "next_steps": [
+            "Run Gmail Connect (start → enter user_code at verification URL → finalize).",
+            "Then run Phase 0 to populate artifacts.",
+        ],
+    })
+
+
 def load_admin_token() -> str | None:
     """Read admin token from file. Returns None if file missing or unreadable."""
     try:
@@ -258,6 +373,18 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(body).encode("utf-8"))
 
+    def _require_admin(self) -> bool:
+        """Return True if admin token present and matches. Sends 403/503 and returns False otherwise."""
+        token = self.headers.get("X-OpenClaw-Admin-Token") or ""
+        expected = load_admin_token()
+        if expected is None:
+            self.send_json(503, {"error": "admin not configured"})
+            return False
+        if not token or not constant_time_compare(token, expected):
+            self.send_json(403, {"error": "Forbidden"})
+            return False
+        return True
+
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == "/health":
@@ -271,20 +398,30 @@ class Handler(BaseHTTPRequestHandler):
                 "time": datetime.now(timezone.utc).isoformat(),
             })
             return
+        if parsed.path == "/connectors/gmail/secret-status":
+            if not self._require_admin():
+                return
+            self.send_json(200, _gmail_client_secret_status())
+            return
         self.send_json(404, {"error": "Not found"})
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/secrets/upload":
+            if not self._require_admin():
+                return
+            content_length = self.headers.get("Content-Length")
+            if not content_length or int(content_length) > MAX_SECRET_UPLOAD_BODY:
+                self.send_json(400, {"ok": False, "error": "Invalid or missing body"})
+                return
+            body = self.rfile.read(int(content_length))
+            status, resp = handle_secrets_upload(body)
+            self.send_json(status, resp)
+            return
         if parsed.path != "/exec":
             self.send_json(404, {"error": "Not found"})
             return
-        token = self.headers.get("X-OpenClaw-Admin-Token") or ""
-        expected = load_admin_token()
-        if expected is None:
-            self.send_json(503, {"error": "admin not configured"})
-            return
-        if not token or not constant_time_compare(token, expected):
-            self.send_json(403, {"error": "Forbidden"})
+        if not self._require_admin():
             return
         content_length = self.headers.get("Content-Length")
         if not content_length or int(content_length) > 4096:
