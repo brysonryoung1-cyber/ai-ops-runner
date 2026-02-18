@@ -84,6 +84,9 @@ resolve_codex_cmd() {
 
 CODEX_CMD="$(resolve_codex_cmd)"
 
+# Bounded retries for transient failures (empty output, invalid JSON, 429/5xx). Fail-closed after exhaustion.
+MAX_REVIEW_ATTEMPTS=5
+
 run_codex_review() {
   local bundle_file="$1"
   local verdict_file="$2"
@@ -102,18 +105,20 @@ run_codex_review() {
   #   --output-last-message = capture the agent's final message to a file
   local raw_output_file="${verdict_file}.raw"
   local stdout_capture="${raw_output_file}.stdout"
+  local stderr_capture="${raw_output_file}.stderr"
   local codex_rc=0
   $CODEX_CMD exec \
     --full-auto \
     -s read-only \
     --output-last-message "$raw_output_file" \
     "$prompt" \
-    2>/dev/null | tee "$stdout_capture" || codex_rc=${PIPESTATUS[0]}
+    2>"$stderr_capture" | tee "$stdout_capture" || codex_rc=${PIPESTATUS[0]}
 
   if [ "$codex_rc" -ne 0 ] && [ ! -f "$raw_output_file" ] && [ ! -s "$stdout_capture" ]; then
     echo "ERROR: Codex exec failed (rc=$codex_rc) and produced no output" >&2
     return 1
   fi
+  # stderr kept in $stderr_capture for retry logic (429/5xx)
 
   # Extract JSON from the captured last message (file preferred; fallback to stdout)
   local raw_content=""
@@ -392,8 +397,27 @@ PYEOF
 
   if [ "$REVIEW_MODE" = "bundle" ]; then
     echo "==> Running Codex review (single bundle)..."
-    run_codex_review "$BUNDLE_FILE" "$VERDICT_FILE" || CODEX_RC=$?
-    if [ "${CODEX_RC:-0}" -ne 0 ]; then
+    CODEX_RC=0
+    REVIEW_ATTEMPT=1
+    while [ "$REVIEW_ATTEMPT" -le "$MAX_REVIEW_ATTEMPTS" ]; do
+      run_codex_review "$BUNDLE_FILE" "$VERDICT_FILE" || CODEX_RC=$?
+      if [ "$CODEX_RC" -eq 0 ] && [ -f "$VERDICT_FILE" ] && validate_verdict "$VERDICT_FILE" >/dev/null 2>&1; then
+        break
+      fi
+      if [ "$REVIEW_ATTEMPT" -lt "$MAX_REVIEW_ATTEMPTS" ]; then
+        RETRY_REASON=""
+        [ ! -f "$VERDICT_FILE" ] || ! python3 -c "import json; json.load(open('$VERDICT_FILE'))" 2>/dev/null && RETRY_REASON="empty/invalid output"
+        [ -f "${VERDICT_FILE}.raw.stderr" ] && grep -qE '429|5[0-9][0-9]' "${VERDICT_FILE}.raw.stderr" 2>/dev/null && RETRY_REASON="${RETRY_REASON:+$RETRY_REASON or }429/5xx"
+        [ -z "$RETRY_REASON" ] && RETRY_REASON="validation or exec failure"
+        echo "  Retry $REVIEW_ATTEMPT/$MAX_REVIEW_ATTEMPTS ($RETRY_REASON) in $((2**REVIEW_ATTEMPT))s..." >&2
+        sleep $((2**REVIEW_ATTEMPT))
+        REVIEW_ATTEMPT=$((REVIEW_ATTEMPT + 1))
+      else
+        echo "ERROR: Review failed after $MAX_REVIEW_ATTEMPTS attempts (empty/invalid output or API errors). Fail-closed." >&2
+        exit 1
+      fi
+    done
+    if [ "$CODEX_RC" -ne 0 ] || [ ! -f "$VERDICT_FILE" ]; then
       echo "==> Codex CLI failed; trying openclaw_codex_review.sh (direct API) fallback..." >&2
       try_openclaw_fallback || exit 1
     fi
@@ -434,7 +458,22 @@ BLOCK only for: deploy/compile failures, unsafe behavior, logging regressions, n
 PKTEOF
 
       echo "  Reviewing packet $PACKET_NUM: $filepath"
-      run_codex_review "$PACKET_FILE" "$PACKET_VERDICT"
+      PACKET_ATTEMPT=1
+      PACKET_RC=1
+      while [ "$PACKET_ATTEMPT" -le "$MAX_REVIEW_ATTEMPTS" ]; do
+        run_codex_review "$PACKET_FILE" "$PACKET_VERDICT" || PACKET_RC=$?
+        if [ "$PACKET_RC" -eq 0 ] && [ -f "$PACKET_VERDICT" ] && python3 -c "import json; json.load(open('$PACKET_VERDICT'))" 2>/dev/null; then
+          break
+        fi
+        if [ "$PACKET_ATTEMPT" -lt "$MAX_REVIEW_ATTEMPTS" ]; then
+          echo "    Retry $PACKET_ATTEMPT/$MAX_REVIEW_ATTEMPTS in $((2**PACKET_ATTEMPT))s..." >&2
+          sleep $((2**PACKET_ATTEMPT))
+          PACKET_ATTEMPT=$((PACKET_ATTEMPT + 1))
+        else
+          echo "ERROR: Packet review failed after $MAX_REVIEW_ATTEMPTS attempts. Fail-closed." >&2
+          exit 1
+        fi
+      done
       ALL_VERDICTS+=("$PACKET_VERDICT")
     done <<< "$FILE_LIST"
 

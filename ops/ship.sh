@@ -280,16 +280,19 @@ do_ship_push() {
 
 write_canonical_verdict() {
   local head_sha="$1" start_sha="$2" artifact_path="$3" engine="$4" model="$5"
+  local tree_sha
+  tree_sha="$(git rev-parse "${head_sha}^{tree}")"
 
-  python3 - "$VERDICT_FILE" "$head_sha" "$start_sha" "$artifact_path" "$engine" "$model" <<'PYEOF'
+  python3 - "$VERDICT_FILE" "$head_sha" "$start_sha" "$tree_sha" "$artifact_path" "$engine" "$model" <<'PYEOF'
 import json, sys, os, hmac, hashlib
 
-vfile, head_sha, start_sha = sys.argv[1], sys.argv[2], sys.argv[3]
-artifact_path, engine, model = sys.argv[4], sys.argv[5], sys.argv[6]
+vfile, head_sha, start_sha, tree_sha = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+artifact_path, engine, model = sys.argv[5], sys.argv[6], sys.argv[7]
 ts = __import__("datetime").datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
 data = {
     "approved_head_sha": head_sha,
+    "approved_tree_sha": tree_sha,
     "range_start_sha": start_sha,
     "range_end_sha": head_sha,
     "simulated": False,
@@ -313,7 +316,7 @@ with open(vfile, "w") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 
-print("  Canonical verdict: approved_head_sha=%s sig=%s..." % (head_sha[:12], data["signature"][:16]))
+print("  Canonical verdict: approved_head_sha=%s approved_tree_sha=%s sig=%s..." % (head_sha[:12], tree_sha[:12], data["signature"][:16]))
 PYEOF
 }
 
@@ -470,19 +473,23 @@ EOF
   echo "  Reviewed HEAD: ${REVIEWED_HEAD:0:12}"
   echo "  Push HEAD:     ${PUSH_HEAD:0:12} (includes verdict commit)"
 
-  # Verify the canonical verdict is internally consistent
+  # Verify the canonical verdict is internally consistent (including tree)
   python3 - "$VERDICT_FILE" "$REVIEWED_HEAD" <<'PYEOF' || { echo "ERROR: Verdict verification failed" >&2; continue; }
-import json, sys
+import json, sys, subprocess
 with open(sys.argv[1]) as f:
     v = json.load(f)
 rh = sys.argv[2]
 if v["approved_head_sha"] != rh or v["range_end_sha"] != rh:
     print("MISMATCH", file=sys.stderr)
     sys.exit(1)
+tree_sha = subprocess.run(["git", "rev-parse", rh + "^{tree}"], capture_output=True, text=True, timeout=5, check=True).stdout.strip()
+if v.get("approved_tree_sha") != tree_sha:
+    print("approved_tree_sha mismatch", file=sys.stderr)
+    sys.exit(1)
 if v["simulated"] is not False:
     print("simulated is not false", file=sys.stderr)
     sys.exit(1)
-print("  Verdict consistent: approved_head_sha=%s" % rh[:12])
+print("  Verdict consistent: approved_head_sha=%s approved_tree_sha=%s" % (rh[:12], tree_sha[:12]))
 PYEOF
 
   # ── Push (never modify branch protection) ──

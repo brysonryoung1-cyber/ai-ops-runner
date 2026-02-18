@@ -42,37 +42,75 @@ jobs:
 
           approved = v.get("approved_head_sha", "")
           range_end = v.get("range_end_sha", "")
+          approved_tree = v.get("approved_tree_sha", "")
 
           # Internal consistency
           if approved != range_end:
               errors.append("approved_head_sha != range_end_sha")
 
-          # Range match: range_end_sha must equal HEAD_SHA or be its parent
-          # with only verdict/baseline files in the diff (PR: head = branch tip; push: head = GITHUB_SHA).
-          range_ok = False
-          if range_end == head_sha:
-              range_ok = True
-          else:
-              try:
-                  result = subprocess.run(
-                      ["git", "diff", "--name-only", range_end, head_sha],
-                      capture_output=True, text=True, timeout=10
-                  )
-                  diff_files = sorted(f for f in result.stdout.strip().split("\n") if f)
-                  allowed = sorted(["docs/LAST_APPROVED_VERDICT.json", "docs/LAST_REVIEWED_SHA.txt", ".github/workflows/verdict_gate.yml"])
-                  if diff_files and all(f in allowed for f in diff_files):
-                      range_ok = True
-                      print("Range OK: verdict covers parent, diff is verdict-only metadata")
-                  else:
-                      errors.append(
-                          "range_end_sha (%s) != HEAD_SHA (%s), diff has non-verdict files: %s"
-                          % (range_end[:12], head_sha[:12], diff_files)
-                      )
-              except Exception as exc:
-                  errors.append("range check error: %s" % exc)
+          # approved_tree_sha: when present must be 40-hex. When missing, use legacy range_end gate (backward compat).
+          use_tree_gate = bool(approved_tree and len(approved_tree) == 40 and all(c in "0123456789abcdef" for c in approved_tree.lower()))
+          if approved_tree and not use_tree_gate:
+              errors.append("approved_tree_sha invalid (must be 40-hex when present)")
 
-          if not range_ok:
-              errors.append("range_end_sha does not match HEAD_SHA")
+          tree_ok = False
+          if not errors:
+              try:
+                  if use_tree_gate:
+                      head_tree_result = subprocess.run(
+                          ["git", "rev-parse", head_sha + "^{tree}"],
+                          capture_output=True, text=True, timeout=10
+                      )
+                      if head_tree_result.returncode != 0:
+                          errors.append("git rev-parse HEAD^{tree} failed")
+                      else:
+                          head_tree = head_tree_result.stdout.strip()
+                          if head_tree == approved_tree:
+                              tree_ok = True
+                          else:
+                              diff_result = subprocess.run(
+                                  ["git", "diff", "--name-only", range_end, head_sha],
+                                  capture_output=True, text=True, timeout=10
+                              )
+                              if diff_result.returncode != 0:
+                                  errors.append("range_end..HEAD diff failed")
+                              else:
+                                  diff_files = sorted(f for f in diff_result.stdout.strip().split("\n") if f)
+                                  allowed = ["docs/LAST_APPROVED_VERDICT.json", "docs/LAST_REVIEWED_SHA.txt", ".github/workflows/verdict_gate.yml"]
+                                  if diff_files and all(f in allowed for f in diff_files):
+                                      tree_ok = True
+                                      print("Tree differs but diff is allowlisted only")
+                                  else:
+                                      errors.append(
+                                          "approved_tree_sha (%s) != HEAD^{tree} (%s), diff: %s"
+                                          % (approved_tree[:12], head_tree[:12], diff_files)
+                                      )
+                  else:
+                      if range_end == head_sha:
+                          tree_ok = True
+                      else:
+                          diff_result = subprocess.run(
+                              ["git", "diff", "--name-only", range_end, head_sha],
+                              capture_output=True, text=True, timeout=10
+                          )
+                          if diff_result.returncode != 0:
+                              errors.append("range_end..HEAD diff failed")
+                          else:
+                              diff_files = sorted(f for f in diff_result.stdout.strip().split("\n") if f)
+                              allowed = ["docs/LAST_APPROVED_VERDICT.json", "docs/LAST_REVIEWED_SHA.txt", ".github/workflows/verdict_gate.yml"]
+                              if diff_files and all(f in allowed for f in diff_files):
+                                  tree_ok = True
+                                  print("Range OK: verdict covers parent, diff is verdict-only metadata")
+                              else:
+                                  errors.append(
+                                      "range_end_sha (%s) != HEAD_SHA (%s), diff: %s"
+                                      % (range_end[:12], head_sha[:12], diff_files)
+                                  )
+              except Exception as exc:
+                  errors.append("gate check error: %s" % exc)
+
+          if not tree_ok and not errors:
+              errors.append("verdict does not cover HEAD (tree or range_end mismatch)")
 
           # simulated must be false
           if v.get("simulated") is not False:
@@ -104,6 +142,7 @@ jobs:
 
           print("Verdict gate PASSED")
           print("  approved_head_sha: %s" % approved)
+          print("  approved_tree_sha: %s" % approved_tree)
           print("  engine: %s" % v.get("engine"))
           print("  model: %s" % v.get("model"))
           print("  created_at: %s" % v.get("created_at"))

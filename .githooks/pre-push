@@ -62,7 +62,7 @@ if [ ! -f "$VERDICT_PATH" ]; then
   exit 1
 fi
 
-# ── Strict gate validation (Python) ──
+# ── Strict gate validation (Python): tree-based attestation (squash-safe) ──
 GATE_RC=0
 python3 - "$VERDICT_PATH" "$TO" <<'PYEOF' || GATE_RC=$?
 import json, sys, os, hmac, hashlib, subprocess
@@ -78,45 +78,78 @@ errors = []
 # 1. Internal consistency: approved_head_sha == range_end_sha
 approved = v.get("approved_head_sha", "")
 range_end = v.get("range_end_sha", "")
+approved_tree = v.get("approved_tree_sha", "")
 if approved != range_end:
     errors.append(
         "internal inconsistency: approved_head_sha (%s) != range_end_sha (%s)"
         % (approved[:12], range_end[:12])
     )
 
-# 2. Range match: range_end_sha must match push HEAD or be its parent
-#    with only verdict/baseline files in the diff.
-range_ok = False
-if range_end == TO:
-    range_ok = True
-else:
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--name-only", range_end, TO],
-            capture_output=True, text=True, timeout=10
-        )
-        diff_files = sorted(f for f in result.stdout.strip().split("\n") if f)
-        allowed = sorted(["docs/LAST_APPROVED_VERDICT.json", "docs/LAST_REVIEWED_SHA.txt"])
-        if diff_files and all(f in allowed for f in diff_files):
-            range_ok = True
-        elif diff_files:
-            errors.append(
-                "range_end_sha (%s) != push HEAD (%s) and diff contains non-verdict files: %s"
-                % (range_end[:12], TO[:12], diff_files)
-            )
-        else:
-            errors.append(
-                "range_end_sha (%s) != push HEAD (%s) and git diff failed"
-                % (range_end[:12], TO[:12])
-            )
-    except Exception as exc:
-        errors.append("range check failed: %s" % exc)
+# 2. approved_tree_sha: when present must be 40-hex. When missing, use legacy range_end gate (backward compat).
+use_tree_gate = bool(approved_tree and len(approved_tree) == 40 and all(c in "0123456789abcdef" for c in approved_tree.lower()))
+if approved_tree and not use_tree_gate:
+    errors.append("approved_tree_sha invalid (must be 40-hex when present)")
 
-if not range_ok:
-    errors.append(
-        "range_end_sha (%s) does not match push HEAD (%s)"
-        % (range_end[:12], TO[:12])
+def run_git(args, timeout=10):
+    return subprocess.run(
+        ["git"] + args,
+        capture_output=True, text=True, timeout=timeout, check=False
     )
+
+# 3. Gate: tree-based (when approved_tree_sha present) or legacy range_end + allowlist
+tree_ok = False
+if not errors:
+    try:
+        if use_tree_gate:
+            head_tree_result = run_git(["rev-parse", TO + "^{tree}"])
+            if head_tree_result.returncode != 0:
+                errors.append("git rev-parse HEAD^{tree} failed")
+            else:
+                local_head_tree = head_tree_result.stdout.strip()
+                if local_head_tree == approved_tree:
+                    tree_ok = True
+                else:
+                    diff_result = run_git(["diff", "--name-only", range_end, TO])
+                    if diff_result.returncode != 0:
+                        errors.append(
+                            "range_end_sha (%s)..push HEAD (%s) diff failed"
+                            % (range_end[:12], TO[:12])
+                        )
+                    else:
+                        diff_files = sorted(f for f in diff_result.stdout.strip().split("\n") if f)
+                        allowed = ["docs/LAST_APPROVED_VERDICT.json", "docs/LAST_REVIEWED_SHA.txt"]
+                        if diff_files and all(f in allowed for f in diff_files):
+                            tree_ok = True
+                        else:
+                            errors.append(
+                                "approved_tree_sha (%s) != push HEAD tree (%s); diff: %s"
+                                % (approved_tree[:12], local_head_tree[:12], diff_files)
+                            )
+        else:
+            if range_end == TO:
+                tree_ok = True
+            else:
+                diff_result = run_git(["diff", "--name-only", range_end, TO])
+                if diff_result.returncode != 0:
+                    errors.append(
+                        "range_end_sha (%s)..push HEAD (%s) diff failed"
+                        % (range_end[:12], TO[:12])
+                    )
+                else:
+                    diff_files = sorted(f for f in diff_result.stdout.strip().split("\n") if f)
+                    allowed = ["docs/LAST_APPROVED_VERDICT.json", "docs/LAST_REVIEWED_SHA.txt"]
+                    if diff_files and all(f in allowed for f in diff_files):
+                        tree_ok = True
+                    else:
+                        errors.append(
+                            "range_end_sha (%s) != push HEAD (%s); diff: %s"
+                            % (range_end[:12], TO[:12], diff_files)
+                        )
+    except Exception as exc:
+        errors.append("gate check failed: %s" % exc)
+
+if not tree_ok and not errors:
+    errors.append("verdict does not cover push HEAD (tree or range_end mismatch)")
 
 # 3. simulated must be exactly False
 if v.get("simulated") is not False:
