@@ -123,6 +123,34 @@ for f in services/test_runner/orb_wrappers/orb_review_bundle.sh services/test_ru
   fi
 done
 
+# --- Check verdict gate branch protection (main) ---
+echo ""
+echo "--- Verdict gate (branch protection) ---"
+ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
+if [ -n "$ORIGIN_URL" ]; then
+  if echo "$ORIGIN_URL" | grep -q '^https://github.com/'; then
+    OWNER_REPO="$(echo "$ORIGIN_URL" | sed -n 's|https://github.com/\([^/]*\)/\([^.]*\)\.git|\1/\2|p')"
+  elif echo "$ORIGIN_URL" | grep -q '^git@github.com:'; then
+    OWNER_REPO="$(echo "$ORIGIN_URL" | sed -n 's|git@github.com:\([^/]*\)/\([^.]*\)\.git|\1/\2|p')"
+  else
+    OWNER_REPO=""
+  fi
+  if [ -n "$OWNER_REPO" ]; then
+    PROT_JSON="$(gh api -H "Accept: application/vnd.github+json" "/repos/$OWNER_REPO/branches/main/protection/required_status_checks" 2>/dev/null)" || true
+    if [ -z "$PROT_JSON" ]; then
+      check_fail "Branch protection missing or no access: main must require status check 'verdict-gate'. See docs/REVIEW_WORKFLOW.md for UI steps."
+    elif ! echo "$PROT_JSON" | grep -q '"verdict-gate"'; then
+      check_fail "Required status check 'verdict-gate' not set on main. See docs/REVIEW_WORKFLOW.md for UI steps."
+    else
+      check_pass "main requires status check verdict-gate"
+    fi
+  else
+    check_warn "Could not parse owner/repo from origin; skipping branch protection check"
+  fi
+else
+  check_warn "No git origin; skipping branch protection check"
+fi
+
 # --- Check .gitignore ---
 echo ""
 echo "--- Gitignore ---"

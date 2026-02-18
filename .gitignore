@@ -15,6 +15,7 @@ venv/
 .pytest_cache/
 .mypy_cache/
 review_packets/
+.locks/
 ops/remote/
 # Ignore .cursor except rules (rule files must travel with repo)
 .cursor/*
