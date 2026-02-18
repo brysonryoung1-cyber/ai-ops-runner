@@ -1,0 +1,11 @@
+{
+  "approved_head_sha": "253386d635ea7a4f40c39d6ae55c6a001dbd5fff",
+  "range_start_sha": "c6fa5e80153941ca1e14140f23ec83eaef445208",
+  "range_end_sha": "253386d635ea7a4f40c39d6ae55c6a001dbd5fff",
+  "simulated": false,
+  "engine": "codex_cli",
+  "model": "codex-cli 0.98.0",
+  "created_at": "2026-02-18T03:45:05Z",
+  "verdict_artifact_path": "review_packets/20260218_034447/CODEX_VERDICT.json",
+  "signature": "0bace56a4c9608a7d0fbf12d2fb8135363c25ebbc2b33fdd234ccd0cfe0f3263"
+}
