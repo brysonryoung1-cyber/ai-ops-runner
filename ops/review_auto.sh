@@ -124,11 +124,52 @@ run_codex_review() {
   json_output="$(echo "$raw_content" | python3 -c "
 import sys, json, re
 
+def extract_json(text):
+    # Strip markdown code fence if present
+    m = re.search(r'\`\`\`(?:json)?\s*\n?(.*?)\n?\`\`\`', text, re.DOTALL)
+    if m:
+        text = m.group(1).strip()
+    start = text.find('{')
+    if start == -1:
+        return None
+    depth = 0
+    i = start
+    in_str = False
+    escape = False
+    quote = None
+    while i < len(text):
+        c = text[i]
+        if escape:
+            escape = False
+            i += 1
+            continue
+        if c == '\\\\' and in_str:
+            escape = True
+            i += 1
+            continue
+        if in_str:
+            if c == quote:
+                in_str = False
+            i += 1
+            continue
+        if c == '\"':
+            in_str = True
+            quote = c
+            i += 1
+            continue
+        if c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:i+1]
+        i += 1
+    return None
+
 text = sys.stdin.read()
-# Find JSON object in output — handles nested objects
-match = re.search(r'\{[^{}]*(?:\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}[^{}]*)*\}', text, re.DOTALL)
-if match:
-    obj = json.loads(match.group())
+extracted = extract_json(text)
+if extracted:
+    obj = json.loads(extracted)
     print(json.dumps(obj))
 else:
     sys.exit(1)
