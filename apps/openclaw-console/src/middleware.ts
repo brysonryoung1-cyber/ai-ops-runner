@@ -71,7 +71,7 @@ export function middleware(req: NextRequest) {
     return NextResponse.json(
       {
         ok: false,
-        error: "Forbidden",
+        error: "Unauthorized",
         error_class: "HQ_TOKEN_MISSING",
         reason: provided
           ? "X-OpenClaw-Token header present but invalid."
@@ -83,7 +83,7 @@ export function middleware(req: NextRequest) {
         origin_seen: req.headers.get("origin") ?? null,
         origin_allowed: false,
       },
-      { status: 403 }
+      { status: 401 }
     );
   }
 

@@ -94,9 +94,44 @@ write_verdict() {
 
 # --- helper: attempt push, return exit code ---
 try_push() {
+  local ship="${1:-0}"
+  local hmac_key="${2:-}"
   local rc=0
-  git push origin main >/dev/null 2>&1 || rc=$?
+  if [ "$ship" = "1" ] && [ -n "$hmac_key" ]; then
+    OPENCLAW_SHIP=1 VERDICT_HMAC_KEY="$hmac_key" git push origin main >/dev/null 2>&1 || rc=$?
+  else
+    git push origin main >/dev/null 2>&1 || rc=$?
+  fi
   echo "$rc"
+}
+
+# --- helper: write canonical verdict (v2 gate) and commit ---
+TEST_HMAC_KEY="pre-push-selftest-key-$(date +%s)"
+write_canonical_verdict_and_commit() {
+  local head_sha="$1"
+  python3 - "$CLONE/docs/LAST_APPROVED_VERDICT.json" "$head_sha" "$TEST_HMAC_KEY" <<'PYEOF'
+import json, sys, hmac, hashlib
+vfile, head_sha, key = sys.argv[1], sys.argv[2], sys.argv[3]
+data = {
+    "approved_head_sha": head_sha,
+    "range_start_sha": head_sha,
+    "range_end_sha": head_sha,
+    "simulated": False,
+    "engine": "codex_cli",
+    "model": "test",
+    "created_at": "2026-01-01T00:00:00Z",
+    "verdict_artifact_path": "review_packets/test/CODEX_VERDICT.json",
+    "signature": ""
+}
+payload = {k: v for k, v in sorted(data.items()) if k != "signature"}
+canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+data["signature"] = hmac.new(key.encode(), canonical, hashlib.sha256).hexdigest()
+with open(vfile, "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+PYEOF
+  git add docs/LAST_APPROVED_VERDICT.json
+  git commit -m "chore: canonical verdict" >/dev/null 2>&1
 }
 
 # ============================================================
@@ -116,7 +151,7 @@ write_verdict '{
     "codex_cli": null
   }
 }'
-RC="$(try_push)"
+RC="$(try_push 0)"
 assert_eq "simulated verdict (meta.simulated=true) blocks push" "1" "$RC"
 
 # ============================================================
@@ -136,7 +171,7 @@ write_verdict '{
     "codex_cli": null
   }
 }'
-RC="$(try_push)"
+RC="$(try_push 0)"
 assert_eq "null codex_cli with simulated=false blocks push" "1" "$RC"
 
 # ============================================================
@@ -156,7 +191,7 @@ write_verdict '{
     "codex_cli": {"version": "1.0.0", "command": "codex exec"}
   }
 }'
-RC="$(try_push)"
+RC="$(try_push 0)"
 assert_eq "wrong since_sha blocks push" "1" "$RC"
 
 # ============================================================
@@ -176,27 +211,16 @@ write_verdict '{
     "codex_cli": {"version": "1.0.0", "command": "codex exec"}
   }
 }'
-RC="$(try_push)"
+RC="$(try_push 0)"
 assert_eq "wrong to_sha blocks push" "1" "$RC"
 
 # ============================================================
-# Test 5: Correct real verdict → push MUST SUCCEED
+# Test 5: Correct real verdict (v2 gate) → push MUST SUCCEED
 # ============================================================
-write_verdict '{
-  "verdict": "APPROVED",
-  "blockers": [],
-  "non_blocking": [],
-  "tests_run": "test",
-  "meta": {
-    "since_sha": "'"$BASE_SHA"'",
-    "to_sha": "'"$HEAD_SHA"'",
-    "generated_at": "2026-01-01T00:00:00Z",
-    "review_mode": "bundle",
-    "simulated": false,
-    "codex_cli": {"version": "1.0.0", "command": "codex exec --test"}
-  }
-}'
-RC="$(try_push)"
+# v2 gate requires OPENCLAW_SHIP=1 and docs/LAST_APPROVED_VERDICT.json with valid HMAC
+mkdir -p "$CLONE/docs"
+write_canonical_verdict_and_commit "$HEAD_SHA"
+RC="$(try_push 1 "$TEST_HMAC_KEY")"
 assert_eq "correct real verdict allows push" "0" "$RC"
 
 # ============================================================
@@ -208,7 +232,7 @@ echo "another change" >> README.md
 git add README.md
 git commit -m "another change" >/dev/null 2>&1
 rm -rf "$CLONE/review_packets"
-RC="$(try_push)"
+RC="$(try_push 0)"
 assert_eq "no verdict file blocks push" "1" "$RC"
 
 # ============================================================
@@ -230,7 +254,7 @@ write_verdict '{
     "codex_cli": {"version": "1.0.0", "command": "codex exec"}
   }
 }'
-RC="$(try_push)"
+RC="$(try_push 0)"
 assert_eq "BLOCKED verdict blocks push" "1" "$RC"
 
 # ============================================================
@@ -250,7 +274,7 @@ write_verdict '{
     "codex_cli": {"version": "", "command": "codex exec"}
   }
 }'
-RC="$(try_push)"
+RC="$(try_push 0)"
 assert_eq "empty codex_cli.version blocks push" "1" "$RC"
 
 # --- Summary ---

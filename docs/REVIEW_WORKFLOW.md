@@ -40,6 +40,18 @@ The `verdict_gate` GitHub Action (`.github/workflows/verdict_gate.yml`) runs on 
 
 **Required**: Add `VERDICT_HMAC_KEY` as a GitHub Actions secret and enable `verdict_gate` as a required status check in branch protection.
 
+### Ship modes (never bypass branch protection)
+
+- **Direct-to-main**: If branch protection does *not* require a pull request before merging, `./ops/ship.sh` pushes directly to `main` with `OPENCLAW_SHIP=1`. The pre-push hook and CI verdict-gate still apply.
+- **PR-based ship**: If branch protection *does* require a pull request (and/or reviews) before merging, `./ops/ship.sh` automatically:
+  1. Creates a temporary branch `ship/<timestamp>-<shortsha>`
+  2. Pushes it and opens a PR targeting `main`
+  3. Waits for the required check **verdict-gate** to pass on the PR
+  4. Merges the PR with **squash** (keeps `main` history clean)
+  5. Verifies `main` and cleans up the temp branch
+
+**Never clear required status checks and never bypass branch protection.** Use `./ops/bootstrap_branch_protection.sh` for one-time setup so the verdict-gate check exists before adding it to protection.
+
 ## Canonical Verdict Schema
 
 `docs/LAST_APPROVED_VERDICT.json` — committed proof file:
@@ -188,13 +200,12 @@ The signature covers all fields except `signature` itself, serialized as sorted 
 
 ### Branch protection (if API fails or you prefer UI)
 
-If `gh api` or automation cannot set branch protection (e.g. permissions), do this manually:
+GitHub will not let you add a required status check until that check has run at least once. Use the one-time bootstrap:
 
-1. **GitHub → Repo → Settings → Branches**
-2. Under **Branch protection rules**, add or edit the rule for **main**.
-3. Check **Require status checks to pass before merging**.
-4. In **Status checks that are required**, search for and add **verdict-gate** (the name of the workflow job).
-5. Check **Do not allow bypassing the above settings** (enforce for admins).
-6. Save changes.
+1. Run `./ops/bootstrap_branch_protection.sh` — it confirms the workflow exists and prints exact steps.
+2. Trigger the verdict-gate workflow once (e.g. push a commit or run from Actions) so the **verdict-gate** check name exists.
+3. Then add it to branch protection (never clear existing required checks):
+   - **UI**: GitHub → Repo → Settings → Branches → rule for **main** → Require status checks → add **verdict-gate** → Do not allow bypassing → Save.
+   - **API**: `gh api -X POST .../branches/main/protection/required_status_checks/contexts -f 'contexts[]=verdict-gate'` (adds without removing others).
 
-Run `./ops/doctor_repo.sh` to verify branch protection; it fails if `verdict-gate` is not required.
+Run `./ops/doctor_repo.sh` to verify; it fails if `verdict-gate` is missing or protection is in a bypass-prone state.

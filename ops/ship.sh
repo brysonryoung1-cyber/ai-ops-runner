@@ -188,6 +188,90 @@ fi
 BASELINE_FILE="$ROOT_DIR/docs/LAST_REVIEWED_SHA.txt"
 VERDICT_FILE="$ROOT_DIR/docs/LAST_APPROVED_VERDICT.json"
 
+# Get owner/repo from origin (for gh api). Never modify branch protection from this script.
+get_owner_repo() {
+  local url
+  url="$(git remote get-url origin 2>/dev/null || true)"
+  if [ -z "$url" ]; then
+    echo ""
+    return
+  fi
+  if echo "$url" | grep -q '^https://github.com/'; then
+    echo "$url" | sed -n 's|https://github.com/\([^/]*\)/\([^.]*\)\.git|\1/\2|p'
+  elif echo "$url" | grep -q '^git@github.com:'; then
+    echo "$url" | sed -n 's|git@github.com:\([^/]*\)/\([^.]*\)\.git|\1/\2|p'
+  else
+    echo ""
+  fi
+}
+
+# Detect if main requires a PR before merge (required_pull_request_reviews non-null).
+# Returns 0 if PR required, 1 if not or on API failure (fail open to direct push).
+# ship.sh NEVER calls gh api to change branch protection (no PUT/PATCH/POST/DELETE).
+main_requires_pr() {
+  local owner_repo prot_json
+  [ -n "${SHIP_TEST_MOCK_PR_REQUIRED:-}" ] && { [ "$SHIP_TEST_MOCK_PR_REQUIRED" = "1" ] && return 0 || return 1; }
+  owner_repo="$(get_owner_repo)"
+  [ -z "$owner_repo" ] && return 1
+  prot_json="$(gh api -H "Accept: application/vnd.github+json" "/repos/$owner_repo/branches/main/protection" 2>/dev/null)" || return 1
+  if echo "$prot_json" | grep -q '"required_pull_request_reviews":[^n]'; then
+    # Could be null; check for actual object (has "url" or "dismissal_restrictions" etc.)
+    if echo "$prot_json" | grep -qE '"required_pull_request_reviews"\s*:\s*\{'; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# Push to origin/main: either direct push or PR flow (create PR, wait for verdict-gate, squash merge).
+# Argument: SHA we expect on main after push (PUSH_HEAD for new verdict, HEAD for metadata-only).
+# ship.sh NEVER modifies branch protection.
+do_ship_push() {
+  local expected_sha="$1"
+  local owner_repo ship_branch pr_num i max_wait
+
+  if main_requires_pr; then
+    echo "  Main requires PR before merge; using PR-based ship."
+    owner_repo="$(get_owner_repo)"
+    [ -z "$owner_repo" ] && { echo "ERROR: Could not determine owner/repo for PR flow." >&2; return 1; }
+    ship_branch="ship/$(date +%Y%m%d%H%M%S)-$(git rev-parse --short "$expected_sha")"
+    git checkout -b "$ship_branch"
+    git push -u origin "$ship_branch"
+    pr_num="$(gh pr create --base main --head "$ship_branch" --title "ship: $(git rev-parse --short "$expected_sha")" --body "Automated ship PR. Verdict gate must pass.")"
+    echo "  PR #$pr_num created. Waiting for required check 'verdict-gate'..."
+    max_wait=90
+    i=0
+    while [ "$i" -lt "$max_wait" ]; do
+      sleep 10
+      i=$((i + 1))
+      if gh pr view "$pr_num" --json statusCheckRollup -q '.statusCheckRollup[]? | select(.name=="verdict-gate") | .conclusion' 2>/dev/null | grep -q SUCCESS; then
+        break
+      fi
+      echo "  ... waiting for verdict-gate ($i/${max_wait})"
+    done
+    if ! gh pr view "$pr_num" --json statusCheckRollup -q '.statusCheckRollup[]? | select(.name=="verdict-gate") | .conclusion' 2>/dev/null | grep -q SUCCESS; then
+      echo "ERROR: verdict-gate did not pass on PR #$pr_num within timeout." >&2
+      git checkout main 2>/dev/null || true
+      git branch -D "$ship_branch" 2>/dev/null || true
+      return 1
+    fi
+    gh pr merge "$pr_num" --squash --delete-branch
+    git fetch origin main --no-tags 2>/dev/null || true
+    git checkout main
+    git reset --hard origin/main
+    git branch -D "$ship_branch" 2>/dev/null || true
+    if [ "$(git rev-parse origin/main^{tree})" != "$(git rev-parse "$expected_sha^{tree}")" ]; then
+      echo "ERROR: After merge, main tree does not match expected." >&2
+      return 1
+    fi
+    echo "  PR merged (squash). Main updated."
+    return 0
+  fi
+
+  OPENCLAW_SHIP=1 git push origin HEAD:refs/heads/main
+  return 0
+}
+
 write_canonical_verdict() {
   local head_sha="$1" start_sha="$2" artifact_path="$3" engine="$4" model="$5"
 
@@ -309,12 +393,18 @@ while [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; do
 
     echo ""
     echo "==> Pushing existing metadata-only commit to origin/main..."
-    OPENCLAW_SHIP=1 git push origin HEAD:refs/heads/main
+    if ! do_ship_push "$HEAD_SHA"; then
+      echo "ERROR: do_ship_push failed." >&2
+      exit 1
+    fi
     git fetch origin main --no-tags 2>/dev/null || true
     REMOTE_AFTER="$(git rev-parse origin/main)"
     if [ "$REMOTE_AFTER" != "$HEAD_SHA" ]; then
-      echo "ERROR: Push verification failed. origin/main=$REMOTE_AFTER, expected=$HEAD_SHA" >&2
-      exit 1
+      # PR squash creates a new commit; verify tree equality
+      if [ "$(git rev-parse "$REMOTE_AFTER^{tree}")" != "$(git rev-parse "$HEAD_SHA^{tree}")" ]; then
+        echo "ERROR: Push verification failed. origin/main=$REMOTE_AFTER, expected=$HEAD_SHA" >&2
+        exit 1
+      fi
     fi
     echo "  Push complete (no new review commit required)."
     exit 0
@@ -389,17 +479,22 @@ if v["simulated"] is not False:
 print("  Verdict consistent: approved_head_sha=%s" % rh[:12])
 PYEOF
 
-  # ── Push ──
+  # ── Push (never modify branch protection) ──
   echo ""
   echo "==> Pushing to origin/main..."
-  OPENCLAW_SHIP=1 git push origin HEAD:refs/heads/main
+  if ! do_ship_push "$PUSH_HEAD"; then
+    echo "ERROR: do_ship_push failed." >&2
+    exit 1
+  fi
 
-  # Verify push
+  # Verify push (after PR flow, main may be squash commit; verify tree)
   git fetch origin main --no-tags 2>/dev/null || true
   REMOTE_AFTER="$(git rev-parse origin/main)"
   if [ "$REMOTE_AFTER" != "$PUSH_HEAD" ]; then
-    echo "ERROR: Push verification failed. origin/main=$REMOTE_AFTER, expected=$PUSH_HEAD" >&2
-    exit 1
+    if [ "$(git rev-parse "$REMOTE_AFTER^{tree}")" != "$(git rev-parse "$PUSH_HEAD^{tree}")" ]; then
+      echo "ERROR: Push verification failed. origin/main=$REMOTE_AFTER, expected tree=$PUSH_HEAD" >&2
+      exit 1
+    fi
   fi
 
   echo ""

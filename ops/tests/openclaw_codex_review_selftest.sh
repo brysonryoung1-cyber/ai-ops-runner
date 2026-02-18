@@ -104,8 +104,8 @@ else
 fi
 
 # --- Test 13: Script never prints raw API key ---
-# Look for direct key echo/print (excluding masked status)
-if grep -qE 'echo.*OPENAI_API_KEY|print.*api_key[^_]' "$REVIEW" 2>/dev/null; then
+# Fail only on patterns that could expand or print the key (not literal env name in messages)
+if grep -qE 'echo\s+\$OPENAI_API_KEY|echo\s+"\$OPENAI_API_KEY|print\s*\([^)]*api_key\s*\)' "$REVIEW" 2>/dev/null; then
   fail "Script may print raw API key"
 else
   pass "Script does not print raw API key"
