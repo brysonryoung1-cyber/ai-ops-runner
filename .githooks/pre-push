@@ -17,18 +17,6 @@ set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 
-# ── Gate 0: Ship-only enforcement ──
-if [ "${OPENCLAW_SHIP:-0}" != "1" ]; then
-  echo "" >&2
-  echo "========================================" >&2
-  echo "  PUSH BLOCKED — direct push forbidden" >&2
-  echo "========================================" >&2
-  echo "  Only ops/ship.sh may push to main." >&2
-  echo "  Run:  ./ops/ship.sh" >&2
-  echo "" >&2
-  exit 1
-fi
-
 # ── Read stdin (git push protocol) ──
 PUSH_LOCAL_SHA=""
 PUSH_REMOTE_SHA=""
@@ -42,8 +30,21 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   fi
 done
 
+# Only enforce ship gate for pushes to main (allow pushes to other branches, e.g. ship/* for PR flow)
 if [ -z "$PUSH_LOCAL_SHA" ]; then
   exit 0
+fi
+
+# ── Gate 0: Ship-only enforcement (main only) ──
+if [ "${OPENCLAW_SHIP:-0}" != "1" ]; then
+  echo "" >&2
+  echo "========================================" >&2
+  echo "  PUSH BLOCKED — direct push forbidden" >&2
+  echo "========================================" >&2
+  echo "  Only ops/ship.sh may push to main." >&2
+  echo "  Run:  ./ops/ship.sh" >&2
+  echo "" >&2
+  exit 1
 fi
 
 TO="$PUSH_LOCAL_SHA"
