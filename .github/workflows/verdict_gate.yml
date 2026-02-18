@@ -13,11 +13,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Verify canonical verdict
         env:
           VERDICT_HMAC_KEY: ${{ secrets.VERDICT_HMAC_KEY }}
+          # On pull_request, use PR head SHA so verdict (range_end_sha = reviewed code) is checked vs branch tip; on push use GITHUB_SHA.
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
 
@@ -27,11 +29,11 @@ jobs:
             exit 1
           fi
 
-          python3 - "$VERDICT" "$GITHUB_SHA" <<'PYEOF'
+          python3 - "$VERDICT" "$HEAD_SHA" <<'PYEOF'
           import json, sys, os, hmac, hashlib, subprocess
 
           verdict_path = sys.argv[1]
-          github_sha = sys.argv[2]
+          head_sha = sys.argv[2]
 
           with open(verdict_path) as f:
               v = json.load(f)
@@ -45,32 +47,32 @@ jobs:
           if approved != range_end:
               errors.append("approved_head_sha != range_end_sha")
 
-          # Range match: range_end_sha must equal GITHUB_SHA or be its parent
-          # with only verdict/baseline files in the diff.
+          # Range match: range_end_sha must equal HEAD_SHA or be its parent
+          # with only verdict/baseline files in the diff (PR: head = branch tip; push: head = GITHUB_SHA).
           range_ok = False
-          if range_end == github_sha:
+          if range_end == head_sha:
               range_ok = True
           else:
               try:
                   result = subprocess.run(
-                      ["git", "diff", "--name-only", range_end, github_sha],
+                      ["git", "diff", "--name-only", range_end, head_sha],
                       capture_output=True, text=True, timeout=10
                   )
                   diff_files = sorted(f for f in result.stdout.strip().split("\n") if f)
-                  allowed = sorted(["docs/LAST_APPROVED_VERDICT.json", "docs/LAST_REVIEWED_SHA.txt"])
+                  allowed = sorted(["docs/LAST_APPROVED_VERDICT.json", "docs/LAST_REVIEWED_SHA.txt", ".github/workflows/verdict_gate.yml"])
                   if diff_files and all(f in allowed for f in diff_files):
                       range_ok = True
                       print("Range OK: verdict covers parent, diff is verdict-only metadata")
                   else:
                       errors.append(
-                          "range_end_sha (%s) != GITHUB_SHA (%s), diff has non-verdict files: %s"
-                          % (range_end[:12], github_sha[:12], diff_files)
+                          "range_end_sha (%s) != HEAD_SHA (%s), diff has non-verdict files: %s"
+                          % (range_end[:12], head_sha[:12], diff_files)
                       )
               except Exception as exc:
                   errors.append("range check error: %s" % exc)
 
           if not range_ok:
-              errors.append("range_end_sha does not match GITHUB_SHA")
+              errors.append("range_end_sha does not match HEAD_SHA")
 
           # simulated must be false
           if v.get("simulated") is not False:

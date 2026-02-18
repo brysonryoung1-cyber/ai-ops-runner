@@ -29,7 +29,7 @@ done
 # --- Check ops scripts ---
 echo ""
 echo "--- Ops Scripts ---"
-for f in ops/openai_key.py ops/ensure_openai_key.sh ops/review_bundle.sh ops/review_auto.sh ops/review_finish.sh ops/ship_auto.sh ops/autoheal_codex.sh ops/doctor_repo.sh ops/INSTALL_HOOKS.sh ops/runner_smoke.sh ops/runner_submit_orb_review.sh ops/runner_submit_orb_doctor.sh ops/runner_submit_orb_score.sh ops/vps_bootstrap.sh ops/vps_deploy.sh ops/vps_doctor.sh ops/vps_self_update.sh; do
+for f in ops/openai_key.py ops/ensure_openai_key.sh ops/review_bundle.sh ops/review_auto.sh ops/review_finish.sh ops/ship_auto.sh ops/autoheal_codex.sh ops/doctor_repo.sh ops/INSTALL_HOOKS.sh ops/bootstrap_branch_protection.sh ops/runner_smoke.sh ops/runner_submit_orb_review.sh ops/runner_submit_orb_doctor.sh ops/runner_submit_orb_score.sh ops/vps_bootstrap.sh ops/vps_deploy.sh ops/vps_doctor.sh ops/vps_self_update.sh; do
   if [ -f "$ROOT_DIR/$f" ]; then
     if [ -x "$ROOT_DIR/$f" ]; then
       check_pass "$f exists and executable"
@@ -124,6 +124,8 @@ for f in services/test_runner/orb_wrappers/orb_review_bundle.sh services/test_ru
 done
 
 # --- Check verdict gate branch protection (main) ---
+# Fail if protection is missing, or required_status_checks is missing/empty, or verdict-gate is not in required checks.
+# Never auto-modify branch protection; only report and print remediation.
 echo ""
 echo "--- Verdict gate (branch protection) ---"
 ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
@@ -136,13 +138,45 @@ if [ -n "$ORIGIN_URL" ]; then
     OWNER_REPO=""
   fi
   if [ -n "$OWNER_REPO" ]; then
-    PROT_JSON="$(gh api -H "Accept: application/vnd.github+json" "/repos/$OWNER_REPO/branches/main/protection/required_status_checks" 2>/dev/null)" || true
-    if [ -z "$PROT_JSON" ]; then
-      check_fail "Branch protection missing or no access: main must require status check 'verdict-gate'. See docs/REVIEW_WORKFLOW.md for UI steps."
-    elif ! echo "$PROT_JSON" | grep -q '"verdict-gate"'; then
-      check_fail "Required status check 'verdict-gate' not set on main. See docs/REVIEW_WORKFLOW.md for UI steps."
+    FULL_PROT="$(gh api -H "Accept: application/vnd.github+json" "/repos/$OWNER_REPO/branches/main/protection" 2>/dev/null)" || true
+    if [ -z "$FULL_PROT" ]; then
+      check_fail "Branch protection missing or no API access: main must require status check 'verdict-gate'."
+      echo "" >&2
+      echo "  Remediation:" >&2
+      echo "    1. Run ./ops/bootstrap_branch_protection.sh and follow steps (workflow must run once so 'verdict-gate' exists)." >&2
+      echo "    2. GitHub UI: Settings → Branches → Add rule for main → Require status checks → add 'verdict-gate'." >&2
+      echo "    3. Or add context via API (after check exists):" >&2
+      echo "       gh api -X POST -H 'Accept: application/vnd.github+json' \\" >&2
+      echo "         /repos/$OWNER_REPO/branches/main/protection/required_status_checks/contexts -f 'contexts[]=verdict-gate'" >&2
+      echo "  Never clear required checks to bypass the gate." >&2
     else
-      check_pass "main requires status check verdict-gate"
+      RSC_RC=0
+      echo "$FULL_PROT" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    rsc = d.get('required_status_checks')
+    if rsc is None:
+        sys.exit(2)  # no required status checks at all
+    ctx = list(rsc.get('contexts') or [])
+    for c in (rsc.get('checks') or []):
+        if isinstance(c, dict) and c.get('context'):
+            ctx.append(c['context'])
+    if 'verdict-gate' not in ctx:
+        sys.exit(1)
+except Exception:
+    sys.exit(3)
+" 2>/dev/null || RSC_RC=$?
+      if [ "$RSC_RC" -eq 2 ]; then
+        check_fail "Branch protection exists but required status checks are not configured (bypass risk)."
+        echo "  Remediation: Enable 'Require status checks' and add 'verdict-gate'. See docs/REVIEW_WORKFLOW.md and ./ops/bootstrap_branch_protection.sh" >&2
+      elif [ "$RSC_RC" -eq 1 ] || [ "$RSC_RC" -eq 3 ]; then
+        check_fail "Required status check 'verdict-gate' not set on main (or could not parse protection)."
+        echo "  Remediation: Add 'verdict-gate' to required checks. UI: Settings → Branches → main → Edit → Status checks → verdict-gate." >&2
+        echo "  API (add without removing others): gh api -X POST .../branches/main/protection/required_status_checks/contexts -f 'contexts[]=verdict-gate'" >&2
+      else
+        check_pass "main requires status check verdict-gate"
+      fi
     fi
   else
     check_warn "Could not parse owner/repo from origin; skipping branch protection check"

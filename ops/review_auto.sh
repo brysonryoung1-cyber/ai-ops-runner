@@ -101,34 +101,79 @@ run_codex_review() {
   #   -s read-only   = read-only sandbox (review never writes code)
   #   --output-last-message = capture the agent's final message to a file
   local raw_output_file="${verdict_file}.raw"
+  local stdout_capture="${raw_output_file}.stdout"
   local codex_rc=0
   $CODEX_CMD exec \
     --full-auto \
     -s read-only \
     --output-last-message "$raw_output_file" \
     "$prompt" \
-    2>/dev/null || codex_rc=$?
+    2>/dev/null | tee "$stdout_capture" || codex_rc=${PIPESTATUS[0]}
 
-  if [ "$codex_rc" -ne 0 ] && [ ! -f "$raw_output_file" ]; then
+  if [ "$codex_rc" -ne 0 ] && [ ! -f "$raw_output_file" ] && [ ! -s "$stdout_capture" ]; then
     echo "ERROR: Codex exec failed (rc=$codex_rc) and produced no output" >&2
     return 1
   fi
 
-  # Extract JSON from the captured last message
+  # Extract JSON from the captured last message (file preferred; fallback to stdout)
   local raw_content=""
-  if [ -f "$raw_output_file" ]; then
+  if [ -f "$raw_output_file" ] && [ -s "$raw_output_file" ]; then
     raw_content="$(cat "$raw_output_file")"
+  elif [ -f "$stdout_capture" ] && [ -s "$stdout_capture" ]; then
+    raw_content="$(cat "$stdout_capture")"
+    echo "INFO: Using stdout capture (--output-last-message file was empty)" >&2
   fi
 
   local json_output
   json_output="$(echo "$raw_content" | python3 -c "
 import sys, json, re
 
+def extract_json(text):
+    # Strip markdown code fence if present
+    m = re.search(r'\`\`\`(?:json)?\s*\n?(.*?)\n?\`\`\`', text, re.DOTALL)
+    if m:
+        text = m.group(1).strip()
+    start = text.find('{')
+    if start == -1:
+        return None
+    depth = 0
+    i = start
+    in_str = False
+    escape = False
+    quote = None
+    while i < len(text):
+        c = text[i]
+        if escape:
+            escape = False
+            i += 1
+            continue
+        if c == '\\\\' and in_str:
+            escape = True
+            i += 1
+            continue
+        if in_str:
+            if c == quote:
+                in_str = False
+            i += 1
+            continue
+        if c == '\"':
+            in_str = True
+            quote = c
+            i += 1
+            continue
+        if c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:i+1]
+        i += 1
+    return None
+
 text = sys.stdin.read()
-# Find JSON object in output — handles nested objects
-match = re.search(r'\{[^{}]*(?:\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}[^{}]*)*\}', text, re.DOTALL)
-if match:
-    obj = json.loads(match.group())
+extracted = extract_json(text)
+if extracted:
+    obj = json.loads(extracted)
     print(json.dumps(obj))
 else:
     sys.exit(1)
@@ -140,21 +185,26 @@ else:
     raw_trimmed="$(echo "$raw_content" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | head -1)"
     if [ "$raw_trimmed" = "APPROVED" ]; then
       echo '{"verdict":"APPROVED","blockers":[],"non_blocking":["Codex returned plain APPROVED; minimal verdict written"],"tests_run":"bundle"}' > "$verdict_file"
-      rm -f "$raw_output_file"
+      rm -f "$raw_output_file" "$stdout_capture"
       return 0
     fi
     if [ "$raw_trimmed" = "BLOCKED" ]; then
       echo '{"verdict":"BLOCKED","blockers":["Codex returned BLOCKED without details"],"non_blocking":[],"tests_run":"bundle"}' > "$verdict_file"
-      rm -f "$raw_output_file"
+      rm -f "$raw_output_file" "$stdout_capture"
       return 0
     fi
-    echo "ERROR: Failed to extract valid JSON from Codex output" >&2
-    echo "Raw output saved to ${raw_output_file}" >&2
+    if [ -z "$raw_content" ]; then
+      echo "ERROR: Codex produced no output (empty last message and stdout)" >&2
+    else
+      echo "ERROR: Failed to extract valid JSON from Codex output" >&2
+      printf '%s' "$raw_content" > "$raw_output_file"
+      echo "Raw output saved to ${raw_output_file}" >&2
+    fi
     return 1
   fi
 
   echo "$json_output" > "$verdict_file"
-  rm -f "$raw_output_file"
+  rm -f "$raw_output_file" "$stdout_capture"
 }
 
 # Validate the complete verdict (with meta) against the schema contract.
@@ -305,9 +355,48 @@ else
   fi
   CODEX_CMD_RECORD="$CODEX_CMD exec --full-auto -s read-only --output-last-message <verdict>"
 
+  try_openclaw_fallback() {
+    echo "==> Running openclaw_codex_review.sh (direct API)..." >&2
+    if ! "$SCRIPT_DIR/openclaw_codex_review.sh" --since "$SINCE_SHA" >/dev/null 2>&1; then
+      echo "ERROR: openclaw_codex_review.sh failed" >&2
+      return 1
+    fi
+    local latest_verdict
+    latest_verdict="$(ls -t "$ROOT_DIR"/artifacts/codex_review/*/CODEX_VERDICT.json 2>/dev/null | head -1)"
+    if [ -z "$latest_verdict" ] || [ ! -f "$latest_verdict" ]; then
+      echo "ERROR: No verdict from openclaw_codex_review.sh" >&2
+      return 1
+    fi
+    python3 - "$latest_verdict" "$VERDICT_FILE" "$SINCE_SHA" "$HEAD_SHA" "$GENERATED_AT" "$REVIEW_MODE" <<'PYEOF'
+import json, sys
+src, dest, since, to, gen_at, mode = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]
+required_top = ["verdict", "blockers", "non_blocking", "tests_run", "meta"]
+with open(src) as f:
+    v = json.load(f)
+v = {k: v[k] for k in required_top if k in v}
+v["meta"] = {
+    "since_sha": since,
+    "to_sha": to,
+    "generated_at": gen_at,
+    "review_mode": mode,
+    "simulated": False,
+    "codex_cli": {"version": "api", "command": "openclaw_codex_review.sh"}
+}
+with open(dest, "w") as f:
+    json.dump(v, f, indent=2)
+PYEOF
+    validate_verdict "$VERDICT_FILE" >/dev/null || return 1
+    echo "  Fallback verdict: $(python3 -c "import json; print(json.load(open('$VERDICT_FILE'))['verdict'])")" >&2
+    return 0
+  }
+
   if [ "$REVIEW_MODE" = "bundle" ]; then
     echo "==> Running Codex review (single bundle)..."
-    run_codex_review "$BUNDLE_FILE" "$VERDICT_FILE"
+    run_codex_review "$BUNDLE_FILE" "$VERDICT_FILE" || CODEX_RC=$?
+    if [ "${CODEX_RC:-0}" -ne 0 ]; then
+      echo "==> Codex CLI failed; trying openclaw_codex_review.sh (direct API) fallback..." >&2
+      try_openclaw_fallback || exit 1
+    fi
   else
     echo "==> Running Codex review (packet mode)..."
     # Generate per-file packets
