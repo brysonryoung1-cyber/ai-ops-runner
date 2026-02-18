@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { useToken } from "./token-context";
+import type { ForbiddenInfo } from "@/components/ForbiddenBanner";
 
 export interface ExecResult {
   ok: boolean;
@@ -11,17 +12,59 @@ export interface ExecResult {
   exitCode: number | null;
   durationMs: number;
   error?: string;
+  error_class?: string;
+  httpStatus?: number;
+}
+
+/**
+ * Authenticated fetch wrapper. Attaches X-OpenClaw-Token header and
+ * detects 403 responses, surfacing structured ForbiddenInfo for the UI.
+ */
+export async function authedFetch(
+  url: string,
+  token: string,
+  init?: RequestInit
+): Promise<{ res: Response; forbidden?: ForbiddenInfo }> {
+  const headers: Record<string, string> = {
+    ...(init?.headers as Record<string, string> | undefined),
+  };
+  if (token) {
+    headers["X-OpenClaw-Token"] = token;
+  }
+  const res = await fetch(url, { ...init, headers });
+
+  if (res.status === 403) {
+    let body: Record<string, unknown> = {};
+    try {
+      body = await res.clone().json();
+    } catch {
+      // non-JSON 403
+    }
+    const forbidden: ForbiddenInfo = {
+      status: 403,
+      route: url,
+      error: typeof body.error === "string" ? body.error : undefined,
+      error_class: typeof body.error_class === "string" ? body.error_class : undefined,
+      message: typeof body.message === "string" ? body.message : undefined,
+      timestamp: new Date().toISOString(),
+    };
+    return { res, forbidden };
+  }
+
+  return { res };
 }
 
 /**
  * Hook for executing allowlisted actions via the API.
  *
  * Automatically includes the X-OpenClaw-Token header from context.
+ * Detects 403 responses and surfaces structured forbidden info.
  */
 export function useExec() {
   const token = useToken();
   const [loading, setLoading] = useState<string | null>(null);
   const [results, setResults] = useState<Record<string, ExecResult>>({});
+  const [lastForbidden, setLastForbidden] = useState<ForbiddenInfo | null>(null);
 
   const exec = useCallback(
     async (action: string): Promise<ExecResult> => {
@@ -39,6 +82,24 @@ export function useExec() {
           headers,
           body: JSON.stringify({ action }),
         });
+
+        if (res.status === 403) {
+          let body: Record<string, unknown> = {};
+          try {
+            body = await res.clone().json();
+          } catch {
+            // non-JSON 403
+          }
+          setLastForbidden({
+            status: 403,
+            route: `/api/exec (action=${action})`,
+            error: typeof body.error === "string" ? body.error : "Forbidden",
+            error_class: typeof body.error_class === "string" ? body.error_class : undefined,
+            message: typeof body.message === "string" ? body.message : undefined,
+            timestamp: new Date().toISOString(),
+          });
+        }
+
         const data: ExecResult = await res.json();
         setResults((prev) => ({ ...prev, [action]: data }));
         return data;
@@ -74,5 +135,7 @@ export function useExec() {
     }
   }, [token]);
 
-  return { exec, loading, results, checkConnectivity };
+  const dismissForbidden = useCallback(() => setLastForbidden(null), []);
+
+  return { exec, loading, results, checkConnectivity, lastForbidden, dismissForbidden };
 }

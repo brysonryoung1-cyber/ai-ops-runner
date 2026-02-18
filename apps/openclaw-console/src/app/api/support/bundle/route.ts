@@ -113,6 +113,42 @@ export async function POST(req: NextRequest) {
 
   const manifest: string[] = [];
 
+  // 0. Auth status
+  try {
+    const consoleToken = process.env.OPENCLAW_CONSOLE_TOKEN;
+    const adminToken = process.env.OPENCLAW_ADMIN_TOKEN;
+    const trustTailscale = process.env.OPENCLAW_TRUST_TAILSCALE === "1";
+    let hostExecutorReachable = false;
+    const hostdUrl = process.env.OPENCLAW_HOSTD_URL;
+    if (hostdUrl) {
+      try {
+        const hres = await fetch(`${hostdUrl.replace(/\/$/, "")}/health`, {
+          method: "GET",
+          signal: AbortSignal.timeout(2500),
+        });
+        if (hres.ok) {
+          const hdata = await hres.json().catch(() => ({}));
+          hostExecutorReachable = hdata?.ok === true;
+        }
+      } catch {
+        // unreachable
+      }
+    }
+    const authStatus = {
+      ok: true,
+      hq_token_required: !!consoleToken && !trustTailscale,
+      admin_token_loaded: typeof adminToken === "string" && adminToken.length > 0,
+      host_executor_reachable: hostExecutorReachable,
+      build_sha: getBuildSha(),
+      trust_tailscale: trustTailscale,
+      collected_at: new Date().toISOString(),
+    };
+    writeFileSync(join(bundleDir, "auth_status.json"), JSON.stringify(authStatus, null, 2));
+    manifest.push("auth_status.json");
+  } catch (e) {
+    writeFileSync(join(bundleDir, "auth_status.json"), JSON.stringify({ error: String(e) }));
+  }
+
   // 1. UI health
   try {
     const buildSha = getBuildSha();
@@ -202,6 +238,38 @@ export async function POST(req: NextRequest) {
     writeFileSync(join(bundleDir, "failing_runs_error.txt"), String(e));
   }
 
+  // 3b. Last 10 runs (ids/status/project_id/action/artifact_dir)
+  try {
+    const last10 = listRunRecords(10).map((r) => ({
+      run_id: r.run_id,
+      status: r.status,
+      project_id: r.project_id,
+      action: r.action,
+      started_at: r.started_at,
+      finished_at: r.finished_at,
+      duration_ms: r.duration_ms,
+      artifact_paths: r.artifact_paths,
+    }));
+    writeFileSync(join(bundleDir, "last_10_runs.json"), JSON.stringify(last10, null, 2));
+    manifest.push("last_10_runs.json");
+  } catch (e) {
+    writeFileSync(join(bundleDir, "last_10_runs.json"), JSON.stringify({ error: String(e) }));
+  }
+
+  // 3c. Last forbidden context (placeholder: written from client-side telemetry if available)
+  try {
+    writeFileSync(
+      join(bundleDir, "last_forbidden.json"),
+      JSON.stringify({
+        note: "Populated when client encounters a 403. Check /api/ui/telemetry logs for 403 events.",
+        collected_at: new Date().toISOString(),
+      }, null, 2)
+    );
+    manifest.push("last_forbidden.json");
+  } catch {
+    // best-effort
+  }
+
   // 4. docker compose ps
   try {
     const repoRoot = getRepoRoot();
@@ -261,6 +329,7 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({
     ok: true,
+    run_id: runId,
     artifact_dir: artifactDir,
     permalink,
     manifest,

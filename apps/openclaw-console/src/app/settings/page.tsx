@@ -1,18 +1,54 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { GlassButton } from "@/components/glass";
+import { useToken } from "@/lib/token-context";
+
+interface AuthStatus {
+  ok: boolean;
+  hq_token_required: boolean;
+  admin_token_loaded: boolean;
+  host_executor_reachable: boolean;
+  build_sha: string;
+  trust_tailscale: boolean;
+  console_token_fingerprint: string | null;
+  notes: string[];
+}
+
+function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span
+        className={`w-2 h-2 rounded-full ${ok ? "bg-green-400" : "bg-red-400"}`}
+      />
+      <span className="text-xs text-white/80">{label}</span>
+      <span className={`text-xs font-medium ${ok ? "text-green-400" : "text-red-400"}`}>
+        {ok ? "Yes" : "No"}
+      </span>
+    </div>
+  );
+}
 
 export default function SettingsPage() {
+  const token = useToken();
   const [copyStatus, setCopyStatus] = useState<"idle" | "copying" | "copied" | "error">("idle");
   const [bundleStatus, setBundleStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [bundleLink, setBundleLink] = useState<string | null>(null);
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/auth/status")
+      .then((r) => r.json())
+      .then((data) => setAuthStatus(data))
+      .catch((e) => setAuthError(e instanceof Error ? e.message : String(e)));
+  }, []);
 
   const copyDebugInfo = async () => {
     setCopyStatus("copying");
     try {
-      const healthRes = await fetch("/api/ui/health");
+      const healthRes = await fetch("/api/ui/health_public");
       const healthData = healthRes.ok ? await healthRes.json() : { error: "health check failed" };
 
       const debugInfo = [
@@ -22,7 +58,6 @@ export default function SettingsPage() {
         `User Agent: ${navigator.userAgent}`,
         `Artifacts Readable: ${healthData.artifacts?.readable ?? "unknown"}`,
         `Artifact Dirs: ${healthData.artifacts?.dir_count ?? "unknown"}`,
-        `Node: ${healthData.node_version || "unknown"}`,
         "",
         "Routes:",
         ...(healthData.routes || []).map((r: string) => `  ${r}`),
@@ -49,6 +84,52 @@ export default function SettingsPage() {
           OpenClaw HQ configuration
         </p>
       </div>
+
+      {/* Auth Status Panel */}
+      <div data-testid="auth-status-panel" className="glass-surface rounded-2xl p-6 mb-6">
+        <h3 className="text-sm font-semibold text-white/95 mb-3">Auth & System Status</h3>
+        {authError && (
+          <p className="text-xs text-red-400 mb-3">Failed to load auth status: {authError}</p>
+        )}
+        {authStatus && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 mb-2">
+              <span data-testid="build-sha" className="text-xs text-white/50 font-mono bg-white/5 px-2 py-1 rounded">
+                Build: {authStatus.build_sha}
+              </span>
+              {authStatus.trust_tailscale && (
+                <span className="text-[10px] text-blue-300 bg-blue-500/10 px-2 py-0.5 rounded-full border border-blue-400/20">
+                  Tailscale Trusted
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <StatusBadge ok={authStatus.hq_token_required} label="HQ Token Required" />
+              <StatusBadge ok={authStatus.admin_token_loaded} label="Admin Token Loaded" />
+              <StatusBadge ok={authStatus.host_executor_reachable} label="Host Executor Reachable" />
+            </div>
+            {authStatus.console_token_fingerprint && (
+              <p className="text-[10px] text-white/40 mt-2">
+                Token fingerprint: {authStatus.console_token_fingerprint}
+              </p>
+            )}
+            {authStatus.notes.length > 0 && (
+              <div className="mt-3 border-t border-white/10 pt-3">
+                <p className="text-[10px] font-semibold text-white/50 mb-1 uppercase tracking-wider">Notes</p>
+                <ul className="space-y-1">
+                  {authStatus.notes.map((note, i) => (
+                    <li key={i} className="text-xs text-white/60">{note}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+        {!authStatus && !authError && (
+          <p className="text-xs text-white/50">Loading auth status…</p>
+        )}
+      </div>
+
       <div className="glass-surface rounded-2xl p-6 mb-6">
         <p className="text-sm text-white/70">
           HQ binds to 127.0.0.1 only. Authentication uses X-OpenClaw-Token when configured. Admin actions require OPENCLAW_ADMIN_TOKEN.
@@ -78,7 +159,9 @@ export default function SettingsPage() {
             setBundleStatus("loading");
             setBundleLink(null);
             try {
-              const res = await fetch("/api/support/bundle", { method: "POST" });
+              const headers: Record<string, string> = {};
+              if (token) headers["X-OpenClaw-Token"] = token;
+              const res = await fetch("/api/support/bundle", { method: "POST", headers });
               const data = await res.json();
               if (data.ok && data.permalink) {
                 setBundleLink(data.permalink);

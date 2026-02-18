@@ -14,6 +14,15 @@
 - **LLM primary**: openai / gpt-4o-mini
 - **LLM fallback**: mistral / labs-devstral-small-2512
 
+## Auth & Diagnostics
+
+- **`/api/auth/status`** (GET, no token required): Self-diagnosing auth endpoint. Returns `hq_token_required`, `admin_token_loaded`, `host_executor_reachable`, `build_sha`, `trust_tailscale`, `notes[]`. No secrets leaked.
+- **`/api/ui/health_public`** (GET, no token required): Public-safe health endpoint for monitoring. Returns `build_sha`, route map, artifacts readable check. No secrets.
+- **Tailscale-trusted mode**: Set `OPENCLAW_TRUST_TAILSCALE=1` (default ON in docker-compose.console.yml) to bypass HQ token gate for browser→HQ requests. Tailnet membership is the access control. Admin-token requirement for host executor admin actions is still enforced server-side.
+- **403 Forbidden UX**: When a 403 occurs, the UI shows a deterministic banner explaining the cause (token missing, admin token not loaded, or CSRF origin blocked) with a one-click "Generate support bundle" button. No screenshots needed for debugging.
+- **Support Bundle** (`POST /api/support/bundle`): Generates `auth_status.json`, `ui_health.json`, `last_10_runs.json`, `last_forbidden.json`, `dod_last.json`, failing runs, docker status, guard/hostd journals. All redacted. Stored in `artifacts/support_bundle/<run_id>/`.
+- **Build SHA**: Visible in sidebar footer and Settings auth panel.
+
 ## Definition-of-Done (DoD)
 
 - **DoD script**: `ops/dod_production.sh` — executable checks: hostd /health, /api/ai-status, /api/llm/status, /api/project/state, POST /api/exec action=doctor (PASS), /api/artifacts/list dirs > 0, no hard-fail strings (ENOENT, spawn ssh, Host Executor Unreachable).

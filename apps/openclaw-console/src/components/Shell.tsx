@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTarget } from "@/lib/target-context";
@@ -20,6 +20,14 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const target = useTarget();
   const [navOpen, setNavOpen] = useState(false);
+  const [buildSha, setBuildSha] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/ui/health_public")
+      .then((r) => r.json())
+      .then((d) => { if (d.build_sha) setBuildSha(d.build_sha); })
+      .catch(() => {});
+  }, []);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -98,6 +106,11 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         </nav>
           <div className="mt-auto px-4 py-4 border-t border-white/10">
             <p className="text-[11px] text-white/50">Host Executor · 127.0.0.1</p>
+            {buildSha && (
+              <p data-testid="sidebar-build-sha" className="text-[10px] text-white/30 mt-1 font-mono">
+                {buildSha}
+              </p>
+            )}
           </div>
         </aside>
 

@@ -10,6 +10,11 @@ import { NextRequest, NextResponse } from "next/server";
  * for first-time setup). CSRF/origin validation is still enforced
  * in the route handlers as a second layer.
  *
+ * Tailscale-trusted mode: When OPENCLAW_TRUST_TAILSCALE=1, the HQ token
+ * gate is bypassed for browser→HQ requests. Tailnet membership is the
+ * access control. Admin-token requirement for hostd admin actions is
+ * still enforced server-side (not in middleware).
+ *
  * Session TTL: The token itself is the session. Rotate it periodically
  * via `python3 ops/openclaw_console_token.py rotate`. The TTL is
  * enforced by short-lived tokens rather than server-side sessions,
@@ -21,11 +26,21 @@ import { NextRequest, NextResponse } from "next/server";
 /** Maximum request body size for API routes (1MB) */
 const MAX_BODY_SIZE = 1024 * 1024;
 
+/**
+ * Routes exempt from HQ token auth. These endpoints return only
+ * non-sensitive diagnostic data and have their own origin validation.
+ */
+const TOKEN_EXEMPT_ROUTES = new Set([
+  "/api/sms",
+  "/api/auth/status",
+  "/api/ui/health_public",
+]);
+
 export function middleware(req: NextRequest) {
-  // Exempt /api/sms from token auth — Twilio inbound webhooks cannot
-  // attach custom headers. SMS route has its own auth: Twilio signature
-  // validation (HMAC-SHA1) + sender allowlist + rate limiting.
-  if (req.nextUrl.pathname === "/api/sms") {
+  const path = req.nextUrl.pathname;
+
+  // Exempt specific routes from token auth (each has its own security)
+  if (TOKEN_EXEMPT_ROUTES.has(path)) {
     return NextResponse.next();
   }
 
@@ -36,10 +51,16 @@ export function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
+  // Tailscale-trusted mode: bypass HQ token gate when enabled.
+  // Admin-token requirement for host executor admin actions is still
+  // enforced server-side in the route handlers (not here).
+  if (process.env.OPENCLAW_TRUST_TAILSCALE === "1") {
+    return NextResponse.next();
+  }
+
   const provided = req.headers.get("x-openclaw-token");
 
   if (provided !== token) {
-    const path = req.nextUrl.pathname;
     const tokenStatus = provided ? "invalid" : "missing";
     const ip = req.headers.get("x-forwarded-for") || "unknown";
     // Single-line security event — no secrets logged
@@ -50,8 +71,8 @@ export function middleware(req: NextRequest) {
     return NextResponse.json(
       {
         ok: false,
-        error:
-          "Unauthorized: missing or invalid X-OpenClaw-Token header.",
+        error: "Unauthorized: missing or invalid X-OpenClaw-Token header.",
+        error_class: "HQ_TOKEN_MISSING",
       },
       { status: 401 }
     );

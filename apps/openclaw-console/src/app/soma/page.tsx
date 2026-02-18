@@ -5,6 +5,7 @@ import StatusCard from "@/components/StatusCard";
 import ActionButton from "@/components/ActionButton";
 import CollapsibleOutput from "@/components/CollapsibleOutput";
 import ConnectorsCard from "@/components/ConnectorsCard";
+import ForbiddenBanner from "@/components/ForbiddenBanner";
 import { useExec, ExecResult } from "@/lib/hooks";
 
 type CardStatus = "pass" | "fail" | "loading" | "idle" | "warn";
@@ -88,7 +89,7 @@ function parseSomaStatus(stdout: string): {
 }
 
 export default function SomaPage() {
-  const { exec, loading, results } = useExec();
+  const { exec, loading, results, lastForbidden, dismissForbidden } = useExec();
   const [lastAction, setLastAction] = useState<string | null>(null);
   const [connected, setConnected] = useState<boolean | null>(null);
 
@@ -145,6 +146,11 @@ export default function SomaPage() {
           operations
         </p>
       </div>
+
+      {/* Forbidden banner (403 detection) */}
+      {lastForbidden && (
+        <ForbiddenBanner info={lastForbidden} onDismiss={dismissForbidden} />
+      )}
 
       {/* Connection banner */}
       {connected === false && (
