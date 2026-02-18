@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { executeAction, checkConnectivity } from "@/lib/hostd";
 import { acquireLock, releaseLock, getLockInfo } from "@/lib/action-lock";
@@ -59,13 +59,34 @@ function validateOrigin(req: NextRequest): NextResponse | null {
     return null;
   }
 
-  return NextResponse.json(
-    {
-      ok: false,
-      error: "Forbidden: request origin could not be verified. This API only accepts same-origin requests from the local console.",
-    },
-    { status: 403 }
-  );
+  const forbiddenPayload = {
+    ok: false,
+    error: "Forbidden",
+    error_class: "ORIGIN_BLOCKED",
+    reason: "Request origin could not be verified. This API only accepts same-origin requests from the local console.",
+    required_header: "Origin or Sec-Fetch-Site: same-origin",
+    trust_tailscale: process.env.OPENCLAW_TRUST_TAILSCALE === "1",
+    hq_token_required: !!process.env.OPENCLAW_CONSOLE_TOKEN && process.env.OPENCLAW_TRUST_TAILSCALE !== "1",
+    admin_token_loaded: typeof process.env.OPENCLAW_ADMIN_TOKEN === "string" && process.env.OPENCLAW_ADMIN_TOKEN.length > 0,
+    origin_seen: req.headers.get("origin") ?? null,
+    origin_allowed: false,
+  };
+  recordForbiddenEvent({ ...forbiddenPayload, timestamp: new Date().toISOString() });
+  return NextResponse.json(forbiddenPayload, { status: 403 });
+}
+
+function recordForbiddenEvent(event: Record<string, unknown>) {
+  try {
+    const artifactsRoot = process.env.OPENCLAW_ARTIFACTS_ROOT ||
+      join(process.env.OPENCLAW_REPO_ROOT || process.cwd(), "artifacts");
+    mkdirSync(artifactsRoot, { recursive: true });
+    writeFileSync(
+      join(artifactsRoot, ".last_forbidden.json"),
+      JSON.stringify(event, null, 2)
+    );
+  } catch {
+    // Best-effort: never block request handling for diagnostics
+  }
 }
 
 /** Read maintenance mode state (deploy pipeline sets/clears). DoD requests with matching deploy_run_id are allowed. */
@@ -161,7 +182,18 @@ export async function POST(req: NextRequest) {
     const provided = req.headers.get("x-openclaw-token");
     if (provided !== adminToken) {
       return NextResponse.json(
-        { ok: false, error: "Deploy+Verify requires admin token." },
+        {
+          ok: false,
+          error: "Forbidden",
+          error_class: "ADMIN_TOKEN_MISSING",
+          reason: "Deploy+Verify requires admin token. Provide the OPENCLAW_ADMIN_TOKEN via X-OpenClaw-Token header.",
+          required_header: "X-OpenClaw-Token (admin)",
+          trust_tailscale: process.env.OPENCLAW_TRUST_TAILSCALE === "1",
+          hq_token_required: true,
+          admin_token_loaded: typeof adminToken === "string" && adminToken.length > 0,
+          origin_seen: req.headers.get("origin") ?? null,
+          origin_allowed: true,
+        },
         { status: 403 }
       );
     }

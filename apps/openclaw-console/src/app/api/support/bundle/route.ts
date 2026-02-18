@@ -85,7 +85,14 @@ function validateOrigin(req: NextRequest): NextResponse | null {
   if (origin && allowed.has(origin)) return null;
   if (secFetchSite === "same-origin") return null;
   if (!origin && (host.startsWith("127.0.0.1") || host.startsWith("localhost"))) return null;
-  return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
+  return NextResponse.json({
+    ok: false,
+    error: "Forbidden",
+    error_class: "ORIGIN_BLOCKED",
+    reason: "Request origin could not be verified for support bundle endpoint.",
+    origin_seen: origin ?? null,
+    origin_allowed: false,
+  }, { status: 403 });
 }
 
 /**
@@ -256,15 +263,19 @@ export async function POST(req: NextRequest) {
     writeFileSync(join(bundleDir, "last_10_runs.json"), JSON.stringify({ error: String(e) }));
   }
 
-  // 3c. Last forbidden context (placeholder: written from client-side telemetry if available)
+  // 3c. Last forbidden context from server-side event log
   try {
-    writeFileSync(
-      join(bundleDir, "last_forbidden.json"),
-      JSON.stringify({
-        note: "Populated when client encounters a 403. Check /api/ui/telemetry logs for 403 events.",
-        collected_at: new Date().toISOString(),
-      }, null, 2)
-    );
+    const forbiddenLogPath = join(getArtifactsRoot(), ".last_forbidden.json");
+    if (existsSync(forbiddenLogPath)) {
+      const raw = readFileSync(forbiddenLogPath, "utf-8");
+      const parsed = JSON.parse(raw);
+      writeFileSync(join(bundleDir, "last_forbidden.json"), JSON.stringify(redactSecrets(parsed), null, 2));
+    } else {
+      writeFileSync(
+        join(bundleDir, "last_forbidden.json"),
+        JSON.stringify({ last: null, note: "No 403 events recorded yet.", collected_at: new Date().toISOString() }, null, 2)
+      );
+    }
     manifest.push("last_forbidden.json");
   } catch {
     // best-effort

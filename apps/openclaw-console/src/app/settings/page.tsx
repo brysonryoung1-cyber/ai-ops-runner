@@ -11,6 +11,8 @@ interface AuthStatus {
   admin_token_loaded: boolean;
   host_executor_reachable: boolean;
   build_sha: string;
+  deploy_sha: string | null;
+  canonical_url: string | null;
   trust_tailscale: boolean;
   console_token_fingerprint: string | null;
   notes: string[];
@@ -89,16 +91,28 @@ export default function SettingsPage() {
   const copyDebugInfo = async () => {
     setCopyStatus("copying");
     try {
-      const healthRes = await fetch("/api/ui/health_public");
+      const [healthRes, authRes] = await Promise.all([
+        fetch("/api/ui/health_public"),
+        fetch("/api/auth/status"),
+      ]);
       const healthData = healthRes.ok ? await healthRes.json() : { error: "health check failed" };
+      const authData = authRes.ok ? await authRes.json() : { error: "auth status failed" };
 
       const debugInfo = [
         `URL: ${window.location.href}`,
         `Build SHA: ${healthData.build_sha || "unknown"}`,
+        `Deploy SHA: ${healthData.deploy_sha || "none"}`,
+        `Canonical URL: ${healthData.canonical_url || "not set"}`,
         `Server Time: ${healthData.server_time || "unknown"}`,
         `User Agent: ${navigator.userAgent}`,
         `Artifacts Readable: ${healthData.artifacts?.readable ?? "unknown"}`,
         `Artifact Dirs: ${healthData.artifacts?.dir_count ?? "unknown"}`,
+        "",
+        "Auth Flags:",
+        `  HQ Token Required: ${authData.hq_token_required ?? "unknown"}`,
+        `  Admin Token Loaded: ${authData.admin_token_loaded ?? "unknown"}`,
+        `  Host Executor Reachable: ${authData.host_executor_reachable ?? "unknown"}`,
+        `  Trust Tailscale: ${authData.trust_tailscale ?? "unknown"}`,
         "",
         "Routes:",
         ...(healthData.routes || []).map((r: string) => `  ${r}`),
@@ -134,10 +148,15 @@ export default function SettingsPage() {
         )}
         {authStatus && (
           <div className="space-y-3">
-            <div className="flex items-center gap-3 mb-2">
+            <div className="flex items-center gap-3 mb-2 flex-wrap">
               <span data-testid="build-sha" className="text-xs text-white/50 font-mono bg-white/5 px-2 py-1 rounded">
                 Build: {authStatus.build_sha}
               </span>
+              {authStatus.deploy_sha && (
+                <span data-testid="deploy-sha" className="text-xs text-white/50 font-mono bg-white/5 px-2 py-1 rounded">
+                  Deploy: {authStatus.deploy_sha}
+                </span>
+              )}
               {authStatus.trust_tailscale && (
                 <span className="text-[10px] text-blue-300 bg-blue-500/10 px-2 py-0.5 rounded-full border border-blue-400/20">
                   Tailscale Trusted

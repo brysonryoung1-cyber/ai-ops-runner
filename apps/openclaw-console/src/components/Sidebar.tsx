@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTarget } from "@/lib/target-context";
@@ -61,9 +62,23 @@ const NAV_ITEMS = [
   },
 ];
 
+interface HealthPublic {
+  build_sha?: string;
+  deploy_sha?: string | null;
+  canonical_url?: string | null;
+}
+
 export default function Sidebar() {
   const pathname = usePathname();
   const target = useTarget();
+  const [health, setHealth] = useState<HealthPublic | null>(null);
+
+  useEffect(() => {
+    fetch("/api/ui/health_public")
+      .then((r) => r.json())
+      .then((d) => setHealth(d))
+      .catch(() => {});
+  }, []);
 
   return (
     <aside className="w-56 min-h-screen bg-apple-sidebar border-r border-apple-border flex flex-col">
@@ -131,10 +146,15 @@ export default function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="px-5 py-4 border-t border-apple-border">
+      <div className="px-5 py-4 border-t border-apple-border space-y-1">
         <p className="text-[11px] text-apple-muted">
           Host Executor &middot; 127.0.0.1
         </p>
+        {health && (
+          <p className="text-[10px] text-apple-muted font-mono truncate" title={`Build: ${health.build_sha ?? "?"} Deploy: ${health.deploy_sha ?? "—"}`}>
+            b:{health.build_sha ?? "?"}{health.deploy_sha ? ` d:${health.deploy_sha}` : ""}
+          </p>
+        )}
       </div>
     </aside>
   );

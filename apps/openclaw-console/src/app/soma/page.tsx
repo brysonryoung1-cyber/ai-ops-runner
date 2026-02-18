@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import StatusCard from "@/components/StatusCard";
 import ActionButton from "@/components/ActionButton";
 import CollapsibleOutput from "@/components/CollapsibleOutput";
 import ConnectorsCard from "@/components/ConnectorsCard";
 import ForbiddenBanner from "@/components/ForbiddenBanner";
 import { useExec, ExecResult } from "@/lib/hooks";
+import { useToken } from "@/lib/token-context";
 
 type CardStatus = "pass" | "fail" | "loading" | "idle" | "warn";
 
@@ -54,6 +56,51 @@ const SOMA_ACTIONS: SomaActionDef[] = [
   },
 ];
 
+function GmailDeviceAuthInfo({ result, onComplete }: { result: ExecResult; onComplete: () => void }) {
+  const stdout = result.stdout ?? "";
+  let verificationUrl: string | null = null;
+  let userCode: string | null = null;
+  try {
+    const lastLine = stdout.trim().split("\n").pop() || "";
+    const parsed = JSON.parse(lastLine);
+    verificationUrl = parsed.next_steps?.verification_url ?? parsed.verification_url ?? null;
+    userCode = parsed.next_steps?.user_code ?? parsed.user_code ?? null;
+  } catch {
+    const urlMatch = stdout.match(/https:\/\/[^\s]+/);
+    if (urlMatch) verificationUrl = urlMatch[0];
+    const codeMatch = stdout.match(/code:\s*([A-Z0-9-]+)/i);
+    if (codeMatch) userCode = codeMatch[1];
+  }
+
+  if (!verificationUrl && !userCode) return null;
+
+  return (
+    <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 space-y-2">
+      <p className="text-xs font-semibold text-blue-800">Device Authorization Required</p>
+      {verificationUrl && (
+        <p className="text-xs text-blue-700">
+          Open:{" "}
+          <a href={verificationUrl} target="_blank" rel="noopener noreferrer" className="underline font-mono break-all">
+            {verificationUrl}
+          </a>
+        </p>
+      )}
+      {userCode && (
+        <p className="text-xs text-blue-700">
+          Enter code: <span className="font-mono font-bold text-blue-900">{userCode}</span>
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={onComplete}
+        className="px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+      >
+        I completed this — Finalize
+      </button>
+    </div>
+  );
+}
+
 function parseSomaStatus(stdout: string): {
   lastRun: string;
   totalRuns: number;
@@ -88,10 +135,36 @@ function parseSomaStatus(stdout: string): {
   return { lastRun, totalRuns, needsReview, lastStatus };
 }
 
+type WizardStep = 1 | 2 | 3 | 4;
+
+function WizardStepBadge({ step, currentStep, label }: { step: WizardStep; currentStep: WizardStep; label: string }) {
+  const done = step < currentStep;
+  const active = step === currentStep;
+  return (
+    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+      done ? "bg-green-500/10 text-green-400" :
+      active ? "bg-blue-500/15 text-blue-300 ring-1 ring-blue-400/30" :
+      "bg-white/5 text-white/40"
+    }`}>
+      <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+        done ? "bg-green-500/20" : active ? "bg-blue-500/20" : "bg-white/10"
+      }`}>
+        {done ? "✓" : step}
+      </span>
+      {label}
+    </div>
+  );
+}
+
 export default function SomaPage() {
   const { exec, loading, results, lastForbidden, dismissForbidden } = useExec();
+  const token = useToken();
   const [lastAction, setLastAction] = useState<string | null>(null);
   const [connected, setConnected] = useState<boolean | null>(null);
+  const [wizardStep, setWizardStep] = useState<WizardStep>(1);
+  const [gmailPolling, setGmailPolling] = useState(false);
+  const [gmailSecretExists, setGmailSecretExists] = useState<boolean | null>(null);
+  const [phase0Baseline, setPhase0Baseline] = useState<"pass" | "fail" | "unknown">("unknown");
 
   // Check connectivity via server-mediated endpoint; 3s hard timeout
   useEffect(() => {
@@ -113,6 +186,73 @@ export default function SomaPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
+
+  // Check Gmail secret status for wizard
+  const fetchGmailSecret = useCallback(() => {
+    const headers: Record<string, string> = {};
+    if (token) headers["X-OpenClaw-Token"] = token;
+    fetch("/api/connectors/gmail/secret-status", { headers })
+      .then((r) => r.json())
+      .then((d) => setGmailSecretExists(d.exists === true))
+      .catch(() => setGmailSecretExists(null));
+  }, [token]);
+
+  useEffect(() => { fetchGmailSecret(); }, [fetchGmailSecret]);
+
+  // Derive wizard step from connector status + phase0 results
+  useEffect(() => {
+    const connResult = results["soma_connectors_status"];
+    if (!connResult) return;
+    const stdout = connResult.stdout ?? "";
+    let kajabi = false;
+    let gmail = false;
+    try {
+      const d = JSON.parse(stdout.trim());
+      kajabi = d.kajabi === "connected";
+      gmail = d.gmail === "connected";
+    } catch {
+      // connector status parsing failed, leave as false
+    }
+    if (!kajabi) { setWizardStep(1); return; }
+    if (!gmail && gmailSecretExists !== true) { setWizardStep(2); return; }
+    if (phase0Baseline !== "pass") { setWizardStep(3); return; }
+    setWizardStep(4);
+  }, [results, gmailSecretExists, phase0Baseline]);
+
+  // Check Phase0 baseline status
+  useEffect(() => {
+    const p0Result = results["soma_kajabi_phase0"];
+    if (!p0Result) return;
+    if (p0Result.ok) {
+      const stdout = p0Result.stdout ?? "";
+      if (stdout.includes("BASELINE_OK") || stdout.includes('"status":"PASS"')) {
+        setPhase0Baseline("pass");
+      } else {
+        setPhase0Baseline("fail");
+      }
+    }
+  }, [results]);
+
+  // Gmail polling for device auth flow
+  useEffect(() => {
+    if (!gmailPolling) return;
+    const interval = setInterval(() => {
+      fetchGmailSecret();
+      const headers: Record<string, string> = {};
+      if (token) headers["X-OpenClaw-Token"] = token;
+      fetch("/api/connectors/gmail/secret-status", { headers })
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.exists === true) {
+            setGmailPolling(false);
+            exec("soma_connectors_status");
+          }
+        })
+        .catch(() => {});
+    }, 5000);
+    const timeout = setTimeout(() => setGmailPolling(false), 300000);
+    return () => { clearInterval(interval); clearTimeout(timeout); };
+  }, [gmailPolling, token, fetchGmailSecret, exec]);
 
   const handleExec = async (action: string) => {
     if (DESTRUCTIVE_SOMA_ACTIONS.has(action)) {
@@ -167,6 +307,132 @@ export default function SomaPage() {
           </div>
         </div>
       )}
+
+      {/* Setup Wizard */}
+      <div data-testid="soma-setup-wizard" className="mb-8 p-5 rounded-apple bg-apple-card border border-apple-border shadow-apple">
+        <h3 className="text-sm font-semibold text-apple-text mb-4">Phase 0 Setup Wizard</h3>
+        <div className="flex flex-wrap gap-2 mb-4">
+          <WizardStepBadge step={1} currentStep={wizardStep} label="Kajabi" />
+          <WizardStepBadge step={2} currentStep={wizardStep} label="Gmail OAuth" />
+          <WizardStepBadge step={3} currentStep={wizardStep} label="Run Phase 0" />
+          <WizardStepBadge step={4} currentStep={wizardStep} label="Baseline Check" />
+        </div>
+
+        {wizardStep === 1 && (
+          <div className="space-y-3">
+            <p className="text-xs text-apple-muted">
+              Connect Kajabi first. Ensure you have valid Kajabi session credentials available.
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => handleExec("soma_kajabi_bootstrap_start")}
+                disabled={!!loading}
+                className="px-4 py-2 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                {loading === "soma_kajabi_bootstrap_start" ? "Starting…" : "Start Kajabi Bootstrap"}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExec("soma_connectors_status")}
+                disabled={!!loading}
+                className="px-4 py-2 text-xs font-medium bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50"
+              >
+                Check Status
+              </button>
+            </div>
+          </div>
+        )}
+
+        {wizardStep === 2 && (
+          <div className="space-y-3">
+            <p className="text-xs text-apple-muted">
+              Upload <code className="bg-gray-100 px-1 rounded">gmail_client.json</code> in{" "}
+              <Link href="/settings" className="text-blue-600 hover:underline">Settings → Connectors</Link>{" "}
+              then start Gmail Connect below.
+            </p>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-apple-muted">gmail_client.json:</span>
+              <span className={gmailSecretExists ? "text-green-600 font-medium" : "text-amber-600 font-medium"}>
+                {gmailSecretExists === null ? "Checking…" : gmailSecretExists ? "Uploaded" : "Missing"}
+              </span>
+              <button type="button" onClick={fetchGmailSecret} className="text-blue-500 hover:underline text-[10px]">Refresh</button>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  handleExec("soma_kajabi_gmail_connect_start");
+                  setGmailPolling(true);
+                }}
+                disabled={!!loading || !gmailSecretExists}
+                className="px-4 py-2 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                {loading === "soma_kajabi_gmail_connect_start" ? "Starting…" : "Start Gmail Connect"}
+              </button>
+              {gmailPolling && (
+                <span className="flex items-center gap-1 text-xs text-blue-600">
+                  <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                  Polling for authorization…
+                </span>
+              )}
+            </div>
+            {results["soma_kajabi_gmail_connect_start"] && (
+              <GmailDeviceAuthInfo result={results["soma_kajabi_gmail_connect_start"]} onComplete={() => {
+                handleExec("soma_kajabi_gmail_connect_finalize");
+                setGmailPolling(false);
+              }} />
+            )}
+          </div>
+        )}
+
+        {wizardStep === 3 && (
+          <div className="space-y-3">
+            <p className="text-xs text-apple-muted">
+              Both connectors are ready. Run Phase 0 discovery to snapshot Kajabi libraries and harvest Gmail videos.
+            </p>
+            <button
+              type="button"
+              onClick={() => handleExec("soma_kajabi_phase0")}
+              disabled={!!loading}
+              className="px-4 py-2 text-xs font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+            >
+              {loading === "soma_kajabi_phase0" ? "Running Phase 0…" : "Run Phase 0"}
+            </button>
+          </div>
+        )}
+
+        {wizardStep === 4 && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-green-500" />
+              <p className="text-sm font-medium text-green-700">Phase 0 Baseline PASS</p>
+            </div>
+            <p className="text-xs text-apple-muted">
+              Setup complete. All connectors operational and baseline verified.
+            </p>
+            {(() => {
+              const p0 = results["soma_kajabi_phase0"];
+              if (!p0) return null;
+              try {
+                const lastLine = (p0.stdout ?? "").trim().split("\n").pop() || "";
+                const parsed = JSON.parse(lastLine);
+                if (parsed.artifact_dir) {
+                  return (
+                    <Link
+                      href={`/artifacts/${parsed.artifact_dir}`}
+                      className="text-xs text-blue-600 hover:underline"
+                    >
+                      View Phase 0 artifacts →
+                    </Link>
+                  );
+                }
+              } catch { /* ignore */ }
+              return null;
+            })()}
+          </div>
+        )}
+      </div>
 
       {/* Connectors card */}
       <ConnectorsCard
@@ -299,6 +565,34 @@ export default function SomaPage() {
                 />
               </div>
             )}
+
+            {/* Artifact dir + next steps surfacing */}
+            {(() => {
+              try {
+                const lastLine = (lastResult.stdout ?? "").trim().split("\n").pop() || "";
+                const parsed = JSON.parse(lastLine);
+                return (
+                  <div className="px-5 pb-4 border-t border-apple-border pt-3 flex flex-wrap items-center gap-3">
+                    {parsed.artifact_dir && (
+                      <Link
+                        href={`/artifacts/${parsed.artifact_dir}`}
+                        className="text-xs text-blue-600 hover:underline"
+                      >
+                        View artifacts →
+                      </Link>
+                    )}
+                    {parsed.next_steps && Array.isArray(parsed.next_steps) && parsed.next_steps.map((ns: string, i: number) => (
+                      <span key={i} className="text-xs text-apple-muted">• {ns}</span>
+                    ))}
+                    {parsed.next_steps && typeof parsed.next_steps === "object" && !Array.isArray(parsed.next_steps) && parsed.next_steps.instruction && (
+                      <span className="text-xs text-apple-muted">Next: {parsed.next_steps.instruction}</span>
+                    )}
+                  </div>
+                );
+              } catch {
+                return null;
+              }
+            })()}
           </div>
         </div>
       )}

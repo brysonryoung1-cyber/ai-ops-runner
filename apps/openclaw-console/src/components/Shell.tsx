@@ -21,13 +21,28 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   const target = useTarget();
   const [navOpen, setNavOpen] = useState(false);
   const [buildSha, setBuildSha] = useState<string | null>(null);
+  const [deploySha, setDeploySha] = useState<string | null>(null);
+  const [canonicalUrl, setCanonicalUrl] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/ui/health_public")
       .then((r) => r.json())
-      .then((d) => { if (d.build_sha) setBuildSha(d.build_sha); })
+      .then((d) => {
+        if (d.build_sha) setBuildSha(d.build_sha);
+        if (d.deploy_sha) setDeploySha(d.deploy_sha);
+        if (d.canonical_url) setCanonicalUrl(d.canonical_url);
+      })
       .catch(() => {});
   }, []);
+
+  const isCanonicalMismatch = (() => {
+    if (!canonicalUrl || typeof window === "undefined") return false;
+    try {
+      return !window.location.origin.includes(new URL(canonicalUrl).hostname);
+    } catch {
+      return false;
+    }
+  })();
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -104,11 +119,11 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             })}
           </ul>
         </nav>
-          <div className="mt-auto px-4 py-4 border-t border-white/10">
+          <div className="mt-auto px-4 py-4 border-t border-white/10 space-y-1">
             <p className="text-[11px] text-white/50">Host Executor · 127.0.0.1</p>
             {buildSha && (
-              <p data-testid="sidebar-build-sha" className="text-[10px] text-white/30 mt-1 font-mono">
-                {buildSha}
+              <p data-testid="sidebar-build-sha" className="text-[10px] text-white/30 font-mono truncate" title={`Build: ${buildSha} Deploy: ${deploySha ?? "—"}`}>
+                b:{buildSha}{deploySha ? ` d:${deploySha}` : ""}
               </p>
             )}
           </div>
@@ -126,6 +141,20 @@ export default function Shell({ children }: { children: React.ReactNode }) {
 
         {/* Main content */}
         <main className="flex-1 overflow-auto min-w-0">
+          {isCanonicalMismatch && canonicalUrl && (
+            <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2 flex items-center justify-between flex-wrap gap-2">
+              <p className="text-xs text-amber-300">
+                You&apos;re viewing a non-canonical host. The canonical URL is{" "}
+                <a href={canonicalUrl} className="font-medium underline hover:text-amber-200">{canonicalUrl}</a>.
+              </p>
+              <a
+                href={canonicalUrl}
+                className="inline-flex items-center px-3 py-1 text-xs font-medium rounded-lg bg-amber-500/20 text-amber-200 hover:bg-amber-500/30 transition-colors"
+              >
+                Go to canonical →
+              </a>
+            </div>
+          )}
           <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 md:py-8">
             {children}
           </div>

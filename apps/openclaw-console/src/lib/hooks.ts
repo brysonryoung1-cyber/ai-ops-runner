@@ -45,7 +45,14 @@ export async function authedFetch(
       route: url,
       error: typeof body.error === "string" ? body.error : undefined,
       error_class: typeof body.error_class === "string" ? body.error_class : undefined,
+      reason: typeof body.reason === "string" ? body.reason : undefined,
       message: typeof body.message === "string" ? body.message : undefined,
+      required_header: typeof body.required_header === "string" ? body.required_header : undefined,
+      trust_tailscale: typeof body.trust_tailscale === "boolean" ? body.trust_tailscale : undefined,
+      hq_token_required: typeof body.hq_token_required === "boolean" ? body.hq_token_required : undefined,
+      admin_token_loaded: typeof body.admin_token_loaded === "boolean" ? body.admin_token_loaded : undefined,
+      origin_seen: typeof body.origin_seen === "string" ? body.origin_seen : undefined,
+      origin_allowed: typeof body.origin_allowed === "boolean" ? body.origin_allowed : undefined,
       timestamp: new Date().toISOString(),
     };
     return { res, forbidden };
@@ -95,7 +102,14 @@ export function useExec() {
             route: `/api/exec (action=${action})`,
             error: typeof body.error === "string" ? body.error : "Forbidden",
             error_class: typeof body.error_class === "string" ? body.error_class : undefined,
+            reason: typeof body.reason === "string" ? body.reason : undefined,
             message: typeof body.message === "string" ? body.message : undefined,
+            required_header: typeof body.required_header === "string" ? body.required_header : undefined,
+            trust_tailscale: typeof body.trust_tailscale === "boolean" ? body.trust_tailscale : undefined,
+            hq_token_required: typeof body.hq_token_required === "boolean" ? body.hq_token_required : undefined,
+            admin_token_loaded: typeof body.admin_token_loaded === "boolean" ? body.admin_token_loaded : undefined,
+            origin_seen: typeof body.origin_seen === "string" ? body.origin_seen : undefined,
+            origin_allowed: typeof body.origin_allowed === "boolean" ? body.origin_allowed : undefined,
             timestamp: new Date().toISOString(),
           });
         }

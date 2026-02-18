@@ -230,12 +230,24 @@ if [ -f /etc/ai-ops-runner/secrets/openclaw_console_token ]; then
 fi
 export OPENCLAW_CONSOLE_TOKEN="$CONSOLE_TOKEN"
 
-# Load admin token (required for console→hostd auth)
+# Load admin token from canonical path (required for console→hostd auth)
 ADMIN_TOKEN=""
-for f in /etc/ai-ops-runner/secrets/openclaw_admin_token /etc/ai-ops-runner/secrets/openclaw_console_token /etc/ai-ops-runner/secrets/openclaw_api_token /etc/ai-ops-runner/secrets/openclaw_token; do
-  [ -f "$f" ] && ADMIN_TOKEN="$(cat "$f" 2>/dev/null | tr -d '[:space:]')" && [ -n "$ADMIN_TOKEN" ] && break
-done
+if [ -f /etc/ai-ops-runner/secrets/openclaw_admin_token ]; then
+  ADMIN_TOKEN="$(cat /etc/ai-ops-runner/secrets/openclaw_admin_token 2>/dev/null | tr -d '[:space:]')"
+fi
+if [ -z "$ADMIN_TOKEN" ]; then
+  for f in /etc/ai-ops-runner/secrets/openclaw_console_token /etc/ai-ops-runner/secrets/openclaw_api_token /etc/ai-ops-runner/secrets/openclaw_token; do
+    [ -f "$f" ] && ADMIN_TOKEN="$(cat "$f" 2>/dev/null | tr -d '[:space:]')" && [ -n "$ADMIN_TOKEN" ] && break
+  done
+fi
 export OPENCLAW_ADMIN_TOKEN="$ADMIN_TOKEN"
+
+# Trust Tailscale by default (private-only network)
+export OPENCLAW_TRUST_TAILSCALE="${OPENCLAW_TRUST_TAILSCALE:-1}"
+
+# Set build SHA from git rev-parse for console container
+BUILD_SHA="$(cd /opt/ai-ops-runner && git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
+export OPENCLAW_BUILD_SHA="$BUILD_SHA"
 
 # Set AIOPS_HOST to this machine's Tailscale IPv4 (required for SSH exec)
 AIOPS_HOST="$(tailscale ip -4 2>/dev/null | head -n1 | tr -d '[:space:]')"
@@ -250,8 +262,8 @@ if ! echo "$AIOPS_HOST" | grep -qE '^100\.[0-9]+\.[0-9]+\.[0-9]+$'; then
 fi
 export AIOPS_HOST
 
-docker compose -f docker-compose.yml -f docker-compose.console.yml up -d --build 2>&1 | tail -10
-echo "  Console: built and started"
+OPENCLAW_BUILD_SHA="$BUILD_SHA" docker compose -f docker-compose.yml -f docker-compose.console.yml up -d --build 2>&1 | tail -10
+echo "  Console: built and started (build_sha=$BUILD_SHA)"
 REMOTE_CONSOLE
 
 if [ "$CONSOLE_RC" -eq 0 ]; then
@@ -334,6 +346,8 @@ receipt = {
     'target': '${VPS_HOST}',
     'vps_dir': '${VPS_DIR}',
     'vps_head': '${VPS_HEAD}',
+    'deploy_sha': '${VPS_HEAD}',
+    'console_build_sha': '${VPS_HEAD}',
     'phone_url': '${PHONE_URL}',
     'console_bind': '127.0.0.1:${CONSOLE_PORT}',
     'tailscale_serve': 'HTTPS:443 -> http://127.0.0.1:${CONSOLE_PORT}',
@@ -393,6 +407,19 @@ else
   echo "║  DEPLOY FAIL — $FAILURES failure(s) in $STEP steps                ║"
   echo "║  Receipt: $RECEIPT_DIR"
   echo "╚══════════════════════════════════════════════════════════════╝"
+  # Auto-collect diagnostics bundle on failure
+  echo ""
+  echo "==> Auto-collecting diagnostics bundle..."
+  DIAG_DIR="$RECEIPT_DIR/diagnostics"
+  if [ -n "$PHONE_URL" ] && [ "$PHONE_URL" != "https://" ]; then
+    OPENCLAW_VERIFY_BASE_URL="$PHONE_URL" \
+    OPENCLAW_ADMIN_TOKEN="${OPENCLAW_ADMIN_TOKEN:-}" \
+    OPENCLAW_BUNDLE_DIR="$DIAG_DIR" \
+    "$SCRIPT_DIR/support_bundle_collect_prod.sh" 2>/dev/null || echo "  WARNING: Diagnostics collection failed"
+    echo "  Diagnostics: $DIAG_DIR"
+  else
+    echo "  WARNING: No phone URL available, skipping remote diagnostics"
+  fi
   # Notify failure
   if [ -x "$SCRIPT_DIR/openclaw_notify.sh" ]; then
     "$SCRIPT_DIR/openclaw_notify.sh" --priority high --title "OpenClaw Deploy" \

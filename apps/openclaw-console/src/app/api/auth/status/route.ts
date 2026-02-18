@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { existsSync, readFileSync, readdirSync } from "fs";
+import { join } from "path";
 import { execSync } from "child_process";
 
 export const dynamic = "force-dynamic";
@@ -6,15 +8,22 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/auth/status
  *
- * Self-diagnosing auth endpoint. Returns booleans + build SHA so production
- * users can debug 403s without screenshots or manual log spelunking.
+ * Self-diagnosing auth endpoint. Returns booleans + build/deploy SHAs + canonical
+ * URL so production users can debug 403s without screenshots or log spelunking.
  *
  * Never leaks secrets: only booleans and masked token fingerprints.
  *
  * Exempt from HQ token auth when OPENCLAW_TRUST_TAILSCALE=1 (see middleware).
  */
 
+function getArtifactsRoot(): string {
+  if (process.env.OPENCLAW_ARTIFACTS_ROOT) return process.env.OPENCLAW_ARTIFACTS_ROOT;
+  const repo = process.env.OPENCLAW_REPO_ROOT || process.cwd();
+  return join(repo, "artifacts");
+}
+
 function getBuildSha(): string {
+  if (process.env.OPENCLAW_BUILD_SHA) return process.env.OPENCLAW_BUILD_SHA;
   try {
     const cwd = process.env.OPENCLAW_REPO_ROOT || process.cwd();
     return execSync("git rev-parse --short HEAD", {
@@ -24,6 +33,21 @@ function getBuildSha(): string {
     }).trim();
   } catch {
     return "unknown";
+  }
+}
+
+function getDeploySha(): string | null {
+  try {
+    const deployDir = join(getArtifactsRoot(), "deploy");
+    if (!existsSync(deployDir)) return null;
+    const dirs = readdirSync(deployDir)
+      .filter((d) => existsSync(join(deployDir, d, "deploy_receipt.json")))
+      .sort((a, b) => b.localeCompare(a));
+    if (dirs.length === 0) return null;
+    const receipt = JSON.parse(readFileSync(join(deployDir, dirs[0], "deploy_receipt.json"), "utf-8"));
+    return receipt.deploy_sha ?? receipt.vps_head ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -91,6 +115,8 @@ export async function GET(req: NextRequest) {
     admin_token_loaded: adminTokenLoaded,
     host_executor_reachable: hostExecutorReachable,
     build_sha: getBuildSha(),
+    deploy_sha: getDeploySha(),
+    canonical_url: process.env.OPENCLAW_CANONICAL_URL || null,
     ui_routes: UI_ROUTES,
     trust_tailscale: trustTailscale,
     console_token_fingerprint: consoleToken ? maskFingerprint(consoleToken) : null,

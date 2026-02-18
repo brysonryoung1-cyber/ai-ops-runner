@@ -62,10 +62,60 @@ echo "  Baseline: $SINCE_SHA"
 echo "  HEAD:     $HEAD_SHA"
 echo "  Artifacts: $ARTIFACTS_DIR"
 
-# --- Ensure OpenAI API key ---
-# shellcheck source=ensure_openai_key.sh
-source "$SCRIPT_DIR/ensure_openai_key.sh"
-python3 "$SCRIPT_DIR/openai_key.py" status >&2
+# --- Review configuration (LiteLLM default path) ---
+# Configurable env vars for review cost/stability:
+#   REVIEW_BASE_URL    — LiteLLM proxy base URL (default: use LiteLLM if available, else OpenAI direct)
+#   REVIEW_API_KEY     — API key / virtual key for review endpoint
+#   REVIEW_MODEL       — model for review (default: gpt-4o-mini, cheap + fast)
+#   REVIEW_MAX_TOKENS  — max tokens per review request (default: 4096)
+#   REVIEW_MAX_FILES   — max files per review packet (default: 20)
+#   REVIEW_MAX_DIFF_BYTES — max diff size in bytes (default: 200000)
+
+REVIEW_BASE_URL="${REVIEW_BASE_URL:-}"
+REVIEW_API_KEY="${REVIEW_API_KEY:-}"
+REVIEW_MODEL="${REVIEW_MODEL:-gpt-4o-mini}"
+REVIEW_MAX_TOKENS="${REVIEW_MAX_TOKENS:-4096}"
+REVIEW_MAX_FILES="${REVIEW_MAX_FILES:-20}"
+REVIEW_MAX_DIFF_BYTES="${REVIEW_MAX_DIFF_BYTES:-200000}"
+REVIEW_PATH_USED=""
+
+# Determine which review path to use
+if [ -n "$REVIEW_BASE_URL" ] && [ -n "$REVIEW_API_KEY" ]; then
+  REVIEW_PATH_USED="litellm"
+  echo "  Review path: LiteLLM ($REVIEW_BASE_URL)" >&2
+  echo "  Review model: $REVIEW_MODEL (max_tokens=$REVIEW_MAX_TOKENS)" >&2
+elif [ -n "${OPENAI_API_KEY:-}" ]; then
+  REVIEW_PATH_USED="direct"
+  REVIEW_BASE_URL="https://api.openai.com/v1"
+  REVIEW_API_KEY="$OPENAI_API_KEY"
+  echo "  Review path: Direct OpenAI" >&2
+  echo "  Review model: $REVIEW_MODEL (max_tokens=$REVIEW_MAX_TOKENS)" >&2
+else
+  # Try to source OpenAI key as fallback
+  if [ -f "$SCRIPT_DIR/ensure_openai_key.sh" ]; then
+    # shellcheck source=ensure_openai_key.sh
+    source "$SCRIPT_DIR/ensure_openai_key.sh" 2>/dev/null || true
+  fi
+  if [ -n "${OPENAI_API_KEY:-}" ]; then
+    REVIEW_PATH_USED="direct"
+    REVIEW_BASE_URL="https://api.openai.com/v1"
+    REVIEW_API_KEY="$OPENAI_API_KEY"
+    echo "  Review path: Direct OpenAI (from ensure_openai_key)" >&2
+  else
+    echo "ERROR: No review API configured. Set one of:" >&2
+    echo "  1. REVIEW_BASE_URL + REVIEW_API_KEY (LiteLLM — recommended, cheapest)" >&2
+    echo "  2. OPENAI_API_KEY (direct OpenAI)" >&2
+    echo "" >&2
+    echo "Fail-closed: cannot proceed without review capability." >&2
+    exit 1
+  fi
+fi
+
+# Print masked key fingerprint (never the actual key)
+if [ -n "$REVIEW_API_KEY" ]; then
+  KEY_FINGERPRINT="${REVIEW_API_KEY:0:4}…${REVIEW_API_KEY: -4}"
+  echo "  API key fingerprint: $KEY_FINGERPRINT" >&2
+fi
 
 # --- Generate review bundle ---
 mkdir -p "$ARTIFACTS_DIR"
@@ -112,12 +162,17 @@ if python3 -c "from src.llm.review_gate import run_review" 2>/dev/null; then
   python3 -m src.llm.review_gate "$VERDICT_FILE" "$BUNDLE_FILE" || REVIEW_RC=$?
 else
   echo "  (LLM router not available, using direct OpenAI API call)" >&2
-  # Fallback: direct OpenAI API call (legacy path, identical behavior)
-  python3 - "$VERDICT_FILE" "$BUNDLE_FILE" <<'PYEOF' || REVIEW_RC=$?
+  # LiteLLM / Direct API call path — uses REVIEW_BASE_URL and REVIEW_API_KEY
+  python3 - "$VERDICT_FILE" "$BUNDLE_FILE" "$REVIEW_BASE_URL" "$REVIEW_API_KEY" "$REVIEW_MODEL" "$REVIEW_MAX_TOKENS" "$REVIEW_PATH_USED" <<'PYEOF' || REVIEW_RC=$?
 import json, sys, os
 
 verdict_file = sys.argv[1]
 bundle_file = sys.argv[2]
+base_url = sys.argv[3].rstrip("/")
+api_key = sys.argv[4]
+model = sys.argv[5]
+max_tokens = int(sys.argv[6])
+review_path = sys.argv[7]
 
 system_prompt = """You are a security-focused code reviewer for the ai-ops-runner repository (OpenClaw control plane).
 
@@ -148,22 +203,21 @@ If no blocking issues, verdict MUST be "APPROVED"."""
 with open(bundle_file) as f:
     bundle = f.read()
 
-api_key = os.environ.get("OPENAI_API_KEY", "")
 if not api_key:
-    print("ERROR: OPENAI_API_KEY not set", file=sys.stderr)
+    print("ERROR: No API key for review. Set REVIEW_API_KEY or OPENAI_API_KEY.", file=sys.stderr)
+    sys.exit(1)
+
+if model == "gpt-4o" and os.environ.get("OPENCLAW_ALLOW_EXPENSIVE_REVIEW") != "1":
+    print("ERROR: Review model is gpt-4o (expensive). Set OPENCLAW_ALLOW_EXPENSIVE_REVIEW=1 to allow, or use gpt-4o-mini (default). Fail-closed.", file=sys.stderr)
     sys.exit(1)
 
 import urllib.request
 import urllib.error
 
-model = os.environ.get("OPENCLAW_REVIEW_MODEL", "gpt-4o-mini")
-if model == "gpt-4o" and os.environ.get("OPENCLAW_ALLOW_EXPENSIVE_REVIEW") != "1":
-    print("ERROR: Review gate is set to gpt-4o (expensive). Set OPENCLAW_ALLOW_EXPENSIVE_REVIEW=1 to allow, or use gpt-4o-mini (default). Fail-closed.", file=sys.stderr)
-    sys.exit(1)
-
 payload = {
     "model": model,
     "temperature": 0,
+    "max_tokens": max_tokens,
     "response_format": {"type": "json_object"},
     "messages": [
         {"role": "system", "content": system_prompt},
@@ -171,8 +225,9 @@ payload = {
     ]
 }
 
+endpoint = f"{base_url}/chat/completions"
 req = urllib.request.Request(
-    "https://api.openai.com/v1/chat/completions",
+    endpoint,
     data=json.dumps(payload).encode("utf-8"),
     headers={
         "Content-Type": "application/json",
@@ -186,10 +241,10 @@ try:
         result = json.loads(resp.read().decode("utf-8"))
 except urllib.error.HTTPError as e:
     body = e.read().decode("utf-8", errors="replace")[:500]
-    print(f"ERROR: OpenAI API returned {e.code}: {body}", file=sys.stderr)
+    print(f"ERROR: Review API returned {e.code}: {body}", file=sys.stderr)
     sys.exit(1)
 except Exception as e:
-    print(f"ERROR: OpenAI API call failed: {e}", file=sys.stderr)
+    print(f"ERROR: Review API call failed: {e}", file=sys.stderr)
     sys.exit(1)
 
 try:
@@ -213,6 +268,8 @@ if verdict["verdict"] not in ["APPROVED", "BLOCKED"]:
 
 verdict["meta"] = {
     "model": model,
+    "max_tokens": max_tokens,
+    "review_path": review_path,
     "timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z",
     "type": "codex_diff_review"
 }

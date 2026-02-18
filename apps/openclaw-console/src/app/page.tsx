@@ -185,6 +185,9 @@ export default function OverviewPage() {
     last_7_days_usd: number;
     top_project: { id: string; usd: number };
   } | null>(null);
+  const [diagStatus, setDiagStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [diagLink, setDiagLink] = useState<string | null>(null);
+  const [diagRunId, setDiagRunId] = useState<string | null>(null);
 
   // Check connectivity via server-mediated endpoint; 3s hard timeout
   const HOST_STATUS_TIMEOUT_MS = 3000;
@@ -926,6 +929,51 @@ export default function OverviewPage() {
           </GlassCard>
         </div>
       )}
+
+      {/* Collect Diagnostics */}
+      <div className="mt-6">
+        <GlassCard>
+          <div className="px-5 py-3 border-b border-white/10 flex items-center justify-between">
+            <span className="text-sm font-semibold text-white/95">Diagnostics</span>
+          </div>
+          <div className="p-5 flex items-center gap-3 flex-wrap">
+            <GlassButton
+              onClick={async () => {
+                setDiagStatus("loading");
+                try {
+                  const headers: Record<string, string> = {};
+                  if (token) headers["X-OpenClaw-Token"] = token;
+                  const res = await fetch("/api/support/bundle", { method: "POST", headers });
+                  const data = await res.json();
+                  if (data.ok && data.permalink) {
+                    setDiagLink(data.permalink);
+                    setDiagRunId(data.run_id ?? null);
+                    setDiagStatus("done");
+                  } else {
+                    setDiagStatus("error");
+                  }
+                } catch {
+                  setDiagStatus("error");
+                }
+              }}
+              disabled={diagStatus === "loading"}
+            >
+              {diagStatus === "idle" && "Collect Diagnostics"}
+              {diagStatus === "loading" && "Collecting…"}
+              {diagStatus === "done" && "Done"}
+              {diagStatus === "error" && "Failed — retry"}
+            </GlassButton>
+            {diagLink && (
+              <Link href={diagLink} className="text-xs text-blue-300 hover:text-blue-200">
+                View bundle →
+              </Link>
+            )}
+            {diagRunId && (
+              <span className="text-[10px] text-white/40 font-mono">run_id: {diagRunId}</span>
+            )}
+          </div>
+        </GlassCard>
+      </div>
 
       <div className="mt-6 flex justify-end">
         <GlassButton

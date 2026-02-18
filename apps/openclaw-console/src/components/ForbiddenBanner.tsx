@@ -9,11 +9,20 @@ export interface ForbiddenInfo {
   route: string;
   error?: string;
   error_class?: string;
+  reason?: string;
   message?: string;
+  required_header?: string;
+  trust_tailscale?: boolean;
+  hq_token_required?: boolean;
+  admin_token_loaded?: boolean;
+  origin_seen?: string | null;
+  origin_allowed?: boolean;
   timestamp: string;
 }
 
 function diagnoseCause(info: ForbiddenInfo): string {
+  if (info.reason) return info.reason;
+
   const ec = info.error_class ?? "";
   const err = (info.error ?? info.message ?? "").toLowerCase();
 
@@ -22,6 +31,9 @@ function diagnoseCause(info: ForbiddenInfo): string {
   }
   if (ec === "ADMIN_TOKEN_MISSING" || err.includes("admin") || err.includes("deploy+verify")) {
     return "Server missing OPENCLAW_ADMIN_TOKEN (host executor admin actions blocked)";
+  }
+  if (ec === "ORIGIN_BLOCKED") {
+    return `Origin/CSRF blocked — origin "${info.origin_seen ?? "none"}" not in allowlist`;
   }
   if (ec === "MISSING_GMAIL_CLIENT_JSON") {
     return "Gmail OAuth client JSON missing. Upload gmail_client.json in Settings → Connectors → Gmail OAuth, or see /api/connectors/gmail/requirements for redirect URIs.";
@@ -78,6 +90,14 @@ export default function ForbiddenBanner({ info, onDismiss }: ForbiddenBannerProp
           <p className="text-xs text-red-200/80 mt-1">
             {cause}
           </p>
+          {info.error_class && (
+            <p className="text-[10px] text-red-300/60 mt-1 font-mono">
+              {info.error_class}
+              {info.admin_token_loaded === false && " · admin_token: missing"}
+              {info.hq_token_required && " · hq_token: required"}
+              {info.trust_tailscale && " · tailscale: trusted"}
+            </p>
+          )}
           <p className="text-[10px] text-white/40 mt-1">
             Route: {info.route} · {new Date(info.timestamp).toLocaleTimeString()}
           </p>

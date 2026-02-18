@@ -26,6 +26,7 @@ import { NextRequest, NextResponse } from "next/server";
 /** Maximum request body size for API routes (1MB) */
 const MAX_BODY_SIZE = 1024 * 1024;
 
+
 /**
  * Routes exempt from HQ token auth. These endpoints return only
  * non-sensitive diagnostic data and have their own origin validation.
@@ -63,7 +64,6 @@ export function middleware(req: NextRequest) {
   if (provided !== token) {
     const tokenStatus = provided ? "invalid" : "missing";
     const ip = req.headers.get("x-forwarded-for") || "unknown";
-    // Single-line security event — no secrets logged
     console.error(
       `[SECURITY] Unauthorized API access: path=${path} token=${tokenStatus} ip=${ip}`
     );
@@ -71,10 +71,19 @@ export function middleware(req: NextRequest) {
     return NextResponse.json(
       {
         ok: false,
-        error: "Unauthorized: missing or invalid X-OpenClaw-Token header.",
+        error: "Forbidden",
         error_class: "HQ_TOKEN_MISSING",
+        reason: provided
+          ? "X-OpenClaw-Token header present but invalid."
+          : "X-OpenClaw-Token header missing.",
+        required_header: "X-OpenClaw-Token",
+        trust_tailscale: process.env.OPENCLAW_TRUST_TAILSCALE === "1",
+        hq_token_required: true,
+        admin_token_loaded: typeof process.env.OPENCLAW_ADMIN_TOKEN === "string" && process.env.OPENCLAW_ADMIN_TOKEN.length > 0,
+        origin_seen: req.headers.get("origin") ?? null,
+        origin_allowed: false,
       },
-      { status: 401 }
+      { status: 403 }
     );
   }
 
