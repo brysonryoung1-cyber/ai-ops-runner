@@ -10,9 +10,12 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 const string BacktestOnlyRequired = "BACKTEST_ONLY_REQUIRED";
 const string StateFileName = "state.json";
 const string DoneFileName = "done.json";
+const string JobsDirName = "jobs";
 const string Tier2Dir = "tier2";
 const string LogsDir = "logs";
 const string RunnerLogFile = "runner.log";
+const string ArtifactDirFileName = "artifact_dir.txt";
+const string ConfirmSpecFileName = "confirm_spec.json";
 
 var repoRoot = Environment.GetEnvironmentVariable("OPENCLAW_REPO_ROOT") ?? Directory.GetCurrentDirectory();
 var stateDir = Path.Combine(repoRoot, "artifacts", "nt8_hostd");
@@ -227,7 +230,9 @@ app.MapPost("/v1/orb/backtest/confirm_nt8/run", async (HttpContext ctx) =>
     }
 
     var runId = NewRunId();
-    var artifactDirFinal = Path.Combine(Path.GetFullPath(outputRoot.Trim()), runId);
+    // Canonical layout: <output_root>/<run_id>/tier2_nt8/tier2/{results.csv, summary.json, raw_exports/, done.json, logs/}
+    var runRoot = Path.Combine(Path.GetFullPath(outputRoot.Trim()), runId);
+    var artifactDirFinal = Path.Combine(runRoot, "tier2_nt8");
     Directory.CreateDirectory(artifactDirFinal);
 
     string topkPath;
@@ -239,7 +244,7 @@ app.MapPost("/v1/orb/backtest/confirm_nt8/run", async (HttpContext ctx) =>
     }
     else if (body.TryGetProperty("topk_inline", out var ti))
     {
-        topkPath = Path.Combine(artifactDirFinal, "topk.json");
+        topkPath = Path.Combine(runRoot, "topk.json");
         var topkContent = ti.ValueKind == JsonValueKind.String ? (ti.GetString() ?? "{}") : ti.GetRawText();
         File.WriteAllText(topkPath, topkContent);
     }
@@ -251,8 +256,53 @@ app.MapPost("/v1/orb/backtest/confirm_nt8/run", async (HttpContext ctx) =>
         return;
     }
 
+    // Validate topk.json before starting (fail fast)
+    try
+    {
+        var validatePsi = new ProcessStartInfo
+        {
+            FileName = "python",
+            ArgumentList = { "-m", "tools.validate_topk", topkPath },
+            WorkingDirectory = repoRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        foreach (var key in new[] { "OPENCLAW_REPO_ROOT", "PATH" })
+        {
+            var v = Environment.GetEnvironmentVariable(key);
+            if (!string.IsNullOrEmpty(v)) validatePsi.Environment[key] = v;
+        }
+        using var validateProc = Process.Start(validatePsi);
+        if (validateProc != null)
+        {
+            validateProc.WaitForExit(TimeSpan.FromSeconds(15));
+            if (validateProc.ExitCode != 0)
+            {
+                var err = validateProc.StandardError.ReadToEnd();
+                ctx.Response.StatusCode = 400;
+                ctx.Response.ContentType = "application/json";
+                await ctx.Response.WriteAsync(JsonSerializer.Serialize(new { error = "topk validation failed", detail = err.Trim(), code = "TOPK_VALIDATION_FAILED" }));
+                return;
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        ctx.Response.StatusCode = 500;
+        ctx.Response.ContentType = "application/json";
+        await ctx.Response.WriteAsync(JsonSerializer.Serialize(new { error = "validate_topk failed", detail = ex.Message }));
+        return;
+    }
+
     var tier2Logs = Path.Combine(artifactDirFinal, Tier2Dir, LogsDir);
     Directory.CreateDirectory(tier2Logs);
+
+    // Jobs folder queue: hostd writes artifact_dir so harness/AddOn knows where to write tier2/
+    var jobsDir = Path.Combine(stateDir, JobsDirName, runId);
+    Directory.CreateDirectory(jobsDir);
+    File.WriteAllText(Path.Combine(jobsDir, ArtifactDirFileName), artifactDirFinal);
 
     var ps1Path = Path.Combine(repoRoot, "ops", "windows", "run_tier2_confirm.ps1");
     if (!File.Exists(ps1Path))
@@ -274,6 +324,8 @@ app.MapPost("/v1/orb/backtest/confirm_nt8/run", async (HttpContext ctx) =>
         CreateNoWindow = true,
     };
     psi.Environment["BACKTEST_ONLY"] = "true";
+    psi.Environment["OPENCLAW_TIER2_RUN_ID"] = runId;
+    psi.Environment["OPENCLAW_TIER2_JOB_DIR"] = jobsDir;
     foreach (var key in new[] { "OPENCLAW_REPO_ROOT", "PATH" })
     {
         var v = Environment.GetEnvironmentVariable(key);

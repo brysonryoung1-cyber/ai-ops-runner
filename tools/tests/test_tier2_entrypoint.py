@@ -70,3 +70,15 @@ class TestIdempotency:
         done2 = json.loads((out / "tier2" / "done.json").read_text())
         assert rc1 == rc2 == 3
         assert done1["run_id"] == done2["run_id"]
+
+    def test_resumable_returns_existing_exit_code(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("BACKTEST_ONLY", "true")
+        topk = _write_topk(tmp_path)
+        out = tmp_path / "output"
+        (out / "tier2").mkdir(parents=True)
+        (out / "tier2" / "raw_exports").mkdir()
+        (out / "tier2" / "done.json").write_text(
+            json.dumps({"done": True, "exit_code": 3, "status": "STUB", "run_id": "t2-x-0"})
+        )
+        rc = main(["--topk", str(topk), "--output-dir", str(out), "--mode", "strategy_analyzer"])
+        assert rc == 3

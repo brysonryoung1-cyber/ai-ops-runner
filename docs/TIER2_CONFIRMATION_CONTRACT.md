@@ -48,9 +48,27 @@ The harness consumes a single `topk.json` file per candidate. The schema is cano
 }
 ```
 
+## Run Directory Layout
+
+Canonical layout when invoked via openclaw-nt8-hostd:
+
+```
+<artifacts_root>/backtests/<run_id>/
+├── topk.json              # Input spec (or copy when topk_inline)
+└── tier2_nt8/
+    └── tier2/
+        ├── results.csv    # One row per candidate with normalized metrics
+        ├── summary.json   # Metadata, verdict (PASS/FAIL), reasons, best_candidate
+        ├── raw_exports/   # Copy-through of raw NT8 export files
+        ├── done.json      # Run completion marker
+        └── logs/          # runner.log (stdout/stderr)
+```
+
+The hostd returns `artifact_dir` = `<run_id>/tier2_nt8`; consumers read `tier2/done.json`, `tier2/summary.json`, etc. under that path.
+
 ## Output Artifacts
 
-All artifacts are written under `<output_dir>/tier2/`:
+All artifacts are written under `<output_dir>/tier2/` (where `output_dir` is the tier2_nt8 directory when using hostd):
 
 ```
 tier2/
@@ -159,6 +177,15 @@ cat /path/to/artifacts/backtests/run-001/tier2/results.csv
 ```bash
 python -m tools.validate_topk /path/to/topk.json
 ```
+
+## confirm_spec.json and Jobs Folder
+
+The hostd creates a job directory per run at `artifacts/nt8_hostd/jobs/<run_id>/` containing:
+
+- **artifact_dir.txt** — path to the run’s `tier2_nt8` directory (where the harness writes `tier2/`).
+- The runner writes **confirm_spec.json** (derived from topk.json): `candidate_id`, `params` (flat NT8 case-sensitive names + typed values), `instrument`, `timeframe`, `date_ranges`, `mode`, `BACKTEST_ONLY: true`.
+
+An NT8 AddOn or external harness can watch this jobs folder, read `confirm_spec.json` and `artifact_dir.txt`, run Strategy Analyzer/WFO, and write results into `artifact_dir/tier2/` (raw_exports, then done.json). Until real NT8 automation is connected, the in-repo harness writes stub artifacts and exits with code 3.
 
 ## Phase-0 Stub Behavior
 

@@ -18,12 +18,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 from tools.validate_topk import validate_topk_file
 from tools.backtest_gate import check_backtest_only_gate
 from tools.tier2_artifacts import Tier2Artifacts
+from tools.confirm_spec import write_confirm_spec
+from tools.nt8_export_normalizer import normalize_raw_exports
 
 VALID_MODES = ("strategy_analyzer", "walk_forward")
 
@@ -82,6 +85,15 @@ def main(argv: list[str] | None = None) -> int:
     arts = Tier2Artifacts(output_dir, candidate_id)
     arts.ensure_dirs()
 
+    # --- Resumable: if done.json exists, no-op and return existing exit_code ---
+    done_path = output_dir / "tier2" / "done.json"
+    if done_path.exists():
+        try:
+            done_data = json.loads(done_path.read_text())
+            return int(done_data.get("exit_code", 3))
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+
     # --- Step 2: Backtest-only gate ---
     gate = check_backtest_only_gate(
         topk_backtest_only=topk.get("BACKTEST_ONLY", False),
@@ -101,11 +113,47 @@ def main(argv: list[str] | None = None) -> int:
         arts.write_done(exit_code=1, status=gate.error_class)
         return 1
 
-    # --- Step 3: Attempt NT8 automation (Phase-0 stub) ---
-    # Future: wire to NT8 Strategy Analyzer or Walk-Forward Optimizer via
-    # COM automation or CLI bridge. For now, produce the artifact skeleton
-    # and exit with NT8_AUTOMATION_NOT_IMPLEMENTED.
+    # --- Step 3: Write confirm_spec to job dir if hostd set OPENCLAW_TIER2_JOB_DIR ---
+    job_dir = os.environ.get("OPENCLAW_TIER2_JOB_DIR")
+    if job_dir:
+        try:
+            write_confirm_spec(args.topk, job_dir, mode=args.mode)
+        except Exception as e:
+            print(json.dumps({"stage": "confirm_spec", "error": str(e)}), file=sys.stderr)
+            arts.write_summary(verdict="FAIL", reasons=[f"confirm_spec write failed: {e}"], extra={"error_class": "CONFIRM_SPEC_ERROR"})
+            arts.write_results_csv()
+            arts.write_done(exit_code=1, status="CONFIRM_SPEC_ERROR")
+            return 1
 
+    # --- Step 4: Run harness (mock or real NT8); if job dir not set, use Phase-0 stub ---
+    if job_dir and Path(job_dir).is_dir():
+        import subprocess
+        proc = subprocess.run(
+            [sys.executable, "-m", "tools.nt8_harness_bridge"],
+            env={**os.environ, "OPENCLAW_TIER2_JOB_DIR": job_dir},
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if proc.returncode != 0 and proc.returncode != 3:
+            arts.write_summary(verdict="FAIL", reasons=[proc.stderr or "harness failed"], extra={"error_class": "HARNESS_ERROR"})
+            arts.write_results_csv()
+            arts.write_done(exit_code=1, status="HARNESS_ERROR")
+            return 1
+        # If harness wrote raw_exports with parseable data, normalize into results.csv/summary
+        norm_rows, norm_verdict, norm_reasons = normalize_raw_exports(arts, candidate_id)
+        if norm_rows and norm_verdict == "PASS":
+            arts.write_results_csv(norm_rows)
+            arts.write_summary(verdict="PASS", reasons=norm_reasons or ["export normalized"], best_candidate=candidate_id)
+            arts.write_done(exit_code=0, status="PASS")
+            return 0
+        # Stub or no parseable export: use what harness already wrote (done.json from bridge)
+        if done_path.exists():
+            try:
+                return int(json.loads(done_path.read_text()).get("exit_code", 3))
+            except (json.JSONDecodeError, ValueError, TypeError):
+                pass
+    # Phase-0 fallback: no job dir or harness not available
     stub_reason = "NT8_AUTOMATION_NOT_IMPLEMENTED"
     print(
         json.dumps({
@@ -116,7 +164,6 @@ def main(argv: list[str] | None = None) -> int:
             "gate_checks": gate.checks,
         }),
     )
-
     arts.write_stub_artifacts(stub_reason)
     return 3
 

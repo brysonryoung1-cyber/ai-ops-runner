@@ -32,8 +32,8 @@ Base path: `/v1/orb/backtest/confirm_nt8/`
 ### POST run — request body
 
 - **topk_path** (string, optional): Path to `topk.json`. If relative, resolved from repo root.
-- **topk_inline** (string or object, optional): Inline topk JSON. If provided, written to `<artifact_dir>/topk.json` and used as input.
-- **output_root** (string, required): Root directory for run artifacts. Artifacts are written under `<output_root>/<run_id>/tier2/...`.
+- **topk_inline** (string or object, optional): Inline topk JSON. If provided, written to `<output_root>/<run_id>/topk.json` and used as input.
+- **output_root** (string, required): Root directory for run artifacts. Artifacts are written under `<output_root>/<run_id>/tier2_nt8/tier2/...`; the API returns `artifact_dir` = `<output_root>/<run_id>/tier2_nt8`.
 - **mode** (string, optional): `strategy_analyzer` (default) or `walk_forward`.
 - **BACKTEST_ONLY** (boolean, required): Must be `true` in the body (or inside `topk_inline`).
 - **force**, **ref** (optional): Reserved for future use.
@@ -79,11 +79,12 @@ curl -s "http://127.0.0.1:8878/v1/orb/backtest/confirm_nt8/collect?run_id=202602
   -H "Authorization: Bearer $TOKEN" -o tier2-run.zip
 ```
 
-## Artifacts and done.json
+## Run directory layout and artifacts
 
-- Each run gets `<output_root>/<run_id>/` as the run root. The harness writes `<output_root>/<run_id>/tier2/done.json`, `summary.json`, `results.csv`, etc.
+- Each run gets `<output_root>/<run_id>/tier2_nt8/` as the **artifact_dir** (returned in run and status). The harness writes `tier2/` inside that:
+  - `tier2/done.json`, `tier2/summary.json`, `tier2/results.csv`, `tier2/raw_exports/`, `tier2/logs/runner.log`.
 - **done.json** is the completion marker. When present, `state` is `done` and `exit_code` is set (e.g. 3 for Phase-0 stub).
-- Runner stdout/stderr are written to `<run_root>/tier2/logs/runner.log`. Hostd state is under `artifacts/nt8_hostd/state.json`.
+- Hostd state is under `artifacts/nt8_hostd/state.json`. Job queue: `artifacts/nt8_hostd/jobs/<run_id>/` (artifact_dir.txt, confirm_spec.json).
 
 ## Installing and running on Windows
 
@@ -112,12 +113,39 @@ curl -s "http://127.0.0.1:8878/v1/orb/backtest/confirm_nt8/collect?run_id=202602
 
 The service binds to 127.0.0.1 only. To reach it from another machine (e.g. a Linux runner), you can use **Tailscale** and serve the hostd port only on the Tailscale interface, or run a small reverse proxy that listens on the Tailscale IP. This doc does not configure Tailscale; it is a note for operators who want remote access without opening the host to 0.0.0.0.
 
-## Smoke test
+## Verification steps (install + smoke)
 
-From repo root (Windows, with .NET 8 and Python available):
+1. **Build and install** (run as Administrator from repo root):
 
-```powershell
-.\ops\tests\nt8_hostd_smoke.ps1
-```
+   ```powershell
+   $env:OPENCLAW_NT8_HOSTD_TOKEN = 'your-secret-token'
+   .\ops\windows\install_nt8_hostd.ps1 -Token $env:OPENCLAW_NT8_HOSTD_TOKEN -Port 8878
+   ```
 
-This starts hostd on port 18999, posts a run with the fixture topk, polls status until done, asserts `exit_code -eq 3` and `done.json` exists, then tests collect. No manual runs required.
+2. **Verify health** (same machine):
+
+   ```powershell
+   $token = $env:OPENCLAW_NT8_HOSTD_TOKEN
+   Invoke-RestMethod -Uri "http://127.0.0.1:8878/v1/orb/backtest/confirm_nt8/health" -Headers @{ Authorization = "Bearer $token" }
+   ```
+
+   Expect: `ok: true`, `backtest_only_env: true`.
+
+3. **Run a sample job** (fixture topk):
+
+   ```powershell
+   $token = $env:OPENCLAW_NT8_HOSTD_TOKEN
+   $topk = Get-Content -Raw (Join-Path $PWD 'tools\tests\fixtures\sample_topk.json')
+   $body = @{ topk_inline = $topk; output_root = "C:\artifacts\tier2"; mode = "strategy_analyzer"; BACKTEST_ONLY = $true } | ConvertTo-Json -Compress
+   $run = Invoke-RestMethod -Uri "http://127.0.0.1:8878/v1/orb/backtest/confirm_nt8/run" -Method Post -Headers @{ Authorization = "Bearer $token"; "Content-Type" = "application/json" } -Body $body
+   # Poll: GET .../status?run_id=$($run.run_id) until state=done; then GET .../collect?run_id=... -OutFile tier2-run.zip
+   ```
+
+4. **Smoke test** (starts hostd in-process, no service):
+
+   ```powershell
+   .\ops\tests\tier2_hostd_smoke.ps1
+   ```
+   Or: `.\ops\tests\nt8_hostd_smoke.ps1`
+
+   Both start hostd on a random port, submit fixture topk, wait for `done.json`, and verify `tier2/results.csv`, `summary.json`, and collect zip.
