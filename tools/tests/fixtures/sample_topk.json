@@ -1,0 +1,24 @@
+{
+  "candidate_id": "orb-nq-v103-001",
+  "strategy_name": "ORBStrategy",
+  "strategy_version": "1.0.3",
+  "instrument": "NQ 03-26",
+  "timeframe": "5 Min",
+  "date_ranges": [
+    {"start": "2025-01-02", "end": "2025-06-30"},
+    {"start": "2025-07-01", "end": "2025-12-31"}
+  ],
+  "sessions": "CME US Index Futures RTH",
+  "params": {
+    "OrbMinutes": {"type": "int", "value": 30},
+    "ProfitTarget": {"type": "double", "value": 50.0},
+    "StopLoss": {"type": "double", "value": 25.0},
+    "UseTrailing": {"type": "bool", "value": true},
+    "SessionLabel": {"type": "string", "value": "RTH"}
+  },
+  "fees_slippage": {
+    "commission_per_side": 2.05,
+    "slippage_ticks": 2
+  },
+  "BACKTEST_ONLY": true
+}

@@ -1,0 +1,119 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Tier-2 Top-K Confirmation Spec",
+  "description": "Canonical schema for topk.json consumed by the Tier-2 confirmation harness. Parameter names are case-sensitive; typed params are required.",
+  "type": "object",
+  "required": [
+    "candidate_id",
+    "strategy_name",
+    "strategy_version",
+    "instrument",
+    "timeframe",
+    "date_ranges",
+    "sessions",
+    "params",
+    "fees_slippage",
+    "BACKTEST_ONLY"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "description": "Stable unique identifier for this candidate. Must be idempotent across re-runs."
+    },
+    "strategy_name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Exact NinjaTrader strategy class name."
+    },
+    "strategy_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Strategy version string (e.g. '1.0.3')."
+    },
+    "instrument": {
+      "type": "string",
+      "minLength": 1,
+      "description": "NinjaTrader instrument name (e.g. 'NQ 03-26')."
+    },
+    "timeframe": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Bar period / timeframe (e.g. '5 Min', '1 Tick')."
+    },
+    "date_ranges": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["start", "end"],
+        "additionalProperties": false,
+        "properties": {
+          "start": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "ISO date for range start (inclusive)."
+          },
+          "end": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "ISO date for range end (inclusive)."
+          }
+        }
+      },
+      "description": "One or more date ranges to backtest."
+    },
+    "sessions": {
+      "type": "string",
+      "minLength": 1,
+      "description": "NinjaTrader session template name."
+    },
+    "params": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[A-Za-z_][A-Za-z0-9_]*$": {
+          "type": "object",
+          "required": ["type", "value"],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["int", "double", "bool", "string"],
+              "description": "Parameter CLR type."
+            },
+            "value": {
+              "description": "Parameter value. Must match the declared type."
+            }
+          }
+        }
+      },
+      "description": "Strategy parameters keyed by exact (case-sensitive) property name. Each must declare type and value."
+    },
+    "fees_slippage": {
+      "type": "object",
+      "required": ["commission_per_side", "slippage_ticks"],
+      "additionalProperties": false,
+      "properties": {
+        "commission_per_side": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Commission per side in account currency."
+        },
+        "slippage_ticks": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Slippage in ticks per side."
+        }
+      }
+    },
+    "BACKTEST_ONLY": {
+      "type": "boolean",
+      "const": true,
+      "description": "Must be exactly true. Fail-closed gate: refuse to run if false or missing."
+    }
+  }
+}
