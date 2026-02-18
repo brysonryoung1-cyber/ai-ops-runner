@@ -101,23 +101,27 @@ run_codex_review() {
   #   -s read-only   = read-only sandbox (review never writes code)
   #   --output-last-message = capture the agent's final message to a file
   local raw_output_file="${verdict_file}.raw"
+  local stdout_capture="${raw_output_file}.stdout"
   local codex_rc=0
   $CODEX_CMD exec \
     --full-auto \
     -s read-only \
     --output-last-message "$raw_output_file" \
     "$prompt" \
-    2>/dev/null || codex_rc=$?
+    2>/dev/null | tee "$stdout_capture" || codex_rc=${PIPESTATUS[0]}
 
-  if [ "$codex_rc" -ne 0 ] && [ ! -f "$raw_output_file" ]; then
+  if [ "$codex_rc" -ne 0 ] && [ ! -f "$raw_output_file" ] && [ ! -s "$stdout_capture" ]; then
     echo "ERROR: Codex exec failed (rc=$codex_rc) and produced no output" >&2
     return 1
   fi
 
-  # Extract JSON from the captured last message
+  # Extract JSON from the captured last message (file preferred; fallback to stdout)
   local raw_content=""
-  if [ -f "$raw_output_file" ]; then
+  if [ -f "$raw_output_file" ] && [ -s "$raw_output_file" ]; then
     raw_content="$(cat "$raw_output_file")"
+  elif [ -f "$stdout_capture" ] && [ -s "$stdout_capture" ]; then
+    raw_content="$(cat "$stdout_capture")"
+    echo "INFO: Using stdout capture (--output-last-message file was empty)" >&2
   fi
 
   local json_output
@@ -181,21 +185,26 @@ else:
     raw_trimmed="$(echo "$raw_content" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | head -1)"
     if [ "$raw_trimmed" = "APPROVED" ]; then
       echo '{"verdict":"APPROVED","blockers":[],"non_blocking":["Codex returned plain APPROVED; minimal verdict written"],"tests_run":"bundle"}' > "$verdict_file"
-      rm -f "$raw_output_file"
+      rm -f "$raw_output_file" "$stdout_capture"
       return 0
     fi
     if [ "$raw_trimmed" = "BLOCKED" ]; then
       echo '{"verdict":"BLOCKED","blockers":["Codex returned BLOCKED without details"],"non_blocking":[],"tests_run":"bundle"}' > "$verdict_file"
-      rm -f "$raw_output_file"
+      rm -f "$raw_output_file" "$stdout_capture"
       return 0
     fi
-    echo "ERROR: Failed to extract valid JSON from Codex output" >&2
-    echo "Raw output saved to ${raw_output_file}" >&2
+    if [ -z "$raw_content" ]; then
+      echo "ERROR: Codex produced no output (empty last message and stdout)" >&2
+    else
+      echo "ERROR: Failed to extract valid JSON from Codex output" >&2
+      printf '%s' "$raw_content" > "$raw_output_file"
+      echo "Raw output saved to ${raw_output_file}" >&2
+    fi
     return 1
   fi
 
   echo "$json_output" > "$verdict_file"
-  rm -f "$raw_output_file"
+  rm -f "$raw_output_file" "$stdout_capture"
 }
 
 # Validate the complete verdict (with meta) against the schema contract.
