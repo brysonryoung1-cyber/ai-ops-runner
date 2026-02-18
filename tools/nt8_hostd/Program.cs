@@ -61,6 +61,37 @@ bool Authorize(HttpRequest request)
         Encoding.UTF8.GetBytes(expectedToken));
 }
 
+// Resolve Python executable: try python, python3, py (align with ops/windows/run_tier2_confirm.ps1)
+static string GetPythonExecutable(string repoRoot)
+{
+    foreach (var name in new[] { "python", "python3", "py" })
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = name,
+                ArgumentList = { "-c", "import sys" },
+                WorkingDirectory = repoRoot,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            foreach (var key in new[] { "OPENCLAW_REPO_ROOT", "PATH" })
+            {
+                var v = Environment.GetEnvironmentVariable(key);
+                if (!string.IsNullOrEmpty(v)) psi.Environment[key] = v;
+            }
+            using var p = Process.Start(psi);
+            if (p != null && p.WaitForExit(TimeSpan.FromSeconds(5)) && p.ExitCode == 0)
+                return name;
+        }
+        catch { /* try next */ }
+    }
+    return "python"; // fallback for error message
+}
+
 // --- Single-flight: one active run at a time (lock around start) ---
 var runStartLock = new SemaphoreSlim(1, 1);
 
@@ -259,9 +290,10 @@ app.MapPost("/v1/orb/backtest/confirm_nt8/run", async (HttpContext ctx) =>
     // Validate topk.json before starting (fail fast)
     try
     {
+        var pythonExe = GetPythonExecutable(repoRoot);
         var validatePsi = new ProcessStartInfo
         {
-            FileName = "python",
+            FileName = pythonExe,
             ArgumentList = { "-m", "tools.validate_topk", topkPath },
             WorkingDirectory = repoRoot,
             UseShellExecute = false,
