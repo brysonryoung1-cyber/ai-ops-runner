@@ -1,0 +1,14 @@
+[Unit]
+Description=OpenClaw executor watchdog — hostd + console→hostd connectivity, restart on 3 failures
+After=network.target openclaw-hostd.service docker.service
+
+[Service]
+Type=oneshot
+Environment=OPENCLAW_EXECUTOR_WATCHDOG_DIR=/var/lib/ai-ops-runner/executor_watchdog
+Environment=OPENCLAW_HOSTD_PORT=8877
+Environment=OPENCLAW_REPO_ROOT=/opt/ai-ops-runner
+ExecStart=/bin/bash -c 'ROOT=/opt/ai-ops-runner; [ -f "$ROOT/ops/openclaw_executor_watchdog.sh" ] && exec "$ROOT/ops/openclaw_executor_watchdog.sh" || exec /bin/true'
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target
