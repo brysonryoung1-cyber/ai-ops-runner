@@ -93,6 +93,28 @@ if bad:
       pass "All Docker services healthy"
     else
       fail "Unhealthy services: $UNHEALTHY"
+      # Print last ~5 health log lines per unhealthy container (never fly blind)
+      for name in $UNHEALTHY; do
+        cname="${name%%(*}"
+        [ -z "$cname" ] && continue
+        if docker inspect "$cname" --format '{{json .State.Health}}' 2>/dev/null | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    if not d:
+        sys.exit(0)
+    log = d.get('Log') or []
+    for e in log[-5:]:
+        out = (e.get('Output') or '').strip()
+        if out:
+            for line in out.split('\n'):
+                print(line[:500])
+except Exception:
+    pass
+" 2>/dev/null; then
+          :
+        fi
+      done
     fi
   fi
 else
