@@ -35,6 +35,7 @@
     { "id": "autopilot_enable", "label": "Enable Autopilot", "timeout_sec": 10, "cmd_template": "mkdir -p /var/lib/ai-ops-runner/autopilot && touch /var/lib/ai-ops-runner/autopilot/enabled && echo '{\"ok\":true,\"enabled\":true}'" },
     { "id": "autopilot_disable", "label": "Disable Autopilot", "timeout_sec": 10, "cmd_template": "rm -f /var/lib/ai-ops-runner/autopilot/enabled && echo '{\"ok\":true,\"enabled\":false}'" },
     { "id": "autopilot_run_now", "label": "Autopilot Run Now", "timeout_sec": 900, "cmd_template": "cd ${ROOT_DIR} && ./ops/autopilot_tick.sh" },
-    { "id": "autopilot_install", "label": "Install Autopilot Timer", "timeout_sec": 30, "cmd_template": "cd ${ROOT_DIR} && sudo ./ops/openclaw_install_autopilot.sh" }
+    { "id": "autopilot_install", "label": "Install Autopilot Timer", "timeout_sec": 30, "cmd_template": "cd ${ROOT_DIR} && sudo ./ops/openclaw_install_autopilot.sh" },
+    { "id": "llm.microgpt.canary", "label": "MicroGPT Offline Canary", "timeout_sec": 120, "cmd_template": "cd ${ROOT_DIR} && ./ops/scripts/microgpt_canary_submit.sh" }
   ]
 }

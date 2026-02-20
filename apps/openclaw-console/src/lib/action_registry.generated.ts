@@ -14,6 +14,7 @@ export const ACTION_TO_HOSTD: Record<string, string> = {
   "doctor": "doctor",
   "guard": "guard",
   "journal": "tail_guard_log",
+  "llm.microgpt.canary": "llm.microgpt.canary",
   "llm_doctor": "llm_doctor",
   "orb.backtest.bulk": "orb.backtest.bulk",
   "orb.backtest.confirm_nt8": "orb.backtest.confirm_nt8",

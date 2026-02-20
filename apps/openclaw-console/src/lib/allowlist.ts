@@ -39,7 +39,8 @@ export type ActionName =
   | "autopilot_enable"
   | "autopilot_disable"
   | "autopilot_run_now"
-  | "autopilot_install";
+  | "autopilot_install"
+  | "llm.microgpt.canary";
 
 export interface AllowedAction {
   name: ActionName;
@@ -328,6 +329,15 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     remoteCommand:
       "cd /opt/ai-ops-runner && sudo ./ops/openclaw_install_autopilot.sh",
     timeoutSec: 30,
+  },
+  "llm.microgpt.canary": {
+    name: "llm.microgpt.canary",
+    label: "MicroGPT Offline Canary",
+    description:
+      "Run offline canary using Karpathy microgpt (no LLM providers). Writes to artifacts/<job_id>/microgpt_canary/.",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && ./ops/scripts/microgpt_canary_submit.sh",
+    timeoutSec: 120,
   },
 };
 

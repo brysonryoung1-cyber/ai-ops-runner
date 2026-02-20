@@ -93,6 +93,8 @@ Complete index of all operational scripts and commands in ai-ops-runner. This do
 | `ops/runner_submit_orb_review.sh` | ORB review bundle job |
 | `ops/runner_submit_orb_doctor.sh` | ORB doctor job |
 | `ops/runner_submit_orb_score.sh` | ORB score run job |
+| `ops/scripts/microgpt_canary.sh` | Offline canary (microgpt) — runs inside test_runner worker |
+| `ops/scripts/microgpt_canary_submit.sh` | Submit llm.microgpt.canary job (host action) |
 
 ## VPS Deployment
 
