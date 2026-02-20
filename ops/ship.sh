@@ -57,6 +57,9 @@ if [ -z "${VERDICT_HMAC_KEY:-}" ]; then
   exit 1
 fi
 
+# ── Review long-window retry (single ship run tries until valid verdict or max wait) ──
+export REVIEW_MAX_WAIT_SECONDS="${REVIEW_MAX_WAIT_SECONDS:-900}"
+
 # ── Preflight: OpenAI key ──
 if [ "${CODEX_SKIP:-0}" != "1" ]; then
   # shellcheck source=ensure_openai_key.sh
@@ -426,13 +429,15 @@ while [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; do
   "$SCRIPT_DIR/review_auto.sh" --no-push --since "$START_SHA" || REVIEW_RC=$?
 
   if [ "$REVIEW_RC" -ne 0 ]; then
-    echo "==> Review BLOCKED on attempt $ATTEMPT"
+    echo "==> Review failed on attempt $ATTEMPT (max wait ${REVIEW_MAX_WAIT_SECONDS}s exceeded or BLOCKED)."
+    echo "  Engine attempt logs: review_packets/<timestamp>/engine_attempts/" >&2
+    echo "  Run: ./ops/review_engine_probe.sh for env presence (REVIEW_BASE_URL+REVIEW_API_KEY, OPENAI_API_KEY, codex)." >&2
     if [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ] && [ "${CODEX_SKIP:-0}" != "1" ]; then
       echo "==> Running autoheal..."
       "$SCRIPT_DIR/autoheal_codex.sh" || { echo "ERROR: Autoheal failed" >&2; exit 1; }
       continue
     fi
-    echo "ERROR: Review blocked after $ATTEMPT attempts." >&2
+    echo "ERROR: Review failed after $ATTEMPT attempts. Fail-closed." >&2
     exit 1
   fi
 
