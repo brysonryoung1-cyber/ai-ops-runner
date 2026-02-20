@@ -298,6 +298,11 @@ export async function POST(req: NextRequest) {
         // Ignore parse errors
       }
     }
+    // For non-project actions (e.g. apply), persist stderr so Runs UI shows real failure (e.g. SSH 255)
+    if (errorForRecord == null && !result.ok && result.stderr && typeof result.stderr === "string") {
+      const maxLen = 2000;
+      errorForRecord = result.stderr.length <= maxLen ? result.stderr.trim() : result.stderr.trim().slice(-maxLen);
+    }
 
     // Write audit entry
     writeAuditEntry({
@@ -318,7 +323,9 @@ export async function POST(req: NextRequest) {
       result.exitCode,
       result.ok,
       errorForRecord,
-      runId
+      runId,
+      undefined,
+      result.artifact_dir ?? undefined
     );
     writeRunRecord(runRecord);
 
@@ -347,7 +354,9 @@ export async function POST(req: NextRequest) {
       null,
       false,
       errorMsg,
-      runId
+      runId,
+      undefined,
+      undefined
     );
     writeRunRecord(runRecord);
 

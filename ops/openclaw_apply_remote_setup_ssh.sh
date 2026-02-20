@@ -83,6 +83,13 @@ if [ "$INSTALLED" -eq 0 ] && command -v tailscale >/dev/null 2>&1; then
   fi
 fi
 
+# Attempt C: deploy key (after key was installed from Mac/target once; append is idempotent)
+if [ "$INSTALLED" -eq 0 ] && [ -r "$KEY_PATH" ]; then
+  if ssh -i "$KEY_PATH" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 "$TARGET_SPEC" "mkdir -p ~/.ssh && chmod 700 ~/.ssh" 2>/dev/null; then
+    echo "$PUB" | ssh -i "$KEY_PATH" -o IdentitiesOnly=yes "$TARGET_SPEC" "cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys" 2>/dev/null && INSTALLED=1
+  fi
+fi
+
 if [ "$INSTALLED" -eq 0 ]; then
   echo "  No existing SSH or Tailscale SSH access to $TARGET_SPEC."
   echo "  (1) Public key (safe to share):"

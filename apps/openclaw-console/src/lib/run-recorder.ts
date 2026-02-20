@@ -25,6 +25,8 @@ export interface RunRecord {
   duration_ms: number;
   error_summary: string | null;
   artifact_paths: string[];
+  /** Host executor artifact dir (e.g. artifacts/hostd/YYYYMMDD_HHMMSS_hex) for apply/doctor etc. */
+  artifact_dir?: string | null;
 }
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -144,7 +146,8 @@ export function buildRunRecord(
   ok: boolean,
   errorMsg: string | null,
   runId?: string,
-  projectId?: string
+  projectId?: string,
+  artifactDir?: string | null
 ): RunRecord {
   return {
     run_id: runId ?? generateRunId(),
@@ -157,6 +160,7 @@ export function buildRunRecord(
     duration_ms: finishedAt.getTime() - startedAt.getTime(),
     error_summary: errorMsg,
     artifact_paths: [],
+    ...(artifactDir != null && artifactDir !== "" && { artifact_dir: artifactDir }),
   };
 }
 

@@ -17,6 +17,7 @@ interface RunData {
   duration_ms: number;
   error_summary: string | null;
   artifact_paths: string[];
+  artifact_dir?: string | null;
 }
 
 function statusBadge(status: string): { bg: string; text: string; label: string } {
@@ -335,6 +336,20 @@ function RunsContent() {
                   </div>
                 )}
 
+                {/* Artifact dir (hostd logs for apply/doctor etc.) */}
+                {selectedRun.artifact_dir && (
+                  <div>
+                    <p className="text-[10px] font-semibold text-white/50 uppercase tracking-wider mb-1">
+                      Host executor logs
+                    </p>
+                    <Link
+                      href={`/artifacts/${selectedRun.artifact_dir.replace(/^artifacts\//, "").split("/").map(encodeURIComponent).join("/")}`}
+                      className="text-xs text-blue-400 hover:text-blue-300 font-mono bg-white/5 rounded px-2 py-1 block"
+                    >
+                      {selectedRun.artifact_dir}
+                    </Link>
+                  </div>
+                )}
                 {/* Artifact paths */}
                 {selectedRun.artifact_paths.length > 0 && (
                   <div>

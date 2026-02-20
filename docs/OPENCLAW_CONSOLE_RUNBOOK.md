@@ -159,6 +159,92 @@ python3 ops/openclaw_console_token.py rotate
 ./ops/openclaw_console_start.sh
 ```
 
+### Apply run failed (exit_code 255): get hostd stderr
+
+Apply runs execute on the host (hostd); logs are under `artifacts/hostd/<run_id>/`. The Runs UI now shows **Host executor logs** and **Error** (stderr) for apply runs. To fetch the real failure from the API (e.g. from a machine on Tailscale with token):
+
+```bash
+# Set base URL and token (Tailscale; use your token)
+BASE="https://aiops-1.tailc75c62.ts.net"
+TOKEN="your-X-OpenClaw-Token"
+
+# 1) Get run; response includes artifact_dir (resolved by timestamp if missing)
+RUN_ID="20260220011238-3129"
+curl -sS -H "X-OpenClaw-Token: $TOKEN" "$BASE/api/runs?id=$RUN_ID" | jq .
+
+# 2) Read stderr from artifact_dir (use path without "artifacts/" prefix)
+# From step 1, run.artifact_dir is e.g. "artifacts/hostd/20260220_011238_abc1"
+# Path for browse: hostd/20260220_011238_abc1/stderr.txt
+ARTIFACT_PATH="hostd/20260220_011238_abc1/stderr.txt"   # replace with actual dir from step 1
+curl -sS -H "X-OpenClaw-Token: $TOKEN" "$BASE/api/artifacts/browse?path=$(echo -n "$ARTIFACT_PATH" | jq -sRr @uri)" | jq -r '.content // .error'
+```
+
+Common causes of 255: SSH from the host running hostd to the VPS failed (no key, host key changed, or wrong host). Set `OPENCLAW_VPS_SSH_IDENTITY` to a deploy key path (readable by the hostd user) and re-run Apply if needed.
+
+### Fix Apply SSH (deploy key one-time setup)
+
+Apply runs on the **ship host** (the machine where hostd runs); it SSHs to the target (default `root@100.123.61.57`). To fix "Permission denied (publickey,password)":
+
+1. **On the ship host** (e.g. the VPS where HQ/hostd run, or the box that has Tailscale reachability to the target), run once:
+
+   ```bash
+   cd /opt/ai-ops-runner   # or your repo path
+   sudo ./ops/openclaw_apply_remote_setup_ssh.sh
+   ```
+
+   Default target is `root@100.123.61.57`. Override: `sudo ./ops/openclaw_apply_remote_setup_ssh.sh root@other-host`.
+
+2. The script will:
+   - Create a dedicated deploy key at `/etc/ai-ops-runner/secrets/openclaw_ssh/vps_deploy_ed25519` (root-only).
+   - Try to install the public key on the target via SSH or Tailscale SSH. If it has no access, it **stops** and prints:
+     - The public key (safe to share), and
+     - The exact one-liner to run **on the target host** (e.g. via console) to add the key to `~/.ssh/authorized_keys`.
+   - After the key is on the target: write `/etc/ai-ops-runner/secrets/openclaw_hostd.env` with `OPENCLAW_VPS_SSH_IDENTITY` and `OPENCLAW_VPS_SSH_HOST`, ensure hostd’s systemd unit uses this env file, restart `openclaw-hostd`, and run an SSH proof command. When the proof prints `OK_FROM_DEPLOY_KEY`, setup is done.
+
+3. **Where identity is set**: hostd reads `EnvironmentFile=-/etc/ai-ops-runner/secrets/openclaw_hostd.env` (installed by `ops/install_openclaw_hostd.sh`). That file must contain `OPENCLAW_VPS_SSH_IDENTITY=/etc/ai-ops-runner/secrets/openclaw_ssh/vps_deploy_ed25519` (and optionally `OPENCLAW_VPS_SSH_HOST=root@100.123.61.57`).
+
+4. **Next**: In HQ click **Actions → Apply OpenClaw (Remote)** once. Then `/api/autopilot/status` should be 200 and `/api/ui/health_public` should show a real `build_sha` (not `unknown`).
+
+**Security**: The script never prints the private key. Do not open extra ports or disable Tailscale-only assumptions.
+
+### One-pass Apply fix (copy-paste and deliverables)
+
+Run these **on the ship host** (the machine where hostd runs), then in HQ, then verify.
+
+**Phase 1 — Ship host confirm (paste into ship host shell):**
+```bash
+hostname
+cd /opt/ai-ops-runner && git rev-parse --short HEAD
+systemctl status openclaw-hostd --no-pager || true
+ssh -o BatchMode=yes -o ConnectTimeout=10 root@100.123.61.57 "echo ok" ; echo "exit=$?"
+# Expect: Permission denied + exit=255
+```
+
+**Phase 2 — One-time SSH setup on ship host:**
+```bash
+cd /opt/ai-ops-runner
+sudo ./ops/openclaw_apply_remote_setup_ssh.sh root@100.123.61.57
+```
+- Success: script prints `OK_FROM_DEPLOY_KEY` and completes.
+- If script stops at Phase 2 (no access): it prints the **public key** and a **one-liner**. Run that one-liner **on the target** (e.g. from your Mac: `ssh root@100.123.61.57 'mkdir -p /root/.ssh && chmod 700 /root/.ssh && echo "PASTE_PUB_KEY" >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys'`), then re-run the setup script on the ship host.
+
+**Phase 3 — HQ:** Left nav → Actions → **Apply OpenClaw (Remote)** → Execute. Then Runs → open newest `infra_openclaw` apply run → must be `status=success` with artifact paths.
+
+**Phase 4 — Verify endpoints:** From any machine with HQ reachability (e.g. Mac):
+```bash
+cd /path/to/ai-ops-runner
+OPENCLAW_HQ_BASE="https://YOUR-HQ.tailnet.ts.net" OPENCLAW_HQ_TOKEN="your-token" ./ops/verify_hq_after_apply.sh
+```
+Requires `curl` and `jq`. Or in browser: `GET /api/ui/health_public` and `GET /api/autopilot/status` (expect 200, build_sha ≠ "unknown").
+
+**Deliverables to post back:**
+- Ship host hostname
+- Line showing SSH proof `OK_FROM_DEPLOY_KEY`
+- Confirmation that `/etc/ai-ops-runner/secrets/openclaw_hostd.env` exists and contains `OPENCLAW_VPS_SSH_IDENTITY` + `OPENCLAW_VPS_SSH_HOST` (do not paste private key)
+- Apply run_id + final status
+- health_public build_sha value
+- autopilot/status HTTP code + key fields (installed, enabled)
+
 ### SSH connection failed
 ```bash
 # Ensure Tailscale is running
