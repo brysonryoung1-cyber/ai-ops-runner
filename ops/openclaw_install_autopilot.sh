@@ -107,6 +107,25 @@ systemctl status openclaw-autopilot.timer --no-pager 2>/dev/null || true
 
 # --- Run one tick if requested ---
 if [ -n "$OPT_RUN_NOW" ]; then
+  LOCK_DIR="$ROOT_DIR/.locks"
+  LOCK_FILE="$LOCK_DIR/deploy.lock"
+  if [ -f "$LOCK_FILE" ]; then
+    # Check if lock is held by a live process (flock/lsof)
+    HELD=0
+    if command -v lsof >/dev/null 2>&1; then
+      lsof "$LOCK_FILE" 2>/dev/null | grep -q . && HELD=1
+    elif command -v fuser >/dev/null 2>&1; then
+      fuser "$LOCK_FILE" 2>/dev/null && HELD=1
+    fi
+    if [ "$HELD" -eq 1 ]; then
+      echo "  SKIP run-now: deploy lock held"
+      echo "=== openclaw_install_autopilot.sh COMPLETE ==="
+      exit 0
+    fi
+    # Stale lock: no holder; remove and proceed
+    echo "  Removing stale deploy.lock (no process holder)"
+    rm -f "$LOCK_FILE"
+  fi
   echo "  Running one autopilot tick (--run-now)..."
   if command -v systemctl >/dev/null 2>&1 && systemctl is-active openclaw-autopilot.timer >/dev/null 2>&1; then
     sudo systemctl start openclaw-autopilot.service 2>&1 || true

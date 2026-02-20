@@ -109,6 +109,25 @@ log "  target_sha=$TARGET_SHA"
 log "  current_sha=${CURRENT_SHA:-<none>}"
 log "  last_good_sha=${LAST_GOOD_SHA:-<none>}"
 
+# --- Deploy lock: skip if another deploy is running (no rollback) ---
+LOCK_DIR="$ROOT_DIR/.locks"
+LOCK_FILE="$LOCK_DIR/deploy.lock"
+if [ -f "$LOCK_FILE" ]; then
+  HELD=0
+  if command -v lsof >/dev/null 2>&1; then
+    lsof "$LOCK_FILE" 2>/dev/null | grep -q . && HELD=1
+  elif command -v fuser >/dev/null 2>&1; then
+    fuser "$LOCK_FILE" 2>/dev/null && HELD=1
+  fi
+  if [ "$HELD" -eq 1 ]; then
+    log "autopilot: SKIP: deploy in progress"
+    write_status "SKIP" "$TARGET_SHA" "${CURRENT_SHA:-}" "deploy_lock_held" "Deploy lock held; skipping tick"
+    exit 0
+  fi
+  log "autopilot: Removing stale deploy.lock (no process holder)"
+  rm -f "$LOCK_FILE"
+fi
+
 # --- Already deployed? ---
 if [ "$TARGET_SHA" = "$CURRENT_SHA" ]; then
   log "autopilot: Already at target SHA. No deploy needed."
@@ -146,7 +165,32 @@ if [ "$DEPLOY_RC" -eq 0 ]; then
   exit 0
 fi
 
-# --- Deploy failed ---
+# --- Deploy failed: treat deploy_lock_held / rc=2 as benign SKIP (no rollback) ---
+DEPLOY_LOCK_SKIP=0
+if [ "$DEPLOY_RC" -eq 2 ]; then
+  DEPLOY_LOCK_SKIP=1
+fi
+if [ "$DEPLOY_LOCK_SKIP" -eq 0 ]; then
+  LATEST_RUN="$(ls -1t "$ROOT_DIR/artifacts/deploy" 2>/dev/null | head -1)"
+  if [ -n "$LATEST_RUN" ] && [ -f "$ROOT_DIR/artifacts/deploy/$LATEST_RUN/deploy_result.json" ]; then
+    ERR_CLASS="$(python3 -c "
+import json
+with open('$ROOT_DIR/artifacts/deploy/$LATEST_RUN/deploy_result.json') as f:
+    r = json.load(f)
+print(r.get('error_class', ''))
+" 2>/dev/null || echo "")"
+    if [ "$ERR_CLASS" = "deploy_lock_held" ]; then
+      DEPLOY_LOCK_SKIP=1
+    fi
+  fi
+fi
+if [ "$DEPLOY_LOCK_SKIP" -eq 1 ]; then
+  log "autopilot: SKIP (deploy lock held or rc=2). No rollback."
+  write_status "SKIP" "$TARGET_SHA" "${CURRENT_SHA:-}" "deploy_lock_held" "Deploy lock held; skipping"
+  exit 0
+fi
+
+# --- Deploy failed (real failure) ---
 log "autopilot: DEPLOY FAIL for $TARGET_SHA (rc=$DEPLOY_RC)"
 FAIL_COUNT=$(( FAIL_COUNT + 1 ))
 echo "$FAIL_COUNT" > "$STATE_DIR/fail_count.txt"
