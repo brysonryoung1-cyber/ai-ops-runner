@@ -52,8 +52,12 @@ if [ -z "$(git -C "$ROOT_DIR" status --porcelain)" ]; then
   assert_contains "CODEX_SKIP=1 shows APPROVED" "APPROVED" "$OUTPUT"
   assert_contains "CODEX_SKIP=1 shows SIMULATED banner" "SIMULATED VERDICT" "$OUTPUT"
 
-  # Verify verdict file was created and has correct structure
-  LATEST_PACK="$(ls -td "$ROOT_DIR"/review_packets/*/ 2>/dev/null | head -1)"
+  # Verify verdict file was created and has correct structure (use pack dir from this run's output)
+  LATEST_PACK="$(echo "$OUTPUT" | sed -n 's/.*Pack dir: \([^[:space:]]*\).*/\1/p' | head -1)"
+  if [ -z "$LATEST_PACK" ]; then
+    LATEST_PACK="$(ls -td "$ROOT_DIR"/review_packets/*/ 2>/dev/null | head -1)"
+  fi
+  [ -n "$LATEST_PACK" ] && LATEST_PACK="${LATEST_PACK%/}/"
   if [ -n "$LATEST_PACK" ] && [ -f "${LATEST_PACK}CODEX_VERDICT.json" ]; then
     TESTS=$((TESTS + 1)); PASS=$((PASS + 1))
     echo "  PASS: verdict JSON created"
