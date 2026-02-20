@@ -14,6 +14,32 @@
 - **LLM primary**: openai / gpt-4o-mini
 - **LLM fallback**: mistral / labs-devstral-small-2512
 
+## Autopilot Deploy
+
+- **Purpose**: Automatically deploy latest approved `origin/main` to aiops-1, verify, and roll back on failure.
+- **Tick script**: `ops/autopilot_tick.sh` — fetches origin, compares SHA, runs `deploy_pipeline.sh`, verifies, rolls back to last-known-good on failure.
+- **Systemd timer**: `openclaw-autopilot.timer` (every 5 min, configurable). Service: `openclaw-autopilot.service`.
+- **State directory**: `/var/lib/ai-ops-runner/autopilot/` with `last_deployed_sha.txt`, `last_good_sha.txt`, `fail_count.txt`, `enabled` (sentinel), `last_run.json`, `autopilot.lock`.
+- **Concurrency**: `flock` on `autopilot.lock`. Fail-closed on lock contention.
+- **Backoff**: After 3 consecutive failures, waits 30 min before retrying.
+- **Rollback**: On deploy failure, automatically redeploys `last_good_sha`. If rollback also fails, emits alert and stops.
+- **Install**: `sudo ./ops/openclaw_install_autopilot.sh` or HQ Settings → Autopilot → Install button.
+- **HQ UI**: Settings → Autopilot Deploy panel. Shows status, SHA, fail count. Buttons: Enable, Disable, Run Now.
+- **API endpoints**:
+  - `GET /api/autopilot/status` (no token required) — installed, enabled, last_deployed_sha, last_good_sha, fail_count, last_run, last_error.
+  - `POST /api/autopilot/enable` (admin token) — creates `enabled` sentinel.
+  - `POST /api/autopilot/disable` (admin token) — removes `enabled` sentinel.
+  - `POST /api/autopilot/run_now` (admin token) — triggers immediate tick via hostd.
+- **Hostd actions**: `autopilot_status`, `autopilot_enable`, `autopilot_disable`, `autopilot_run_now`, `autopilot_install` (all allowlisted in `config/action_registry.json`).
+- **Safety**: No SSH. No git push. Tailscale-only. Fail-closed. ORB gates unchanged.
+
+## Error Artifacts
+
+- **error.json**: Every action run that fails now produces a structured `error.json` in its artifact directory.
+- **Fields**: `error_class`, `reason`, `recommended_next_action`, `timestamp_utc`, `underlying_exception` (if safe).
+- **Coverage**: hostd actions (timeout, nonzero exit, exception) and test_runner jobs (timeout, nonzero exit, exception, mutation detection).
+- **No blank failures**: Exit code 1 with no explanation is no longer possible.
+
 ## Auth & Diagnostics
 
 - **`/api/auth/status`** (GET, no token required): Self-diagnosing auth endpoint. Returns `hq_token_required`, `admin_token_loaded`, `host_executor_reachable`, `build_sha`, `trust_tailscale`, `notes[]`. No secrets leaked.
@@ -21,7 +47,7 @@
 - **Tailscale-trusted mode**: Set `OPENCLAW_TRUST_TAILSCALE=1` (default ON in docker-compose.console.yml) to bypass HQ token gate for browser→HQ requests. Tailnet membership is the access control. Admin-token requirement for host executor admin actions is still enforced server-side.
 - **403 Forbidden UX**: When a 403 occurs, the UI shows a deterministic banner explaining the cause (token missing, admin token not loaded, or CSRF origin blocked) with a one-click "Generate support bundle" button. No screenshots needed for debugging.
 - **Support Bundle** (`POST /api/support/bundle`): Generates `auth_status.json`, `ui_health.json`, `last_10_runs.json`, `last_forbidden.json`, `dod_last.json`, failing runs, docker status, guard/hostd journals. All redacted. Stored in `artifacts/support_bundle/<run_id>/`.
-- **Build SHA**: Visible in sidebar footer and Settings auth panel.
+- **Build SHA**: Visible in sidebar footer and Settings auth panel. `deploy_pipeline.sh` now exports `OPENCLAW_BUILD_SHA` to docker compose and writes `deploy_receipt.json` so `/api/ui/health_public` reports the actual deployed SHA (not "unknown").
 
 ## Definition-of-Done (DoD)
 

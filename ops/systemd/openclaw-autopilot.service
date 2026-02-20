@@ -1,0 +1,10 @@
+[Unit]
+Description=OpenClaw Autopilot — autonomous deploy tick
+After=ai-ops-runner.service
+Wants=ai-ops-runner.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai-ops-runner
+ExecStart=/bin/bash /opt/ai-ops-runner/ops/autopilot_tick.sh
+TimeoutStartSec=900

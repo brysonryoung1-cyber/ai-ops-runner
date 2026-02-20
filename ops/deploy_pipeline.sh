@@ -133,7 +133,9 @@ if ! git fetch origin main 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/git_fetch.log"; then
 fi
 git reset --hard origin/main 2>&1 | tee -a "$DEPLOY_ARTIFACT_DIR/git_fetch.log"
 GIT_HEAD="$(git rev-parse --short HEAD)"
+GIT_HEAD_FULL="$(git rev-parse HEAD)"
 echo "  HEAD: $GIT_HEAD"
+export OPENCLAW_BUILD_SHA="$GIT_HEAD"
 echo ""
 
 # --- Step 2b: Install hostd (idempotent) ---
@@ -198,14 +200,15 @@ fi
 
 # --- Step 3b: Docker compose ---
 STEP="docker_compose"
-echo "==> Step 3b: docker compose up -d --build"
-if ! docker compose up -d --build 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/docker.log"; then
+echo "==> Step 3b: docker compose up -d --build (OPENCLAW_BUILD_SHA=$OPENCLAW_BUILD_SHA)"
+export OPENCLAW_BUILD_SHA
+if ! OPENCLAW_BUILD_SHA="$GIT_HEAD" docker compose up -d --build 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/docker.log"; then
   write_fail "$STEP" "docker_compose_failed" "Fix Docker build/run and re-run deploy" "artifacts/deploy/$RUN_ID/docker.log"
   exit 2
 fi
 # Console stack if present (image already built above; no bypass)
 if [ -f "docker-compose.console.yml" ]; then
-  if ! docker compose -f docker-compose.yml -f docker-compose.console.yml up -d --build 2>&1 | tee -a "$DEPLOY_ARTIFACT_DIR/docker.log"; then
+  if ! OPENCLAW_BUILD_SHA="$GIT_HEAD" docker compose -f docker-compose.yml -f docker-compose.console.yml up -d --build 2>&1 | tee -a "$DEPLOY_ARTIFACT_DIR/docker.log"; then
     write_fail "console_compose" "console_compose_failed" "Fix console compose and re-run deploy" "artifacts/deploy/$RUN_ID/docker.log"
     exit 2
   fi
@@ -327,6 +330,21 @@ r = {
   }
 }
 with open(p + '/deploy_result.json', 'w') as f: json.dump(r, f, indent=2)
+"
+
+# --- Deploy receipt (consumed by /api/ui/health_public for deploy_sha) ---
+python3 -c "
+import json
+from datetime import datetime, timezone
+receipt = {
+  'deploy_sha': '$GIT_HEAD',
+  'vps_head': '$GIT_HEAD',
+  'console_build_sha': '$GIT_HEAD',
+  'run_id': '$RUN_ID',
+  'deployed_at': datetime.now(timezone.utc).isoformat(),
+}
+with open('$DEPLOY_ARTIFACT_DIR/deploy_receipt.json', 'w') as f:
+    json.dump(receipt, f, indent=2)
 "
 
 echo "=== deploy_pipeline.sh COMPLETE ==="

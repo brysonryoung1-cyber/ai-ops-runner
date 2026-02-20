@@ -35,6 +35,7 @@ const TOKEN_EXEMPT_ROUTES = new Set([
   "/api/sms",
   "/api/auth/status",
   "/api/ui/health_public",
+  "/api/autopilot/status",
 ]);
 
 export function middleware(req: NextRequest) {
