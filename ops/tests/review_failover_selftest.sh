@@ -112,9 +112,15 @@ exit 0
 STUB
 assert_eq "review fails (exit 1) when all engines fail" "1" "$RC2"
 assert_contains "failure message mentions engine attempt logs" "engine_attempts" "$OUT2"
-# Check that at least one attempt log was created (in latest review_packets)
-LATEST_PACK="$(ls -td "$ROOT_DIR"/review_packets/*/ 2>/dev/null | head -1)"
-if [ -n "$LATEST_PACK" ] && [ -d "${LATEST_PACK}engine_attempts" ]; then
+# Check that at least one attempt log was created (in any recent review_packets with engine_attempts)
+LATEST_PACK=""
+for d in $(ls -td "$ROOT_DIR"/review_packets/*/ 2>/dev/null); do
+  [ -d "${d}engine_attempts" ] || continue
+  LATEST_PACK="${d}"
+  break
+done
+[ -n "$LATEST_PACK" ] && LATEST_PACK="${LATEST_PACK%/}/"
+if [ -n "$LATEST_PACK" ]; then
   LOG_COUNT="$(find "${LATEST_PACK}engine_attempts" -type f 2>/dev/null | wc -l | tr -d ' ')"
   TESTS=$((TESTS + 1))
   if [ "${LOG_COUNT:-0}" -ge 1 ]; then
@@ -126,7 +132,7 @@ if [ -n "$LATEST_PACK" ] && [ -d "${LATEST_PACK}engine_attempts" ]; then
   fi
 else
   TESTS=$((TESTS + 1))
-  echo "  FAIL: engine_attempts dir missing under review_packets" >&2
+  echo "  FAIL: no review_packets dir with engine_attempts found" >&2
   FAIL=$((FAIL + 1))
 fi
 

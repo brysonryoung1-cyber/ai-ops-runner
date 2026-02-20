@@ -309,6 +309,17 @@ if command -v systemctl >/dev/null 2>&1; then
   echo "  Started openclaw-doctor.timer (if present)"
 fi
 
+# --- Autopilot: install (idempotent), enable, and run one tick (deploy success only) ---
+if [ -f "$SCRIPT_DIR/openclaw_install_autopilot.sh" ]; then
+  echo "==> Autopilot: enable + run-now"
+  if "$SCRIPT_DIR/openclaw_install_autopilot.sh" --enable --run-now 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/autopilot_enable.log"; then
+    echo "  Autopilot: enabled and run-now complete"
+  else
+    echo "  WARNING: Autopilot enable/run-now failed (non-fatal; deploy succeeded)" >&2
+  fi
+fi
+echo ""
+
 # --- Success artifact ---
 python3 -c "
 import json

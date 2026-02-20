@@ -23,7 +23,7 @@
 - **Concurrency**: `flock` on `autopilot.lock`. Fail-closed on lock contention.
 - **Backoff**: After 3 consecutive failures, waits 30 min before retrying.
 - **Rollback**: On deploy failure, automatically redeploys `last_good_sha`. If rollback also fails, emits alert and stops.
-- **Install**: `sudo ./ops/openclaw_install_autopilot.sh` or HQ Settings → Autopilot → Install button.
+- **Install**: `sudo ./ops/openclaw_install_autopilot.sh` (idempotent; enabled by default). Flags: `--enable`, `--disable`, `--run-now`, `--disabled`. After any successful deploy, deploy_pipeline runs install with `--enable --run-now` so autopilot is enabled and one tick runs without manual steps. HQ Settings → Autopilot → Install also available.
 - **HQ UI**: Settings → Autopilot Deploy panel. Shows status, SHA, fail count. Buttons: Enable, Disable, Run Now.
 - **API endpoints**:
   - `GET /api/autopilot/status` (no token required) — installed, enabled, last_deployed_sha, last_good_sha, fail_count, last_run, last_error.

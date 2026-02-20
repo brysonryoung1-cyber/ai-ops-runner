@@ -67,8 +67,11 @@ const CONSOLE_ROUTES = [
 ];
 
 export async function GET() {
-  const buildSha = getBuildSha();
+  let buildSha = getBuildSha();
   const deploySha = getDeploySha();
+  if (buildSha === "unknown" && deploySha) {
+    buildSha = deploySha;
+  }
   const canonicalUrl = getCanonicalUrl();
   const artifactsRoot = getArtifactsRoot();
   let artifactsReadable = false;
