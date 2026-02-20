@@ -57,6 +57,7 @@ SHA defaults to remote HEAD if omitted. All helpers auto-resolve, poll for compl
 | `orb_review_bundle` | 1800s | Runs ORB's `./ops/review_bundle.sh --since <SHA>` and saves `REVIEW_BUNDLE.txt`. On SIZE_CAP (exit 6), auto-generates review packets. |
 | `orb_doctor` | 600s | Runs ORB's `./ops/doctor_repo.sh` in read-only mode. Pre-sets `core.hooksPath` to `.githooks` so doctor passes 18/18 in the runner context. |
 | `orb_score_run` | 1800s | Runs ORB's scoring harness (fails gracefully with `HARNESS_NOT_FOUND` if absent) |
+| `llm.microgpt.canary` | 90s | Offline canary: Karpathy microgpt (fetch pinned + SHA256, patch, run). No LLM providers. Writes to `artifacts/<job_id>/microgpt_canary/`. |
 
 ### Doctor hooksPath Hardening
 
