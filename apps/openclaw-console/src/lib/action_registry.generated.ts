@@ -5,6 +5,11 @@
 export const ACTION_TO_HOSTD: Record<string, string> = {
   "apply": "apply",
   "artifacts": "artifacts",
+  "autopilot_disable": "autopilot_disable",
+  "autopilot_enable": "autopilot_enable",
+  "autopilot_install": "autopilot_install",
+  "autopilot_run_now": "autopilot_run_now",
+  "autopilot_status": "autopilot_status",
   "deploy_and_verify": "deploy_and_verify",
   "doctor": "doctor",
   "guard": "guard",

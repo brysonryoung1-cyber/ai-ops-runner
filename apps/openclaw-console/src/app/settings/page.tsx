@@ -45,6 +45,28 @@ function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
   );
 }
 
+interface AutopilotStatus {
+  ok: boolean;
+  installed: boolean;
+  enabled: boolean;
+  interval: string;
+  last_deployed_sha: string | null;
+  last_good_sha: string | null;
+  fail_count: number;
+  last_run: {
+    run_id?: string;
+    timestamp?: string;
+    overall?: string;
+    target_sha?: string;
+    deployed_sha?: string;
+    error_class?: string | null;
+    detail?: string | null;
+    fail_count?: number;
+  } | null;
+  last_error: string | null;
+  last_run_id: string | null;
+}
+
 export default function SettingsPage() {
   const token = useToken();
   const [copyStatus, setCopyStatus] = useState<"idle" | "copying" | "copied" | "error">("idle");
@@ -57,13 +79,24 @@ export default function SettingsPage() {
   const [gmailInstructionsOpen, setGmailInstructionsOpen] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<"idle" | "uploading" | "success" | "error">("idle");
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [autopilot, setAutopilot] = useState<AutopilotStatus | null>(null);
+  const [autopilotAction, setAutopilotAction] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [autopilotActionMsg, setAutopilotActionMsg] = useState<string | null>(null);
+
+  const fetchAutopilotStatus = useCallback(() => {
+    fetch("/api/autopilot/status")
+      .then((r) => r.json())
+      .then((data) => setAutopilot(data))
+      .catch(() => setAutopilot(null));
+  }, []);
 
   useEffect(() => {
     fetch("/api/auth/status")
       .then((r) => r.json())
       .then((data) => setAuthStatus(data))
       .catch((e) => setAuthError(e instanceof Error ? e.message : String(e)));
-  }, []);
+    fetchAutopilotStatus();
+  }, [fetchAutopilotStatus]);
 
   const fetchGmailSecretStatus = useCallback(() => {
     const headers: Record<string, string> = {};
@@ -298,6 +331,158 @@ export default function SettingsPage() {
             </Link>
             {" "}Start device flow, enter user code at the verification URL, then finalize. Then run Phase 0.
           </p>
+        )}
+      </div>
+
+      {/* Autopilot Deploy Panel */}
+      <div data-testid="autopilot-panel" className="glass-surface rounded-2xl p-6 mb-6">
+        <h3 className="text-sm font-semibold text-white/95 mb-3">Autopilot Deploy</h3>
+        <p className="text-xs text-white/60 mb-4">
+          Automatically deploy approved commits from origin/main. Verifies after deploy; rolls back on failure.
+        </p>
+        {autopilot === null ? (
+          <p className="text-xs text-white/50">Loading autopilot status…</p>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 flex-wrap">
+              <StatusBadge ok={autopilot.installed} label="Installed" />
+              <StatusBadge ok={autopilot.enabled} label="Enabled" />
+              <span className="text-xs text-white/50 bg-white/5 px-2 py-1 rounded font-mono">
+                Interval: {autopilot.interval}
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+              <div className="text-white/70">
+                Deployed SHA:{" "}
+                <span className="font-mono text-white/90">
+                  {autopilot.last_deployed_sha?.slice(0, 10) || "—"}
+                </span>
+              </div>
+              <div className="text-white/70">
+                Last Good SHA:{" "}
+                <span className="font-mono text-white/90">
+                  {autopilot.last_good_sha?.slice(0, 10) || "—"}
+                </span>
+              </div>
+              <div className="text-white/70">
+                Fail Count:{" "}
+                <span className={`font-mono ${autopilot.fail_count > 0 ? "text-red-400" : "text-green-400"}`}>
+                  {autopilot.fail_count}
+                </span>
+              </div>
+              {autopilot.last_run && (
+                <div className="text-white/70">
+                  Last Result:{" "}
+                  <span className={`font-mono ${
+                    autopilot.last_run.overall === "PASS" || autopilot.last_run.overall === "NOOP"
+                      ? "text-green-400"
+                      : autopilot.last_run.overall === "SKIP"
+                        ? "text-amber-400"
+                        : "text-red-400"
+                  }`}>
+                    {autopilot.last_run.overall}
+                  </span>
+                </div>
+              )}
+            </div>
+            {autopilot.last_error && (
+              <p className="text-xs text-red-400 bg-red-500/10 px-2 py-1 rounded">
+                Last error: {autopilot.last_error}
+              </p>
+            )}
+            {autopilot.last_run?.detail && (
+              <p className="text-xs text-white/50">{autopilot.last_run.detail}</p>
+            )}
+            {autopilot.last_run?.timestamp && (
+              <p className="text-[10px] text-white/40">
+                Last run: {new Date(autopilot.last_run.timestamp).toLocaleString()}
+                {autopilot.last_run.run_id && ` (${autopilot.last_run.run_id})`}
+              </p>
+            )}
+            <div className="flex gap-2 flex-wrap pt-1">
+              {!autopilot.enabled ? (
+                <GlassButton
+                  size="sm"
+                  disabled={autopilotAction === "loading"}
+                  onClick={async () => {
+                    setAutopilotAction("loading");
+                    setAutopilotActionMsg(null);
+                    try {
+                      const headers: Record<string, string> = {};
+                      if (token) headers["X-OpenClaw-Token"] = token;
+                      const res = await fetch("/api/autopilot/enable", { method: "POST", headers });
+                      const data = await res.json();
+                      setAutopilotAction(data.ok ? "done" : "error");
+                      setAutopilotActionMsg(data.ok ? "Enabled" : (data.error || "Failed"));
+                      fetchAutopilotStatus();
+                    } catch {
+                      setAutopilotAction("error");
+                      setAutopilotActionMsg("Network error");
+                    }
+                  }}
+                >
+                  Enable
+                </GlassButton>
+              ) : (
+                <GlassButton
+                  size="sm"
+                  disabled={autopilotAction === "loading"}
+                  onClick={async () => {
+                    setAutopilotAction("loading");
+                    setAutopilotActionMsg(null);
+                    try {
+                      const headers: Record<string, string> = {};
+                      if (token) headers["X-OpenClaw-Token"] = token;
+                      const res = await fetch("/api/autopilot/disable", { method: "POST", headers });
+                      const data = await res.json();
+                      setAutopilotAction(data.ok ? "done" : "error");
+                      setAutopilotActionMsg(data.ok ? "Disabled" : (data.error || "Failed"));
+                      fetchAutopilotStatus();
+                    } catch {
+                      setAutopilotAction("error");
+                      setAutopilotActionMsg("Network error");
+                    }
+                  }}
+                >
+                  Disable
+                </GlassButton>
+              )}
+              <GlassButton
+                size="sm"
+                disabled={autopilotAction === "loading"}
+                onClick={async () => {
+                  setAutopilotAction("loading");
+                  setAutopilotActionMsg(null);
+                  try {
+                    const headers: Record<string, string> = {};
+                    if (token) headers["X-OpenClaw-Token"] = token;
+                    const res = await fetch("/api/autopilot/run_now", { method: "POST", headers });
+                    const data = await res.json();
+                    setAutopilotAction(data.ok ? "done" : "error");
+                    setAutopilotActionMsg(data.ok ? "Run completed successfully" : (data.stderr?.slice(0, 200) || data.error || "Failed"));
+                    fetchAutopilotStatus();
+                  } catch {
+                    setAutopilotAction("error");
+                    setAutopilotActionMsg("Network error");
+                  }
+                }}
+              >
+                Run Now
+              </GlassButton>
+              <button
+                type="button"
+                onClick={fetchAutopilotStatus}
+                className="text-[10px] text-blue-400 hover:text-blue-300 px-2"
+              >
+                Refresh
+              </button>
+            </div>
+            {autopilotActionMsg && (
+              <p className={`text-xs ${autopilotAction === "error" ? "text-red-400" : "text-green-400"}`}>
+                {autopilotActionMsg}
+              </p>
+            )}
+          </div>
         )}
       </div>
 

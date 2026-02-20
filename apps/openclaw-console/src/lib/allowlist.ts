@@ -34,7 +34,12 @@ export type ActionName =
   | "pred_markets.mirror.run"
   | "pred_markets.mirror.backfill"
   | "pred_markets.report.health"
-  | "pred_markets.report.daily";
+  | "pred_markets.report.daily"
+  | "autopilot_status"
+  | "autopilot_enable"
+  | "autopilot_disable"
+  | "autopilot_run_now"
+  | "autopilot_install";
 
 export interface AllowedAction {
   name: ActionName;
@@ -284,6 +289,45 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     remoteCommand:
       "cd /opt/ai-ops-runner && python3 -m services.pred_markets.run report_daily",
     timeoutSec: 60,
+  },
+  autopilot_status: {
+    name: "autopilot_status",
+    label: "Autopilot Status",
+    description: "Read autopilot state (last_run.json). No side effects.",
+    remoteCommand:
+      'cat /var/lib/ai-ops-runner/autopilot/last_run.json 2>/dev/null || echo \'{"installed":false}\'',
+    timeoutSec: 10,
+  },
+  autopilot_enable: {
+    name: "autopilot_enable",
+    label: "Enable Autopilot",
+    description: "Create the enabled sentinel file so autopilot_tick deploys on next cycle.",
+    remoteCommand:
+      "mkdir -p /var/lib/ai-ops-runner/autopilot && touch /var/lib/ai-ops-runner/autopilot/enabled && echo '{\"ok\":true,\"enabled\":true}'",
+    timeoutSec: 10,
+  },
+  autopilot_disable: {
+    name: "autopilot_disable",
+    label: "Disable Autopilot",
+    description: "Remove the enabled sentinel file. Autopilot will skip on next cycle.",
+    remoteCommand:
+      "rm -f /var/lib/ai-ops-runner/autopilot/enabled && echo '{\"ok\":true,\"enabled\":false}'",
+    timeoutSec: 10,
+  },
+  autopilot_run_now: {
+    name: "autopilot_run_now",
+    label: "Autopilot Run Now",
+    description: "Trigger an immediate autopilot tick: fetch, deploy, verify (or rollback).",
+    remoteCommand: "cd /opt/ai-ops-runner && ./ops/autopilot_tick.sh",
+    timeoutSec: 900,
+  },
+  autopilot_install: {
+    name: "autopilot_install",
+    label: "Install Autopilot Timer",
+    description: "Install or repair the openclaw-autopilot systemd timer on aiops-1.",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && sudo ./ops/openclaw_install_autopilot.sh",
+    timeoutSec: 30,
   },
 };
 

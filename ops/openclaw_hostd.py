@@ -273,8 +273,28 @@ def load_admin_token() -> str | None:
         return None
 
 
+def _write_error_json(art_dir: str, error_class: str, reason: str,
+                      recommended_next_action: str,
+                      underlying_exception: str | None = None) -> None:
+    """Always write a structured error.json artifact on any failure."""
+    try:
+        error_obj: dict = {
+            "error_class": error_class,
+            "reason": reason,
+            "recommended_next_action": recommended_next_action,
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        if underlying_exception:
+            error_obj["underlying_exception"] = underlying_exception[:2000]
+        with open(os.path.join(art_dir, "error.json"), "w", encoding="utf-8") as f:
+            json.dump(error_obj, f, indent=2)
+    except OSError:
+        pass
+
+
 def run_action(action: str, run_id: str) -> tuple[int, str, str, bool]:
-    """Run allowlisted action. Returns (exit_code, stdout, stderr, truncated)."""
+    """Run allowlisted action. Returns (exit_code, stdout, stderr, truncated).
+    Always writes stdout.txt, stderr.txt, hostd_result.json, and error.json (on failure)."""
     if action not in ALLOWLIST:
         return (-1, "", f"Action not in allowlist: {action}", False)
     spec = ALLOWLIST[action]
@@ -322,6 +342,15 @@ def run_action(action: str, run_id: str) -> tuple[int, str, str, bool]:
         }
         with open(result_path, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2)
+        if proc.returncode != 0:
+            stderr_tail = stderr_s.strip().split("\n")[-3:]
+            _write_error_json(
+                art_dir,
+                error_class="action_nonzero_exit",
+                reason=f"Action '{action}' exited with code {proc.returncode}",
+                recommended_next_action=f"Check stderr in {ARTIFACTS_HOSTD}/{run_id}/stderr.txt",
+                underlying_exception="\n".join(stderr_tail) if stderr_tail else None,
+            )
         return (proc.returncode, stdout_s, stderr_s, truncated)
     except subprocess.TimeoutExpired:
         finished_at = datetime.now(timezone.utc).isoformat()
@@ -339,6 +368,12 @@ def run_action(action: str, run_id: str) -> tuple[int, str, str, bool]:
         }
         with open(result_path, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2)
+        _write_error_json(
+            art_dir,
+            error_class="action_timeout",
+            reason=f"Action '{action}' timed out after {timeout_sec}s",
+            recommended_next_action="Increase timeout_sec in action_registry.json or investigate slow execution",
+        )
         return (-1, "", err_s, True)
     except Exception as e:
         finished_at = datetime.now(timezone.utc).isoformat()
@@ -357,6 +392,13 @@ def run_action(action: str, run_id: str) -> tuple[int, str, str, bool]:
             }
             with open(result_path, "w", encoding="utf-8") as f:
                 json.dump(result, f, indent=2)
+            _write_error_json(
+                art_dir,
+                error_class="action_exception",
+                reason=f"Action '{action}' raised an exception",
+                recommended_next_action="Check hostd logs and stderr artifact",
+                underlying_exception=err_s,
+            )
         except OSError:
             pass
         return (-1, "", err_s, False)

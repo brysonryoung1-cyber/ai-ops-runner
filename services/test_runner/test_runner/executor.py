@@ -19,6 +19,27 @@ from .util import hostname, iso, new_trace_id, now_utc, sha256_bytes
 log = logging.getLogger(__name__)
 
 
+def _write_error_artifact(art_dir: str, error_class: str, reason: str,
+                          recommended_next_action: str,
+                          underlying_exception: str | None = None) -> None:
+    """Write a structured error.json artifact on any failure."""
+    try:
+        from datetime import datetime, timezone
+        error_obj: dict = {
+            "error_class": error_class,
+            "reason": reason,
+            "recommended_next_action": recommended_next_action,
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        if underlying_exception:
+            error_obj["underlying_exception"] = underlying_exception[:2000]
+        error_path = os.path.join(art_dir, "error.json")
+        with open(error_path, "w", encoding="utf-8") as f:
+            _json.dump(error_obj, f, indent=2)
+    except OSError:
+        pass
+
+
 def _list_outputs(art_dir: str) -> list[str]:
     """List all output files in the artifact directory (relative names)."""
     if not os.path.isdir(art_dir):
@@ -128,6 +149,12 @@ def execute_job(job: JobRecord) -> JobRecord:
             JobStatus.SUCCESS if proc.returncode == 0 else JobStatus.FAILURE
         )
 
+        if proc.returncode != 0:
+            _write_error_artifact(
+                art_dir, "job_nonzero_exit",
+                f"Job exited with code {proc.returncode}",
+                "Check stdout.log and stderr.log for details")
+
         # 7. Assert worktree is clean (MUTATION_DETECTED check)
         try:
             assert_worktree_clean(worktree_path)
@@ -147,19 +174,30 @@ def execute_job(job: JobRecord) -> JobRecord:
             log.error("MUTATION_DETECTED in job %s: %s", job.job_id, exc)
             with open(stderr_path, "a") as fe:
                 fe.write(f"\n--- MUTATION_DETECTED ---\n{exc}\n")
+            _write_error_artifact(
+                art_dir, "mutation_detected",
+                "Job modified the read-only worktree",
+                "Ensure the command does not write to the source tree",
+                str(exc))
 
     except subprocess.TimeoutExpired:
         job.status = JobStatus.TIMEOUT
         job.exit_code = -1
         job.duration_ms = job.timeout_sec * 1000
         log.error("Job %s timed out after %ss", job.job_id, job.timeout_sec)
+        _write_error_artifact(art_dir, "job_timeout",
+                              f"Job timed out after {job.timeout_sec}s",
+                              "Increase timeout_sec or optimize the command")
     except Exception as exc:
         job.status = JobStatus.ERROR
         job.exit_code = -1
         log.exception("Job %s error: %s", job.job_id, exc)
-        # Write error details to stderr log
         with open(stderr_path, "a") as fe:
             fe.write(f"\n--- RUNNER ERROR ---\n{exc}\n")
+        _write_error_artifact(art_dir, "job_exception",
+                              f"Job raised an exception: {type(exc).__name__}",
+                              "Check stderr.log for details",
+                              str(exc))
     finally:
         job.finished_at = iso(now_utc())
         if job.duration_ms is None:
