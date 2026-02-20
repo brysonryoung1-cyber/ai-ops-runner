@@ -97,12 +97,19 @@ function classifyFile(name: string): "markdown" | "json" | "text" | "binary" {
   return "binary";
 }
 
-const ALLOWED_ORIGINS = new Set([
-  "http://127.0.0.1:3000",
-  "http://127.0.0.1:8787",
-  "http://localhost:3000",
-  "http://localhost:8787",
-]);
+function getAllowedOrigins(): Set<string> {
+  const port = process.env.OPENCLAW_CONSOLE_PORT || process.env.PORT || "8787";
+  const origins = new Set([
+    `http://127.0.0.1:${port}`,
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:8787",
+    "http://localhost:3000",
+    `http://localhost:${port}`,
+  ]);
+  const tsHostname = process.env.OPENCLAW_TAILSCALE_HOSTNAME;
+  if (tsHostname) origins.add(`https://${tsHostname}`);
+  return origins;
+}
 
 /**
  * GET /api/artifacts/browse?path=<encoded-path>[&download=1]
@@ -111,14 +118,17 @@ const ALLOWED_ORIGINS = new Set([
  * Path traversal prevented. No secrets; only directory names, file names, and safe file contents.
  */
 export async function GET(req: NextRequest) {
+  const allowedOrigins = getAllowedOrigins();
   const origin = req.headers.get("origin");
   const secFetchSite = req.headers.get("sec-fetch-site");
-  if (origin && !ALLOWED_ORIGINS.has(origin) && secFetchSite !== "same-origin") {
+  if (origin && !allowedOrigins.has(origin) && secFetchSite !== "same-origin") {
     return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
   }
   const host = req.headers.get("host") ?? "";
   if (!origin && secFetchSite !== "same-origin") {
-    const allowedHost = host === "127.0.0.1:3000" || host === "127.0.0.1:8787" || host === "localhost:3000" || host === "localhost:8787";
+    const tsHost = process.env.OPENCLAW_TAILSCALE_HOSTNAME;
+    const allowedHost =
+      host.startsWith("127.0.0.1:") || host.startsWith("localhost:") || (tsHost && host === tsHost);
     if (!allowedHost) {
       return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
     }

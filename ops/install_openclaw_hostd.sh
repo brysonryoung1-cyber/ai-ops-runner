@@ -20,6 +20,7 @@ After=network.target
 
 [Service]
 Type=simple
+EnvironmentFile=-/etc/ai-ops-runner/secrets/openclaw_hostd.env
 ExecStart=$PYTHON $ROOT_DIR/ops/openclaw_hostd.py
 WorkingDirectory=$ROOT_DIR
 Restart=always

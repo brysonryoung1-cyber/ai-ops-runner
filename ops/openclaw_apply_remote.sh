@@ -20,10 +20,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# --- Default host ---
-VPS_HOST="${1:-root@100.123.61.57}"
+# --- Default host and SSH ---
+# Optional: OPENCLAW_VPS_SSH_IDENTITY=/path/to/deploy_key (must be readable by hostd user)
+# Optional: OPENCLAW_VPS_SSH_HOST overrides default (e.g. root@100.123.61.57)
+VPS_HOST="${OPENCLAW_VPS_SSH_HOST:-${1:-root@100.123.61.57}}"
 VPS_DIR="/opt/ai-ops-runner"
 SSH_OPTS="-o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+if [ -n "${OPENCLAW_VPS_SSH_IDENTITY:-}" ] && [ -r "${OPENCLAW_VPS_SSH_IDENTITY}" ]; then
+  SSH_OPTS="$SSH_OPTS -o IdentitiesOnly=yes -i ${OPENCLAW_VPS_SSH_IDENTITY}"
+fi
 
 echo "=== openclaw_apply_remote.sh ==="
 echo "  Time:   $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -64,11 +69,12 @@ REMOTE_DOCKER
 echo ""
 
 # ---------------------------------------------------------------------------
-# Step 3: Apply SSH Tailscale-only fix
+# Step 3: Apply SSH Tailscale-only fix (best-effort; continue on failure)
 # ---------------------------------------------------------------------------
 echo "==> Step 3: Apply SSH Tailscale-only fix"
+SSH_FIX_RC=0
 # shellcheck disable=SC2086
-ssh $SSH_OPTS "$VPS_HOST" bash <<REMOTE_SSH_FIX
+ssh $SSH_OPTS "$VPS_HOST" bash <<REMOTE_SSH_FIX || SSH_FIX_RC=$?
 set -euo pipefail
 cd '${VPS_DIR}'
 # Only run the fix if tailscale is up — fail-closed but do not brick access
@@ -79,6 +85,7 @@ else
   echo "  This is safe: the fix will run on next guard cycle when Tailscale recovers."
 fi
 REMOTE_SSH_FIX
+[ "$SSH_FIX_RC" -ne 0 ] && echo "  WARNING: Step 3 failed (rc=$SSH_FIX_RC); continuing (doctor/ports still run)."
 echo ""
 
 # ---------------------------------------------------------------------------

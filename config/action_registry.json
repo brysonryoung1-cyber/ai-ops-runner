@@ -2,7 +2,7 @@
   "$schema": "./action_registry.schema.json",
   "actions": [
     { "id": "doctor", "label": "Run Doctor", "timeout_sec": 180, "cmd_template": "cd ${ROOT_DIR} && ./ops/openclaw_doctor.sh" },
-    { "id": "apply", "label": "Apply OpenClaw", "timeout_sec": 120, "cmd_template": "cd ${ROOT_DIR} && ./ops/openclaw_apply_remote.sh" },
+    { "id": "apply", "label": "Apply OpenClaw", "timeout_sec": 600, "cmd_template": "cd ${ROOT_DIR} && ./ops/openclaw_apply_remote.sh" },
     { "id": "port_audit", "label": "Show Port Audit", "timeout_sec": 60, "cmd_template": "cd ${ROOT_DIR} && ./ops/show_port_audit.sh", "aliases": ["ports"] },
     { "id": "tail_guard_log", "label": "Guard Logs", "timeout_sec": 30, "cmd_template": "journalctl -u openclaw-guard.service -n 200 --no-pager", "aliases": ["journal"] },
     { "id": "timer", "label": "Guard Timer Status", "timeout_sec": 10, "cmd_template": "systemctl status openclaw-guard.timer --no-pager" },

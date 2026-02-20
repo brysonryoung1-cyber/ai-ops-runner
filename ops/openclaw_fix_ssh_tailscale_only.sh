@@ -126,6 +126,11 @@ for candidate in ssh.service sshd.service; do
   fi
 done
 if [ -z "$SSHD_UNIT" ]; then
+  # Tailscale SSH: host may use tailscale ssh only (no system sshd unit). Treat as success.
+  if pgrep -x tailscaled >/dev/null 2>&1 || systemctl is-active --quiet tailscaled 2>/dev/null; then
+    echo "INFO: Tailscale SSH in use; no system sshd unit to harden."
+    exit 0
+  fi
   echo "ERROR: Neither ssh.service nor sshd.service found." >&2
   exit 1
 fi
