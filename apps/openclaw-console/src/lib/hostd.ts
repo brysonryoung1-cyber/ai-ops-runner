@@ -80,7 +80,8 @@ function mockHostdResult(actionName: string): HostdResult {
   };
 }
 
-function getHostdUrl(): string | null {
+/** Exported for fail-fast error messages and status UI (no secrets; localhost or host.docker.internal). */
+export function getHostdUrl(): string | null {
   const url = process.env.OPENCLAW_HOSTD_URL;
   if (!url || typeof url !== "string" || !url.startsWith("http")) return null;
   return url.replace(/\/$/, "");

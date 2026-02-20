@@ -24,6 +24,8 @@ export interface RunRecord {
   exit_code: number | null;
   duration_ms: number;
   error_summary: string | null;
+  /** Machine-readable class for UI/filtering (e.g. HOSTD_UNREACHABLE). */
+  error_class?: string | null;
   artifact_paths: string[];
   /** Host executor artifact dir (e.g. artifacts/hostd/YYYYMMDD_HHMMSS_hex) for apply/doctor etc. */
   artifact_dir?: string | null;
@@ -147,7 +149,8 @@ export function buildRunRecord(
   errorMsg: string | null,
   runId?: string,
   projectId?: string,
-  artifactDir?: string | null
+  artifactDir?: string | null,
+  errorClass?: string | null
 ): RunRecord {
   return {
     run_id: runId ?? generateRunId(),
@@ -161,6 +164,7 @@ export function buildRunRecord(
     error_summary: errorMsg,
     artifact_paths: [],
     ...(artifactDir != null && artifactDir !== "" && { artifact_dir: artifactDir }),
+    ...(errorClass != null && errorClass !== "" && { error_class: errorClass }),
   };
 }
 

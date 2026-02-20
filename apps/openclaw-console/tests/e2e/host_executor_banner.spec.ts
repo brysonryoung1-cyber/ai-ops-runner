@@ -25,8 +25,40 @@ test.describe("Host Executor banner", () => {
     expect(data).toHaveProperty("latency_ms");
     expect(typeof data.ok).toBe("boolean");
     expect(typeof data.latency_ms).toBe("number");
+    expect(data).toHaveProperty("console_can_reach_hostd");
+    expect(typeof data.console_can_reach_hostd).toBe("boolean");
+    expect(data).toHaveProperty("console_network_mode");
+    expect(["host", "bridge", "unknown"]).toContain(data.console_network_mode);
+    expect(data).toHaveProperty("executor_url");
     if (!data.ok) {
       expect(data).toHaveProperty("error_class");
+    }
+  });
+});
+
+/**
+ * Exec route: when hostd is unreachable, POST /api/exec returns 502 with
+ * error_class HOSTD_UNREACHABLE, run_id, error_summary, and artifact_dir
+ * (debuggable failure with artifact_dir for stderr.txt).
+ */
+test.describe("Exec unreachable handling", () => {
+  test("POST /api/exec with unreachable hostd returns 502 + HOSTD_UNREACHABLE + artifact_dir", async ({
+    request,
+  }) => {
+    test.setTimeout(100_000); // Retry backoff can take up to ~70s
+    const res = await request.post("/api/exec", {
+      data: { action: "apply" },
+      headers: { "Content-Type": "application/json" },
+    });
+    const data = await res.json();
+    if (res.status() === 502) {
+      expect(data.error_class).toBe("HOSTD_UNREACHABLE");
+      expect(data).toHaveProperty("run_id");
+      expect(data).toHaveProperty("error_summary");
+      expect(typeof data.error_summary).toBe("string");
+      expect(data).toHaveProperty("artifact_dir");
+      expect(data.artifact_dir).toContain("unreachable_");
+      expect(data.artifact_dir).toContain("artifacts/hostd/");
     }
   });
 });

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
-import { executeAction, checkConnectivity } from "@/lib/hostd";
+import { executeAction, checkConnectivity, getHostdUrl } from "@/lib/hostd";
 import { acquireLock, releaseLock, getLockInfo } from "@/lib/action-lock";
 import {
   writeAuditEntry,
@@ -238,6 +238,57 @@ export async function POST(req: NextRequest) {
   const actor = deriveActor(req.headers.get("x-openclaw-token"));
   const params = { action: actionName };
   const startedAt = new Date();
+
+  // Probe hostd with retry/backoff (10s, 20s, 40s; total ≤90s) before failing
+  const backoffMs = [10_000, 20_000, 40_000];
+  let hostdProbe = await checkConnectivity();
+  for (let i = 0; i < backoffMs.length && !hostdProbe.ok; i++) {
+    await new Promise((r) => setTimeout(r, backoffMs[i]));
+    hostdProbe = await checkConnectivity();
+    if (hostdProbe.ok) {
+      console.warn(`[exec] RECOVERED_AFTER_RETRY action=${actionName} run_id=${runId}`);
+      break;
+    }
+  }
+  if (!hostdProbe.ok) {
+    const url = getHostdUrl() ?? "(OPENCLAW_HOSTD_URL not set)";
+    const errorSummary = `Host Executor unreachable at ${url}: ${hostdProbe.error ?? "unknown"}. Try restarting openclaw-hostd (systemctl restart openclaw-hostd) and check console→hostd connectivity (OPENCLAW_HOSTD_URL e.g. http://127.0.0.1:8877 or http://host.docker.internal:8877).`;
+    const finishedAt = new Date();
+    const artifactsRoot = process.env.OPENCLAW_ARTIFACTS_ROOT || join(process.env.OPENCLAW_REPO_ROOT || process.cwd(), "artifacts");
+    const hostdDir = join(artifactsRoot, "hostd", `unreachable_${runId}`);
+    try {
+      mkdirSync(hostdDir, { recursive: true });
+      writeFileSync(join(hostdDir, "stderr.txt"), errorSummary + "\n", "utf-8");
+    } catch {
+      // best-effort; run record still written
+    }
+    const artifactDir = `artifacts/hostd/unreachable_${runId}`;
+    writeAuditEntry({
+      timestamp: finishedAt.toISOString(),
+      actor,
+      action_name: actionName,
+      params_hash: hashParams(params),
+      exit_code: null,
+      duration_ms: finishedAt.getTime() - startedAt.getTime(),
+      error: errorSummary,
+    });
+    writeRunRecord(
+      buildRunRecord(actionName, startedAt, finishedAt, null, false, errorSummary, runId, undefined, artifactDir, "HOSTD_UNREACHABLE")
+    );
+    releaseLock(actionName);
+    return NextResponse.json(
+      {
+        ok: false,
+        error: errorSummary,
+        error_class: "HOSTD_UNREACHABLE",
+        error_summary: errorSummary,
+        action: actionName,
+        run_id: runId,
+        artifact_dir: artifactDir,
+      },
+      { status: 502 }
+    );
+  }
 
   try {
     // executeAction validates allowlist and calls hostd (fail-closed)
