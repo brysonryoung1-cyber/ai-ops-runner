@@ -57,6 +57,9 @@ if [ -z "${VERDICT_HMAC_KEY:-}" ]; then
   exit 1
 fi
 
+# ── Review long-window retry (single ship run tries until valid verdict or max wait) ──
+export REVIEW_MAX_WAIT_SECONDS="${REVIEW_MAX_WAIT_SECONDS:-900}"
+
 # ── Preflight: OpenAI key ──
 if [ "${CODEX_SKIP:-0}" != "1" ]; then
   # shellcheck source=ensure_openai_key.sh
@@ -280,16 +283,19 @@ do_ship_push() {
 
 write_canonical_verdict() {
   local head_sha="$1" start_sha="$2" artifact_path="$3" engine="$4" model="$5"
+  local tree_sha
+  tree_sha="$(git rev-parse "${head_sha}^{tree}")"
 
-  python3 - "$VERDICT_FILE" "$head_sha" "$start_sha" "$artifact_path" "$engine" "$model" <<'PYEOF'
+  python3 - "$VERDICT_FILE" "$head_sha" "$start_sha" "$tree_sha" "$artifact_path" "$engine" "$model" <<'PYEOF'
 import json, sys, os, hmac, hashlib
 
-vfile, head_sha, start_sha = sys.argv[1], sys.argv[2], sys.argv[3]
-artifact_path, engine, model = sys.argv[4], sys.argv[5], sys.argv[6]
+vfile, head_sha, start_sha, tree_sha = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+artifact_path, engine, model = sys.argv[5], sys.argv[6], sys.argv[7]
 ts = __import__("datetime").datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
 data = {
     "approved_head_sha": head_sha,
+    "approved_tree_sha": tree_sha,
     "range_start_sha": start_sha,
     "range_end_sha": head_sha,
     "simulated": False,
@@ -313,7 +319,7 @@ with open(vfile, "w") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 
-print("  Canonical verdict: approved_head_sha=%s sig=%s..." % (head_sha[:12], data["signature"][:16]))
+print("  Canonical verdict: approved_head_sha=%s approved_tree_sha=%s sig=%s..." % (head_sha[:12], tree_sha[:12], data["signature"][:16]))
 PYEOF
 }
 
@@ -423,13 +429,15 @@ while [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; do
   "$SCRIPT_DIR/review_auto.sh" --no-push --since "$START_SHA" || REVIEW_RC=$?
 
   if [ "$REVIEW_RC" -ne 0 ]; then
-    echo "==> Review BLOCKED on attempt $ATTEMPT"
+    echo "==> Review failed on attempt $ATTEMPT (max wait ${REVIEW_MAX_WAIT_SECONDS}s exceeded or BLOCKED)."
+    echo "  Engine attempt logs: review_packets/<timestamp>/engine_attempts/" >&2
+    echo "  Run: ./ops/review_engine_probe.sh for env presence (REVIEW_BASE_URL+REVIEW_API_KEY, OPENAI_API_KEY, codex)." >&2
     if [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ] && [ "${CODEX_SKIP:-0}" != "1" ]; then
       echo "==> Running autoheal..."
       "$SCRIPT_DIR/autoheal_codex.sh" || { echo "ERROR: Autoheal failed" >&2; exit 1; }
       continue
     fi
-    echo "ERROR: Review blocked after $ATTEMPT attempts." >&2
+    echo "ERROR: Review failed after $ATTEMPT attempts. Fail-closed." >&2
     exit 1
   fi
 
@@ -470,19 +478,23 @@ EOF
   echo "  Reviewed HEAD: ${REVIEWED_HEAD:0:12}"
   echo "  Push HEAD:     ${PUSH_HEAD:0:12} (includes verdict commit)"
 
-  # Verify the canonical verdict is internally consistent
+  # Verify the canonical verdict is internally consistent (including tree)
   python3 - "$VERDICT_FILE" "$REVIEWED_HEAD" <<'PYEOF' || { echo "ERROR: Verdict verification failed" >&2; continue; }
-import json, sys
+import json, sys, subprocess
 with open(sys.argv[1]) as f:
     v = json.load(f)
 rh = sys.argv[2]
 if v["approved_head_sha"] != rh or v["range_end_sha"] != rh:
     print("MISMATCH", file=sys.stderr)
     sys.exit(1)
+tree_sha = subprocess.run(["git", "rev-parse", rh + "^{tree}"], capture_output=True, text=True, timeout=5, check=True).stdout.strip()
+if v.get("approved_tree_sha") != tree_sha:
+    print("approved_tree_sha mismatch", file=sys.stderr)
+    sys.exit(1)
 if v["simulated"] is not False:
     print("simulated is not false", file=sys.stderr)
     sys.exit(1)
-print("  Verdict consistent: approved_head_sha=%s" % rh[:12])
+print("  Verdict consistent: approved_head_sha=%s approved_tree_sha=%s" % (rh[:12], tree_sha[:12]))
 PYEOF
 
   # ── Push (never modify branch protection) ──

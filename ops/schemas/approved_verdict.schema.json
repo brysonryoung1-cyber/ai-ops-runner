@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Approved Verdict",
+  "description": "Canonical verdict for the push gate. approved_tree_sha attests content (tree) so squash merges pass.",
+  "type": "object",
+  "required": [
+    "approved_head_sha",
+    "approved_tree_sha",
+    "range_start_sha",
+    "range_end_sha",
+    "simulated",
+    "engine",
+    "model",
+    "created_at",
+    "verdict_artifact_path",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "approved_head_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "Commit SHA of the reviewed HEAD (range_end_sha)."
+    },
+    "approved_tree_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "Tree SHA of the reviewed content (range_end_sha^{tree}). Gate compares this to push HEAD^{tree}."
+    },
+    "range_start_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "range_end_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "simulated": {
+      "type": "boolean",
+      "const": false,
+      "description": "Must be false for gate to pass."
+    },
+    "engine": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Review engine (e.g. codex_cli). Must not be placeholder."
+    },
+    "model": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "verdict_artifact_path": {
+      "type": "string"
+    },
+    "signature": {
+      "type": "string",
+      "description": "HMAC-SHA256 of canonical payload."
+    }
+  }
+}

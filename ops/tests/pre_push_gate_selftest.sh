@@ -105,15 +105,18 @@ try_push() {
   echo "$rc"
 }
 
-# --- helper: write canonical verdict (v2 gate) and commit ---
+# --- helper: write canonical verdict (v2 gate, tree-based) and commit ---
 TEST_HMAC_KEY="pre-push-selftest-key-$(date +%s)"
 write_canonical_verdict_and_commit() {
   local head_sha="$1"
-  python3 - "$CLONE/docs/LAST_APPROVED_VERDICT.json" "$head_sha" "$TEST_HMAC_KEY" <<'PYEOF'
+  local tree_sha
+  tree_sha="$(cd "$CLONE" && git rev-parse "${head_sha}^{tree}")"
+  python3 - "$CLONE/docs/LAST_APPROVED_VERDICT.json" "$head_sha" "$tree_sha" "$TEST_HMAC_KEY" <<'PYEOF'
 import json, sys, hmac, hashlib
-vfile, head_sha, key = sys.argv[1], sys.argv[2], sys.argv[3]
+vfile, head_sha, tree_sha, key = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 data = {
     "approved_head_sha": head_sha,
+    "approved_tree_sha": tree_sha,
     "range_start_sha": head_sha,
     "range_end_sha": head_sha,
     "simulated": False,

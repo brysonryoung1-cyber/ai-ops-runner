@@ -8,13 +8,15 @@
 #   1. Direct push (no OPENCLAW_SHIP) → BLOCKED
 #   2. Missing verdict file → BLOCKED
 #   3. simulated=true → BLOCKED
-#   4. Wrong range_end_sha → BLOCKED
+#   4. Wrong approved_tree_sha (tree mismatch) → BLOCKED
 #   5. Missing VERDICT_HMAC_KEY → BLOCKED (fail-closed)
 #   6. Invalid HMAC signature → BLOCKED
 #   7. Empty signature → BLOCKED
 #   8. engine=none (placeholder) → BLOCKED
-#   9. Correct verdict with valid HMAC → ALLOWED
-#  10. Verdict with parent SHA + verdict-only diff extension → ALLOWED
+#   9. Correct verdict (tree match) with valid HMAC → ALLOWED
+#  10. Verdict-only extension (allowlist when trees differ) → ALLOWED
+#  11. Tree differs with non-allowlisted diff → BLOCKED
+#  12. ship.sh must NEVER modify branch protection
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -78,10 +80,12 @@ git commit -m "change to review" >/dev/null 2>&1
 
 HEAD_SHA="$(git rev-parse HEAD)"
 BASE_SHA="$(git merge-base HEAD origin/main)"
+HEAD_TREE="$(git rev-parse HEAD^{tree})"
 
 echo "  Test repo: $CLONE"
 echo "  BASE: ${BASE_SHA:0:12}"
 echo "  HEAD: ${HEAD_SHA:0:12}"
+echo "  HEAD tree: ${HEAD_TREE:0:12}"
 echo ""
 
 # ── Helper: compute HMAC ──
@@ -131,6 +135,7 @@ try_push() {
 # ============================================================
 write_verdict '{
   "approved_head_sha": "'"$HEAD_SHA"'",
+  "approved_tree_sha": "'"$HEAD_TREE"'",
   "range_start_sha": "'"$BASE_SHA"'",
   "range_end_sha": "'"$HEAD_SHA"'",
   "simulated": false,
@@ -155,6 +160,7 @@ assert_eq "missing verdict file blocks push" "1" "$RC"
 # ============================================================
 write_verdict '{
   "approved_head_sha": "'"$HEAD_SHA"'",
+  "approved_tree_sha": "'"$HEAD_TREE"'",
   "range_start_sha": "'"$BASE_SHA"'",
   "range_end_sha": "'"$HEAD_SHA"'",
   "simulated": true,
@@ -168,10 +174,11 @@ RC="$(try_push)"
 assert_eq "simulated=true blocks push" "1" "$RC"
 
 # ============================================================
-# Test 4: Wrong range_end_sha → BLOCKED
+# Test 4: Wrong approved_tree_sha (tree mismatch) → BLOCKED
 # ============================================================
 write_verdict '{
   "approved_head_sha": "0000000000000000000000000000000000000bad",
+  "approved_tree_sha": "0000000000000000000000000000000000000000",
   "range_start_sha": "'"$BASE_SHA"'",
   "range_end_sha": "0000000000000000000000000000000000000bad",
   "simulated": false,
@@ -182,13 +189,14 @@ write_verdict '{
   "signature": ""
 }' 1
 RC="$(try_push)"
-assert_eq "wrong range_end_sha blocks push" "1" "$RC"
+assert_eq "wrong approved_tree_sha (tree mismatch) blocks push" "1" "$RC"
 
 # ============================================================
 # Test 5: Missing VERDICT_HMAC_KEY → BLOCKED (fail-closed)
 # ============================================================
 write_verdict '{
   "approved_head_sha": "'"$HEAD_SHA"'",
+  "approved_tree_sha": "'"$HEAD_TREE"'",
   "range_start_sha": "'"$BASE_SHA"'",
   "range_end_sha": "'"$HEAD_SHA"'",
   "simulated": false,
@@ -206,6 +214,7 @@ assert_eq "missing VERDICT_HMAC_KEY fails closed" "1" "$RC"
 # ============================================================
 write_verdict '{
   "approved_head_sha": "'"$HEAD_SHA"'",
+  "approved_tree_sha": "'"$HEAD_TREE"'",
   "range_start_sha": "'"$BASE_SHA"'",
   "range_end_sha": "'"$HEAD_SHA"'",
   "simulated": false,
@@ -223,6 +232,7 @@ assert_eq "invalid HMAC signature blocks push" "1" "$RC"
 # ============================================================
 write_verdict '{
   "approved_head_sha": "'"$HEAD_SHA"'",
+  "approved_tree_sha": "'"$HEAD_TREE"'",
   "range_start_sha": "'"$BASE_SHA"'",
   "range_end_sha": "'"$HEAD_SHA"'",
   "simulated": false,
@@ -240,6 +250,7 @@ assert_eq "empty signature blocks push" "1" "$RC"
 # ============================================================
 write_verdict '{
   "approved_head_sha": "'"$HEAD_SHA"'",
+  "approved_tree_sha": "'"$HEAD_TREE"'",
   "range_start_sha": "'"$BASE_SHA"'",
   "range_end_sha": "'"$HEAD_SHA"'",
   "simulated": false,
@@ -253,10 +264,11 @@ RC="$(try_push)"
 assert_eq "engine=none (placeholder) blocks push" "1" "$RC"
 
 # ============================================================
-# Test 9: Correct verdict with valid HMAC → ALLOWED
+# Test 9: Correct verdict (tree match) with valid HMAC → ALLOWED
 # ============================================================
 write_verdict '{
   "approved_head_sha": "'"$HEAD_SHA"'",
+  "approved_tree_sha": "'"$HEAD_TREE"'",
   "range_start_sha": "'"$BASE_SHA"'",
   "range_end_sha": "'"$HEAD_SHA"'",
   "simulated": false,
@@ -267,7 +279,7 @@ write_verdict '{
   "signature": ""
 }' 1
 RC="$(try_push)"
-assert_eq "correct verdict with valid HMAC allows push" "0" "$RC"
+assert_eq "correct verdict (tree match) with valid HMAC allows push" "0" "$RC"
 
 # ============================================================
 # Test 10: Verdict-only extension (parent SHA + verdict diff) → ALLOWED
@@ -278,10 +290,12 @@ git add README.md
 git commit -m "new code" >/dev/null 2>&1
 CODE_HEAD="$(git rev-parse HEAD)"
 CODE_BASE="$(git merge-base HEAD origin/main)"
+CODE_HEAD_TREE="$(git rev-parse "$CODE_HEAD^{tree}")"
 
-# Write verdict pointing to CODE_HEAD
+# Write verdict pointing to CODE_HEAD (tree-based: allows squash)
 write_verdict '{
   "approved_head_sha": "'"$CODE_HEAD"'",
+  "approved_tree_sha": "'"$CODE_HEAD_TREE"'",
   "range_start_sha": "'"$CODE_BASE"'",
   "range_end_sha": "'"$CODE_HEAD"'",
   "simulated": false,
@@ -301,17 +315,15 @@ RC="$(try_push)"
 assert_eq "verdict-only extension allows push" "0" "$RC"
 
 # ============================================================
-# Test 11: Verdict extension with non-verdict files → BLOCKED
+# Test 11: Tree differs with non-allowlisted diff → BLOCKED
 # ============================================================
 echo "sneaky code" >> README.md
 git add README.md
-SNEAKY_HEAD="$(git rev-parse HEAD)"
 git commit -m "sneaky extra code" >/dev/null 2>&1
 
-# Verdict still points to CODE_HEAD (stale)
-# The diff between CODE_HEAD and new HEAD includes README.md
+# Verdict still points to CODE_HEAD (stale); push HEAD has different tree
 RC="$(try_push)"
-assert_eq "extension with non-verdict files blocks push" "1" "$RC"
+assert_eq "tree differs with non-allowlisted diff blocks push" "1" "$RC"
 
 # ============================================================
 # Test 12: ship.sh must NEVER modify branch protection

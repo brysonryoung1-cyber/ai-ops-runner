@@ -14,6 +14,9 @@ cd "$ROOT_DIR"
 NO_PUSH=0
 SINCE_SHA=""
 MAX_PACKETS=20
+REVIEW_MAX_WAIT_SECONDS="${REVIEW_MAX_WAIT_SECONDS:-900}"
+REVIEW_BACKOFF_INIT="${REVIEW_ATTEMPT_BACKOFF_INIT:-5}"
+REVIEW_BACKOFF_CAP="${REVIEW_ATTEMPT_BACKOFF_CAP:-120}"
 
 # --- parse args ---
 while [[ $# -gt 0 ]]; do
@@ -65,6 +68,8 @@ HEAD_SHA="$(git rev-parse HEAD)"
 STAMP="$(date -u +%Y%m%d_%H%M%S)"
 PACK_DIR="$ROOT_DIR/review_packets/${STAMP}"
 mkdir -p "$PACK_DIR"
+ENGINE_ATTEMPTS_DIR="$PACK_DIR/engine_attempts"
+mkdir -p "$ENGINE_ATTEMPTS_DIR"
 
 echo "=== review_auto.sh ==="
 echo "  Baseline: $SINCE_SHA"
@@ -84,6 +89,69 @@ resolve_codex_cmd() {
 
 CODEX_CMD="$(resolve_codex_cmd)"
 
+# Bounded retries for transient failures (empty output, invalid JSON, 429/5xx). Fail-closed after exhaustion.
+MAX_REVIEW_ATTEMPTS=5
+
+# --- Probe: ordered list of available engines (router, openai, codex) ---
+get_engines_list() {
+  local probe_out
+  probe_out="$("$SCRIPT_DIR/review_engine_probe.sh" 2>/dev/null)" || echo "ENGINE=none"$'\n'"ENGINES=none"$'\n'"SUMMARY=none"
+  echo "$probe_out" | sed -n 's/^ENGINES=//p'
+}
+
+# --- Normalize openclaw verdict to canonical form (meta.simulated=false, codex_cli, etc.) ---
+normalize_openclaw_verdict_to() {
+  local src_verdict="$1" dest_verdict="$2"
+  python3 - "$src_verdict" "$dest_verdict" "$SINCE_SHA" "$HEAD_SHA" "$GENERATED_AT" "$REVIEW_MODE" <<'PYEOF'
+import json, sys
+src, dest, since, to, gen_at, mode = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]
+required_top = ["verdict", "blockers", "non_blocking", "tests_run", "meta"]
+with open(src) as f:
+    v = json.load(f)
+v = {k: v[k] for k in required_top if k in v}
+v["meta"] = {
+    "since_sha": since,
+    "to_sha": to,
+    "generated_at": gen_at,
+    "review_mode": mode,
+    "simulated": False,
+    "codex_cli": {"version": "api", "command": "openclaw_codex_review.sh"}
+}
+with open(dest, "w") as f:
+    json.dump(v, f, indent=2)
+PYEOF
+}
+
+# --- Run one engine and write verdict to VERDICT_FILE; return 0 on valid verdict, 1 on failure ---
+run_engine_codex_attempt() {
+  local logfile="$1"
+  ( run_codex_review "$BUNDLE_FILE" "$VERDICT_FILE" ) >>"$logfile" 2>&1
+  local rc=$?
+  [ "$rc" -eq 0 ] && [ -f "$VERDICT_FILE" ] && validate_verdict "$VERDICT_FILE" >/dev/null 2>&1 && return 0
+  return 1
+}
+
+run_engine_openclaw_attempt() {
+  local engine_path="$1" logfile="$2"
+  if [ "$engine_path" = "openai" ]; then
+    export OPENAI_API_KEY
+    unset REVIEW_BASE_URL REVIEW_API_KEY 2>/dev/null || true
+    [ -n "${OPENAI_API_KEY:-}" ] || { source "$SCRIPT_DIR/ensure_openai_key.sh" 2>/dev/null || true; }
+  fi
+  local openclaw_script="${REVIEW_OPENCLAW_SCRIPT:-$SCRIPT_DIR/openclaw_codex_review.sh}"
+  if ! "$openclaw_script" --since "$SINCE_SHA" >>"$logfile" 2>&1; then
+    return 1
+  fi
+  local latest_verdict
+  latest_verdict="$(ls -t "$ROOT_DIR"/artifacts/codex_review/*/CODEX_VERDICT.json 2>/dev/null | head -1)"
+  if [ -z "$latest_verdict" ] || [ ! -f "$latest_verdict" ]; then
+    return 1
+  fi
+  normalize_openclaw_verdict_to "$latest_verdict" "$VERDICT_FILE"
+  validate_verdict "$VERDICT_FILE" >/dev/null 2>&1 || return 1
+  return 0
+}
+
 run_codex_review() {
   local bundle_file="$1"
   local verdict_file="$2"
@@ -102,18 +170,20 @@ run_codex_review() {
   #   --output-last-message = capture the agent's final message to a file
   local raw_output_file="${verdict_file}.raw"
   local stdout_capture="${raw_output_file}.stdout"
+  local stderr_capture="${raw_output_file}.stderr"
   local codex_rc=0
   $CODEX_CMD exec \
     --full-auto \
     -s read-only \
     --output-last-message "$raw_output_file" \
     "$prompt" \
-    2>/dev/null | tee "$stdout_capture" || codex_rc=${PIPESTATUS[0]}
+    2>"$stderr_capture" | tee "$stdout_capture" || codex_rc=${PIPESTATUS[0]}
 
   if [ "$codex_rc" -ne 0 ] && [ ! -f "$raw_output_file" ] && [ ! -s "$stdout_capture" ]; then
     echo "ERROR: Codex exec failed (rc=$codex_rc) and produced no output" >&2
     return 1
   fi
+  # stderr kept in $stderr_capture for retry logic (429/5xx)
 
   # Extract JSON from the captured last message (file preferred; fallback to stdout)
   local raw_content=""
@@ -391,13 +461,65 @@ PYEOF
   }
 
   if [ "$REVIEW_MODE" = "bundle" ]; then
-    echo "==> Running Codex review (single bundle)..."
-    run_codex_review "$BUNDLE_FILE" "$VERDICT_FILE" || CODEX_RC=$?
-    if [ "${CODEX_RC:-0}" -ne 0 ]; then
-      echo "==> Codex CLI failed; trying openclaw_codex_review.sh (direct API) fallback..." >&2
-      try_openclaw_fallback || exit 1
-    fi
+    echo "==> Running review (bundle) with engine failover (max_wait=${REVIEW_MAX_WAIT_SECONDS}s)..."
+    ENGINES_LIST="$(get_engines_list)"
+    [ -z "$ENGINES_LIST" ] || [ "$ENGINES_LIST" = "none" ] && ENGINES_LIST="codex"
+    START_TS=$(date +%s)
+    FAILOVER_ATTEMPT=0
+    ENGINE_INDEX=0
+    BACKOFF_SEC="$REVIEW_BACKOFF_INIT"
+    ENGINES_ARR=()
+    IFS=',' read -ra ENGINES_ARR <<< "$ENGINES_LIST"
+    N_ENGINES=${#ENGINES_ARR[@]}
+    [ "$N_ENGINES" -eq 0 ] && ENGINES_ARR=("codex") && N_ENGINES=1
+    VERDICT_FROM_CODEX=0
+    ENGINES_ATTEMPTED=""
+
+    while true; do
+      ELAPSED=$(($(date +%s) - START_TS))
+      if [ "$ELAPSED" -ge "$REVIEW_MAX_WAIT_SECONDS" ]; then
+        echo "ERROR: Review failed: no valid verdict within ${REVIEW_MAX_WAIT_SECONDS}s. Fail-closed." >&2
+        echo "  Engines attempted: ${ENGINES_ATTEMPTED:-none}" >&2
+        echo "  Engine attempt logs: $ENGINE_ATTEMPTS_DIR" >&2
+        "$SCRIPT_DIR/review_engine_probe.sh" 2>/dev/null | sed -n 's/^SUMMARY=/  Env summary: /p' >&2
+        exit 1
+      fi
+      CURRENT_ENGINE="${ENGINES_ARR[$ENGINE_INDEX]}"
+      FAILOVER_ATTEMPT=$((FAILOVER_ATTEMPT + 1))
+      LOGFILE="$ENGINE_ATTEMPTS_DIR/${CURRENT_ENGINE}_${FAILOVER_ATTEMPT}.log"
+      ENGINES_ATTEMPTED="${ENGINES_ATTEMPTED:+$ENGINES_ATTEMPTED }$CURRENT_ENGINE"
+      echo "  Attempt $FAILOVER_ATTEMPT: engine=$CURRENT_ENGINE (elapsed ${ELAPSED}s)" >&2
+      rm -f "$VERDICT_FILE"
+      RUN_RC=1
+      if [ "$CURRENT_ENGINE" = "codex" ]; then
+        run_engine_codex_attempt "$LOGFILE" && RUN_RC=0
+        [ "$RUN_RC" -eq 0 ] && VERDICT_FROM_CODEX=1
+      elif [ "$CURRENT_ENGINE" = "router" ] || [ "$CURRENT_ENGINE" = "openai" ]; then
+        run_engine_openclaw_attempt "$CURRENT_ENGINE" "$LOGFILE" && RUN_RC=0
+      fi
+      if [ "$RUN_RC" -eq 0 ] && [ -f "$VERDICT_FILE" ]; then
+        if validate_verdict "$VERDICT_FILE" >/dev/null 2>&1; then
+          SIM_OK=1
+          python3 - "$VERDICT_FILE" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    v = json.load(f)
+if v.get("meta", {}).get("simulated") is False:
+    sys.exit(0)
+sys.exit(1)
+PYEOF
+          SIM_OK=$?
+          [ "$SIM_OK" -eq 0 ] && break
+        fi
+      fi
+      ENGINE_INDEX=$(( (ENGINE_INDEX + 1) % N_ENGINES ))
+      sleep "$BACKOFF_SEC"
+      BACKOFF_SEC=$(( BACKOFF_SEC * 2 ))
+      [ "$BACKOFF_SEC" -gt "$REVIEW_BACKOFF_CAP" ] && BACKOFF_SEC="$REVIEW_BACKOFF_CAP"
+    done
+    echo "  Valid verdict from engine: $CURRENT_ENGINE" >&2
   else
+    VERDICT_FROM_CODEX=1
     echo "==> Running Codex review (packet mode)..."
     # Generate per-file packets
     FILE_LIST="$(git diff --name-only "$SINCE_SHA" "$HEAD_SHA")"
@@ -434,7 +556,22 @@ BLOCK only for: deploy/compile failures, unsafe behavior, logging regressions, n
 PKTEOF
 
       echo "  Reviewing packet $PACKET_NUM: $filepath"
-      run_codex_review "$PACKET_FILE" "$PACKET_VERDICT"
+      PACKET_ATTEMPT=1
+      PACKET_RC=1
+      while [ "$PACKET_ATTEMPT" -le "$MAX_REVIEW_ATTEMPTS" ]; do
+        run_codex_review "$PACKET_FILE" "$PACKET_VERDICT" || PACKET_RC=$?
+        if [ "$PACKET_RC" -eq 0 ] && [ -f "$PACKET_VERDICT" ] && python3 -c "import json; json.load(open('$PACKET_VERDICT'))" 2>/dev/null; then
+          break
+        fi
+        if [ "$PACKET_ATTEMPT" -lt "$MAX_REVIEW_ATTEMPTS" ]; then
+          echo "    Retry $PACKET_ATTEMPT/$MAX_REVIEW_ATTEMPTS in $((2**PACKET_ATTEMPT))s..." >&2
+          sleep $((2**PACKET_ATTEMPT))
+          PACKET_ATTEMPT=$((PACKET_ATTEMPT + 1))
+        else
+          echo "ERROR: Packet review failed after $MAX_REVIEW_ATTEMPTS attempts. Fail-closed." >&2
+          exit 1
+        fi
+      done
       ALL_VERDICTS+=("$PACKET_VERDICT")
     done <<< "$FILE_LIST"
 
@@ -497,8 +634,9 @@ PYEOF
     exit 1
   fi
 
-  # --- Add meta to the verdict ---
-  python3 - "$VERDICT_FILE" "$SINCE_SHA" "$HEAD_SHA" "$GENERATED_AT" "$REVIEW_MODE" "$CODEX_VERSION" "$CODEX_CMD_RECORD" <<'PYEOF'
+  # --- Add meta to the verdict (only when verdict came from codex CLI; openclaw path already has meta) ---
+  if [ "$REVIEW_MODE" != "bundle" ] || [ "${VERDICT_FROM_CODEX:-0}" = "1" ]; then
+    python3 - "$VERDICT_FILE" "$SINCE_SHA" "$HEAD_SHA" "$GENERATED_AT" "$REVIEW_MODE" "$CODEX_VERSION" "$CODEX_CMD_RECORD" <<'PYEOF'
 import json, sys
 
 vfile = sys.argv[1]
@@ -523,6 +661,7 @@ v["meta"] = {
 with open(vfile, "w") as f:
     json.dump(v, f, indent=2)
 PYEOF
+  fi
 fi
 
 # --- validate complete verdict (with meta) ---
