@@ -242,7 +242,7 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     description:
       "Playwright discovery of Kajabi admin: verify login, capture products/offers. Writes discover.json, screenshot.png, page.html.",
     remoteCommand:
-      "cd /opt/ai-ops-runner && python3 ./ops/scripts/kajabi_discover.py",
+      "cd /opt/ai-ops-runner && /opt/ai-ops-runner/.venv-hostd/bin/python ./ops/scripts/kajabi_discover.py",
     timeoutSec: 180,
   },
   soma_zane_finish_plan: {
