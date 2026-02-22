@@ -37,7 +37,7 @@ def test_zane_finish_plan_produces_artifacts():
     (run_dir / "video_manifest.csv").write_text("email_id,subject,file_name,sha256,rough_topic,proposed_module,proposed_lesson_title,proposed_description,status\n")
 
     try:
-        env = {**os.environ, "OPENCLAW_REPO_ROOT": str(root)}
+        env = {**os.environ, "OPENCLAW_REPO_ROOT": str(root), "RUN_ID": "phase0_20260222T120000Z_test1234"}
         r = subprocess.run(
             ["python3", "-m", "services.soma_kajabi.zane_finish_plan"],
             cwd=root,
@@ -78,6 +78,58 @@ def test_zane_finish_plan_produces_artifacts():
         punchlist_csv = list(csv.DictReader((latest / "PUNCHLIST.csv").open(encoding="utf-8")))
         blocked = [r for r in punchlist_csv if r.get("blocked", "").lower() == "true"]
         assert len(blocked) >= 1, "Expected at least one BLOCKED item when Gmail skipped"
+    finally:
+        if run_dir.exists():
+            for f in run_dir.iterdir():
+                f.unlink()
+            run_dir.rmdir()
+
+
+def test_zane_finish_plan_blocks_a1_a2_a3_when_snapshot_empty():
+    """When Phase0 snapshot is empty (all modules+lessons zero), A1/A2/A3 must be BLOCKED."""
+    import uuid
+
+    root = _repo_root()
+    run_id = f"phase0_20260222T130000Z_empty_{uuid.uuid4().hex[:8]}"
+    phase0_base = root / "artifacts" / "soma_kajabi" / "phase0"
+    phase0_base.mkdir(parents=True, exist_ok=True)
+    run_dir = phase0_base / run_id
+    run_dir.mkdir(parents=True)
+
+    # Empty snapshot: all modules and lessons empty
+    snapshot = {
+        "captured_at": "2026-02-22T13:00:00Z",
+        "run_id": run_id,
+        "mode": "storage_state",
+        "home": {"modules": [], "lessons": []},
+        "practitioner": {"modules": [], "lessons": []},
+    }
+    (run_dir / "kajabi_library_snapshot.json").write_text(json.dumps(snapshot, indent=2))
+    (run_dir / "gmail_harvest.jsonl").write_text(json.dumps({"gmail_status": "skipped"}) + "\n")
+    (run_dir / "video_manifest.csv").write_text("email_id,subject,file_name,sha256,rough_topic,proposed_module,proposed_lesson_title,proposed_description,status\n")
+
+    try:
+        env = {**os.environ, "OPENCLAW_REPO_ROOT": str(root), "RUN_ID": run_id}
+        r = subprocess.run(
+            ["python3", "-m", "services.soma_kajabi.zane_finish_plan"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+        assert r.returncode == 0, f"stdout={r.stdout} stderr={r.stderr}"
+
+        zane_base = root / "artifacts" / "soma_kajabi" / "zane_finish_plan"
+        run_dirs = [d for d in zane_base.iterdir() if d.is_dir()]
+        assert run_dirs
+        latest = max(run_dirs, key=lambda d: d.name)
+        punchlist_csv = list(csv.DictReader((latest / "PUNCHLIST.csv").open(encoding="utf-8")))
+        a_items = [r for r in punchlist_csv if r.get("id", "").startswith("A")]
+        a1_a2_a3 = [r for r in a_items if r.get("id") in ("A1", "A2", "A3")]
+        for row in a1_a2_a3:
+            assert row.get("blocked", "").lower() == "true", f"Expected A1/A2/A3 blocked when snapshot empty: {row}"
+            assert "soma_kajabi_discover" in (row.get("blocked_reason") or "")
     finally:
         if run_dir.exists():
             for f in run_dir.iterdir():

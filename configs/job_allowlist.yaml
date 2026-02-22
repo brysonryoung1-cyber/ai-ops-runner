@@ -59,6 +59,10 @@ jobs:
     argv: ["bash", "./ops/soma_smoke.sh"]
     timeout_sec: 120
 
+  soma_kajabi_discover:
+    argv: ["python3", "./ops/scripts/kajabi_discover.py"]
+    timeout_sec: 180
+
   # Offline canary: Karpathy microgpt (fetch pinned + SHA256, patch, run). No LLM providers.
   llm.microgpt.canary:
     argv: ["bash", "./ops/scripts/microgpt_canary.sh"]
