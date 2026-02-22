@@ -14,6 +14,7 @@ REPO_ROOT_ENV = "OPENCLAW_REPO_ROOT"
 SECRETS_BASE = Path("/etc/ai-ops-runner/secrets")
 SOMA_KAJABI_SECRETS = SECRETS_BASE / "soma_kajabi"
 KAJABI_STORAGE_STATE_PATH = SOMA_KAJABI_SECRETS / "kajabi_storage_state.json"
+KAJABI_PRODUCTS_PATH = SOMA_KAJABI_SECRETS / "kajabi_products.json"
 GMAIL_OAUTH_PATH = SOMA_KAJABI_SECRETS / "gmail_oauth.json"
 GMAIL_STATE_PATH = SOMA_KAJABI_SECRETS / "gmail_state.json"
 

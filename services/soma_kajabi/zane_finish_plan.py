@@ -128,8 +128,21 @@ def _gmail_skipped(phase0_dir: Path) -> bool:
         return False
 
 
+def _latest_discover_artifact_dir(root: Path) -> str | None:
+    """Return path to latest discover run's artifact dir, or None."""
+    base = root / "artifacts" / "soma_kajabi" / "discover"
+    if not base.exists():
+        return None
+    dirs = [d for d in base.iterdir() if d.is_dir()]
+    if not dirs:
+        return None
+    latest = max(dirs, key=lambda d: d.name)
+    return str(latest)
+
+
 def _build_punchlist(
-    snapshot: dict, manifest: list[dict], gmail_skipped: bool, snapshot_empty: bool = False
+    snapshot: dict, manifest: list[dict], gmail_skipped: bool, snapshot_empty: bool = False,
+    phase0_dir: Path | None = None, root: Path | None = None,
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     home = snapshot.get("home", {})
@@ -139,11 +152,22 @@ def _build_punchlist(
     pract_lessons = pract.get("lessons", [])
 
     # A) Library structure + mirroring completeness — BLOCKED when snapshot empty
-    snapshot_block_reason = (
-        "Kajabi snapshot empty; run soma_kajabi_discover and fix product mapping/session"
-        if snapshot_empty
-        else None
-    )
+    snapshot_block_reason = None
+    if snapshot_empty:
+        error_class = "KAJABI_SNAPSHOT_EMPTY"
+        discover_dir = None
+        if phase0_dir and (phase0_dir / "result.json").exists():
+            try:
+                res = json.loads((phase0_dir / "result.json").read_text())
+                error_class = res.get("error_class", error_class)
+            except Exception:
+                pass
+        if root:
+            discover_dir = _latest_discover_artifact_dir(root)
+        parts = [f"Kajabi snapshot empty. Run soma_kajabi_discover to refresh product mapping (error_class={error_class})"]
+        if discover_dir:
+            parts.append(f"discover artifact dir: {discover_dir}")
+        snapshot_block_reason = "; ".join(parts)
     items.append({
         "id": "A1",
         "category": "A",
@@ -314,7 +338,7 @@ def main() -> int:
     out_dir = root / ARTIFACTS_ROOT / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    items = _build_punchlist(snapshot, manifest, gmail_skipped, snapshot_empty)
+    items = _build_punchlist(snapshot, manifest, gmail_skipped, snapshot_empty, phase0_dir=phase0_dir, root=root)
     next_10 = _next_10_actions(items)
 
     # PUNCHLIST.csv

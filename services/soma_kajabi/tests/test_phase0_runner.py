@@ -10,6 +10,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 
 def _repo_root() -> Path:
@@ -184,5 +185,46 @@ def test_phase0_returns_empty_snapshot_when_snapshot_empty():
                 ok, rec, err_class = _run_kajabi_snapshot(tmp_path, out_dir, run_id, cfg)
         assert ok is False
         assert err_class == "KAJABI_SNAPSHOT_EMPTY"
-        assert "soma_kajabi_snapshot_debug" in (rec or "") or "screenshot" in (rec or "")
+        assert "soma_kajabi_snapshot_debug" in (rec or "") or "screenshot" in (rec or "") or "discover" in (rec or "")
         assert (out_dir / "kajabi_capture_debug.json").exists()
+
+
+def test_phase0_retries_after_discover_on_product_not_found():
+    """When snapshot raises KAJABI_PRODUCT_NOT_FOUND, discover runs and retry is attempted."""
+    from services.soma_kajabi_sync.snapshot import KajabiSnapshotError
+
+    root = _repo_root()
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        out_dir = tmp_path / "artifacts" / "soma_kajabi" / "phase0" / "run1"
+        out_dir.mkdir(parents=True)
+        (tmp_path / "ops" / "scripts").mkdir(parents=True)
+        (tmp_path / "ops" / "scripts" / "kajabi_discover.py").write_text("# discover script")
+
+        call_count = 0
+
+        def _mock_snapshot(_product: str, smoke: bool = False, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise KajabiSnapshotError("KAJABI_PRODUCT_NOT_FOUND", "Product URL 404")
+            art = tmp_path / "soma_art"
+            art.mkdir(parents=True, exist_ok=True)
+            (art / "snapshot.json").write_text(json.dumps({
+                "categories": [{"name": "Mod1", "items": [{"title": "L1", "published": True}]}],
+            }))
+            return {"artifacts_dir": str(art)}
+
+        with patch("services.soma_kajabi.phase0_runner._run_discover", return_value=True):
+            with patch("services.soma_kajabi_sync.snapshot.snapshot_kajabi", side_effect=_mock_snapshot):
+                with patch("services.soma_kajabi_sync.config.load_secret", return_value="fake_token"):
+                    from services.soma_kajabi.phase0_runner import _run_kajabi_snapshot
+
+                    cfg = {
+                        "kajabi": {"mode": "session_token"},
+                        "gmail": {},
+                        "artifacts": {},
+                    }
+                    ok, rec, err_class = _run_kajabi_snapshot(tmp_path, out_dir, "run1", cfg)
+        assert ok is True
+        assert call_count >= 2  # First failed (Home), discover ran, retry succeeded (Home + Practitioner)

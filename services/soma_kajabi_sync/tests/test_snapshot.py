@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -71,3 +72,36 @@ def test_snapshot_smoke_writes_artifacts():
     data = json.loads((artifacts_dir / "snapshot.json").read_text())
     assert data["product"] == "Home User Library"
     assert "categories" in data
+
+
+def test_load_kajabi_products_uses_discovered():
+    """When kajabi_products.json exists, load_kajabi_products returns discovered mapping."""
+    from unittest.mock import patch
+
+    from soma_kajabi_sync.config import load_kajabi_products
+
+    with tempfile.TemporaryDirectory() as tmp:
+        products_path = Path(tmp) / "kajabi_products.json"
+        products_path.write_text(json.dumps({
+            "products": {
+                "Home User Library": "discovered-home-slug",
+                "Practitioner Library": "discovered-practitioner-slug",
+            },
+            "captured_at": "2025-01-01T00:00:00Z",
+        }))
+        with patch("soma_kajabi_sync.config.KAJABI_PRODUCTS_PATH", products_path):
+            result = load_kajabi_products()
+        assert result["Home User Library"] == "discovered-home-slug"
+        assert result["Practitioner Library"] == "discovered-practitioner-slug"
+
+
+def test_load_kajabi_products_fallback_when_missing():
+    """When kajabi_products.json missing, load_kajabi_products falls back to KAJABI_PRODUCTS."""
+    from soma_kajabi_sync.config import KAJABI_PRODUCTS, load_kajabi_products
+
+    with tempfile.TemporaryDirectory() as tmp:
+        missing = Path(tmp) / "nonexistent.json"
+        assert not missing.exists()
+        with patch("soma_kajabi_sync.config.KAJABI_PRODUCTS_PATH", missing):
+            result = load_kajabi_products()
+        assert result == KAJABI_PRODUCTS

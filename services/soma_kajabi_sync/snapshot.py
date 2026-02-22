@@ -225,23 +225,38 @@ def _fetch_kajabi_structure_playwright(
                 ])
 
         page = context.new_page()
-        url = f"https://app.kajabi.com/admin/products/{product_slug}"
+        # product_slug may be full URL (from discover) or slug
+        if product_slug.startswith("http"):
+            url = product_slug
+        else:
+            url = f"https://app.kajabi.com/admin/products/{product_slug}"
         debug_data["target_url"] = url
 
+        resp = None
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            resp = page.goto(url, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_load_state("networkidle", timeout=15000)
         except Exception as e:
             debug_data["exceptions"].append(f"navigation: {str(e)[:200]}")
             debug_data["timings"]["navigation_ms"] = int((time.monotonic() - t0) * 1000)
             if debug_artifact_dir:
-                _write_playwright_debug_artifacts(page, debug_artifact_dir, product_slug, debug_data)
+                _write_playwright_debug_artifacts(page, debug_artifact_dir, product_slug[:50], debug_data)
             browser.close()
             raise
 
         debug_data["timings"]["navigation_ms"] = int((time.monotonic() - t0) * 1000)
         debug_data["final_url"] = page.url
         debug_data["page_title"] = page.title() or ""
+
+        # Detect 404
+        if resp and resp.status == 404:
+            if debug_artifact_dir:
+                _write_playwright_debug_artifacts(page, debug_artifact_dir, (product_slug or "unknown").replace("/", "_")[:50], debug_data)
+            browser.close()
+            raise KajabiSnapshotError(
+                "KAJABI_PRODUCT_NOT_FOUND",
+                f"Product URL returned 404. Run soma_kajabi_discover to refresh product mapping.",
+            )
 
         # Detect login redirect
         if "sign_in" in page.url or "login" in page.url.lower():
@@ -329,19 +344,21 @@ def snapshot_kajabi(
     from .config import (
         KAJABI_PRODUCTS,
         get_artifacts_dir,
+        load_kajabi_products,
         load_secret,
         mask_secret,
     )
 
-    if product_name not in KAJABI_PRODUCTS:
+    products_map = load_kajabi_products()
+    if product_name not in products_map and product_name not in KAJABI_PRODUCTS:
         print(
             f"ERROR: Unknown product '{product_name}'. "
-            f"Known products: {', '.join(KAJABI_PRODUCTS.keys())}",
+            f"Known products: {', '.join(set(KAJABI_PRODUCTS.keys()) | set(products_map.keys()))}",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    product_slug = KAJABI_PRODUCTS[product_name]
+    product_slug = products_map.get(product_name) or KAJABI_PRODUCTS.get(product_name, "")
     run_id = _generate_run_id()
     out_dir = get_artifacts_dir(run_id)
 

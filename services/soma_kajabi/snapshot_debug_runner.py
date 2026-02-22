@@ -105,6 +105,7 @@ def main() -> int:
         print(json.dumps({"ok": False, "error_class": "KAJABI_STORAGE_STATE_INVALID", "artifact_dir": str(out_dir)}))
         return 1
 
+    why = "ok"
     try:
         home_result = snapshot_kajabi(
             "Home User Library",
@@ -119,15 +120,22 @@ def main() -> int:
             debug_artifact_dir=out_dir,
         )
     except KajabiSnapshotError as e:
+        why = (
+            "404_detected" if e.error_class == "KAJABI_PRODUCT_NOT_FOUND" else
+            "login_detected" if e.error_class == "KAJABI_NOT_LOGGED_IN" else
+            "selector_miss_detected" if e.error_class == "KAJABI_SNAPSHOT_EMPTY" else
+            "error_detected"
+        )
         doc = {
             "ok": False,
             "run_id": run_id,
             "artifact_dir": str(out_dir),
             "error_class": e.error_class,
+            "why": why,
             "recommended_next_action": e.message,
         }
         (out_dir / "result.json").write_text(json.dumps(doc, indent=2))
-        print(json.dumps({"ok": False, "error_class": e.error_class, "artifact_dir": str(out_dir)}))
+        print(json.dumps({"ok": False, "error_class": e.error_class, "why": why, "artifact_dir": str(out_dir)}))
         return 1
 
     home_cats = []
@@ -151,6 +159,7 @@ def main() -> int:
         "run_id": run_id,
         "artifact_dir": str(out_dir),
         "captured_at": _now_iso(),
+        "why": "ok",
         "home": {"categories": len(home_cats), "items": home_items},
         "practitioner": {"categories": len(pract_cats), "items": pract_items},
         "artifacts": [p.name for p in out_dir.iterdir() if p.is_file()],

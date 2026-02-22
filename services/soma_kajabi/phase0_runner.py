@@ -207,8 +207,28 @@ def _session_token_from_storage_state(path: Path) -> str | None:
     return None
 
 
+def _run_discover(root: Path) -> bool:
+    """Run soma_kajabi_discover to refresh kajabi_products.json. Returns True if ok."""
+    import subprocess
+    script = root / "ops" / "scripts" / "kajabi_discover.py"
+    if not script.exists():
+        return False
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            cwd=str(root),
+            capture_output=True,
+            timeout=180,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def _run_kajabi_snapshot(root: Path, out_dir: Path, run_id: str, cfg: dict) -> tuple[bool, str | None, str | None]:
-    """Capture Kajabi structure. Returns (ok, recommended_next_action, error_class)."""
+    """Capture Kajabi structure. Returns (ok, recommended_next_action, error_class).
+    On KAJABI_PRODUCT_NOT_FOUND or zero counts, runs discover and retries once.
+    """
     import os
     kajabi_cfg = cfg.get("kajabi") or {}
     mode = kajabi_cfg.get("mode", cfg.get("kajabi_capture_mode", "manual"))
@@ -249,7 +269,7 @@ def _run_kajabi_snapshot(root: Path, out_dir: Path, run_id: str, cfg: dict) -> t
         _write_kajabi_snapshot_fail_closed(out_dir, run_id, mode)
         return False, "KAJABI_SESSION_TOKEN not configured; store in env or use storage_state at /etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json", "CONNECTOR_NOT_CONFIGURED"
 
-    try:
+    def _do_snapshot():
         home_result = snapshot_kajabi(
             "Home User Library",
             smoke=False,
@@ -262,24 +282,41 @@ def _run_kajabi_snapshot(root: Path, out_dir: Path, run_id: str, cfg: dict) -> t
             storage_state_path=storage_state_path,
             debug_artifact_dir=out_dir,
         )
-    except KajabiSnapshotError as e:
-        _write_kajabi_snapshot_fail_closed(out_dir, run_id, mode)
-        rec = f"Kajabi capture failed ({e.error_class}): {e.message}"
-        return False, rec, e.error_class
-    except SystemExit:
-        _write_kajabi_snapshot_fail_closed(out_dir, run_id, mode)
-        return False, "Kajabi capture failed; check session token and network", "CONNECTOR_NOT_CONFIGURED"
+        home_cats = []
+        pract_cats = []
+        if isinstance(home_result, dict) and home_result.get("artifacts_dir"):
+            snap_path = Path(home_result["artifacts_dir"]) / "snapshot.json"
+            if snap_path.exists():
+                home_cats = json.loads(snap_path.read_text()).get("categories", [])
+        if isinstance(pract_result, dict) and pract_result.get("artifacts_dir"):
+            snap_path = Path(pract_result["artifacts_dir"]) / "snapshot.json"
+            if snap_path.exists():
+                pract_cats = json.loads(snap_path.read_text()).get("categories", [])
+        return home_cats, pract_cats
 
-    home_cats = []
-    pract_cats = []
-    if isinstance(home_result, dict) and home_result.get("artifacts_dir"):
-        snap_path = Path(home_result["artifacts_dir"]) / "snapshot.json"
-        if snap_path.exists():
-            home_cats = json.loads(snap_path.read_text()).get("categories", [])
-    if isinstance(pract_result, dict) and pract_result.get("artifacts_dir"):
-        snap_path = Path(pract_result["artifacts_dir"]) / "snapshot.json"
-        if snap_path.exists():
-            pract_cats = json.loads(snap_path.read_text()).get("categories", [])
+    last_error: KajabiSnapshotError | None = None
+    home_cats: list = []
+    pract_cats: list = []
+    for attempt in range(2):
+        try:
+            home_cats, pract_cats = _do_snapshot()
+            last_error = None
+            break
+        except KajabiSnapshotError as e:
+            last_error = e
+            if e.error_class in ("KAJABI_PRODUCT_NOT_FOUND", "KAJABI_PRODUCTS_DISCOVER_REQUIRED") and attempt == 0:
+                if _run_discover(root):
+                    continue
+            _write_kajabi_snapshot_fail_closed(out_dir, run_id, mode)
+            return False, f"Kajabi capture failed ({e.error_class}): {e.message}", e.error_class
+        except SystemExit:
+            _write_kajabi_snapshot_fail_closed(out_dir, run_id, mode)
+            return False, "Kajabi capture failed; check session token and network", "CONNECTOR_NOT_CONFIGURED"
+
+    if last_error:
+        _write_kajabi_snapshot_fail_closed(out_dir, run_id, mode)
+        return False, f"Kajabi capture failed ({last_error.error_class}): {last_error.message}", last_error.error_class
+
     home_lessons = _transform_categories_to_lessons(home_cats)
     pract_lessons = _transform_categories_to_lessons(pract_cats)
 
@@ -296,6 +333,25 @@ def _run_kajabi_snapshot(root: Path, out_dir: Path, run_id: str, cfg: dict) -> t
     snap_path = out_dir / "kajabi_library_snapshot.json"
 
     if total == 0 or (snap_path.exists() and snap_path.stat().st_size < 2048):
+        # Retry with discover if not yet attempted
+        if _run_discover(root):
+            try:
+                home_cats, pract_cats = _do_snapshot()
+                home_lessons = _transform_categories_to_lessons(home_cats)
+                pract_lessons = _transform_categories_to_lessons(pract_cats)
+                home_data = {"modules": [c.get("name", "") for c in home_cats], "lessons": home_lessons}
+                pract_data = {"modules": [c.get("name", "") for c in pract_cats], "lessons": pract_lessons}
+                _write_kajabi_snapshot_success(out_dir, run_id, mode, home_data, pract_data)
+                home_mods = len(home_data.get("modules", []))
+                home_less = len(home_data.get("lessons", []))
+                pract_mods = len(pract_data.get("modules", []))
+                pract_less = len(pract_data.get("lessons", []))
+                total = home_mods + home_less + pract_mods + pract_less
+                if total > 0:
+                    return True, None, None
+            except (KajabiSnapshotError, SystemExit):
+                pass
+
         debug = {
             "captured_at": _now_iso(),
             "final_url": "unknown",
@@ -309,9 +365,8 @@ def _run_kajabi_snapshot(root: Path, out_dir: Path, run_id: str, cfg: dict) -> t
         }
         (out_dir / "kajabi_capture_debug.json").write_text(json.dumps(debug, indent=2))
         rec = (
-            "Kajabi snapshot empty. Likely causes: wrong Kajabi site/account, expired storage_state, "
-            "selector break (Kajabi UI changed), permission issue, admin URL mismatch. "
-            "Run soma_kajabi_snapshot_debug and inspect artifacts (screenshot, page.html, kajabi_snapshot_debug.json)."
+            "Kajabi snapshot empty. Run soma_kajabi_discover to refresh product mapping; "
+            "or if /admin 404: In Kajabi click profile → Switch Site → select Soma site, then re-capture storage_state."
         )
         return False, rec, "KAJABI_SNAPSHOT_EMPTY"
     return True, None, None
