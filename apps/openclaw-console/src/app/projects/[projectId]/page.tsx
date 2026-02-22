@@ -351,11 +351,19 @@ export default function ProjectDetailsPage() {
             <h3 className="text-lg font-semibold text-white/95 mb-3">Phase 0</h3>
             <ActionButton
               label="Run Phase 0"
-              description="Read-only: Kajabi snapshot + Gmail harvest (Zane McCourtney, has:attachment) + video_manifest.csv"
+              description="Read-only: Kajabi snapshot + Gmail harvest (Zane McCourtney, has:attachment) + video_manifest.csv. Gmail optional (Kajabi-only mode)."
               variant="primary"
               loading={execLoading === "soma_kajabi_phase0"}
               disabled={execLoading !== null && execLoading !== "soma_kajabi_phase0"}
               onClick={() => handleExec("soma_kajabi_phase0")}
+            />
+            <ActionButton
+              label="Zane Finish Plan"
+              description="Read-only punchlist from Phase0: PUNCHLIST.md, PUNCHLIST.csv, SUMMARY.json"
+              variant="secondary"
+              loading={execLoading === "soma_zane_finish_plan"}
+              disabled={execLoading !== null && execLoading !== "soma_zane_finish_plan"}
+              onClick={() => handleExec("soma_zane_finish_plan")}
             />
           </div>
         </>

@@ -57,6 +57,8 @@ def _write_result(
     artifact_paths: list[str],
     error_class: str | None = None,
     recommended_next_action: str | None = None,
+    gmail_status: str | None = None,
+    gmail_reason: str | None = None,
 ) -> None:
     doc: dict[str, Any] = {
         "ok": ok,
@@ -68,6 +70,10 @@ def _write_result(
         doc["error_class"] = error_class
     if recommended_next_action:
         doc["recommended_next_action"] = recommended_next_action
+    if gmail_status is not None:
+        doc["gmail_status"] = gmail_status
+    if gmail_reason is not None:
+        doc["gmail_reason"] = gmail_reason
     (out_dir / "result.json").write_text(json.dumps(doc, indent=2))
 
 
@@ -263,6 +269,17 @@ def _write_gmail_harvest_fail_closed(out_dir: Path, error_class: str, recommende
     line = json.dumps({
         "error_class": error_class,
         "recommended_next_action": recommended_next_action,
+    }) + "\n"
+    path = out_dir / "gmail_harvest.jsonl"
+    path.write_text(line)
+    return path
+
+
+def _write_gmail_harvest_skipped(out_dir: Path, reason: str) -> Path:
+    """Write single JSONL metadata line when Gmail is intentionally skipped (Kajabi-only mode)."""
+    line = json.dumps({
+        "gmail_status": "skipped",
+        "gmail_reason": reason,
     }) + "\n"
     path = out_dir / "gmail_harvest.jsonl"
     path.write_text(line)
@@ -565,16 +582,12 @@ def main() -> int:
         }))
         return 1
 
-    # Connector readiness: fail-closed with CONNECTOR_NOT_CONFIGURED when not ready
+    # Connector readiness: fail-closed ONLY when Kajabi is not ready.
+    # Gmail is optional: when missing, Phase0 succeeds with gmail_status=skipped (Kajabi-only mode).
     kajabi_ready, kajabi_reason = is_kajabi_ready(cfg)
     gmail_ready, gmail_reason = is_gmail_ready(cfg)
-    if not kajabi_ready or not gmail_ready:
-        rec_parts = []
-        if not kajabi_ready:
-            rec_parts.append(f"Kajabi: {kajabi_reason}")
-        if not gmail_ready:
-            rec_parts.append(f"Gmail: {gmail_reason}")
-        rec = "; ".join(rec_parts)
+    if not kajabi_ready:
+        rec = f"Kajabi: {kajabi_reason}"
         _write_gmail_harvest_fail_closed(out_dir, "CONNECTOR_NOT_CONFIGURED", rec)
         _write_kajabi_snapshot_fail_closed(out_dir, run_id, cfg.get("kajabi", {}).get("mode", "manual"))
         _write_video_manifest(out_dir, [])
@@ -607,8 +620,20 @@ def main() -> int:
     # Snapshot
     kajabi_ok, kajabi_next = _run_kajabi_snapshot(root, out_dir, run_id, cfg)
 
-    # Harvest
-    emails, harvest_ok, harvest_next = _run_gmail_harvest(root, out_dir, cfg)
+    # Harvest: run Gmail when ready; otherwise skip (Kajabi-only mode)
+    gmail_status_val: str | None = None
+    gmail_reason_val: str | None = None
+    if gmail_ready:
+        emails, harvest_ok, harvest_next = _run_gmail_harvest(root, out_dir, cfg)
+    else:
+        from .connector_config import GMAIL_OAUTH_PATH
+        oauth_path = cfg.get("gmail", {}).get("auth_secret_ref") or str(GMAIL_OAUTH_PATH)
+        _write_gmail_harvest_skipped(out_dir, f"oauth token not found at {oauth_path}")
+        emails = []
+        harvest_ok = True  # Skipped is not a failure for overall Phase0
+        harvest_next = None
+        gmail_status_val = "skipped"
+        gmail_reason_val = f"oauth token not found at {oauth_path}"
 
     # Manifest
     manifest_rows = _derive_manifest_from_emails(emails)
@@ -624,6 +649,8 @@ def main() -> int:
         artifact_paths=artifact_paths,
         error_class=None if ok else "CONNECTOR_NOT_CONFIGURED",
         recommended_next_action=rec,
+        gmail_status=gmail_status_val,
+        gmail_reason=gmail_reason_val,
     )
 
     # Baseline counts for BASELINE_OK.json
@@ -649,13 +676,18 @@ def main() -> int:
     if ok:
         _update_project_state_baseline(root, run_id, artifact_dir)
 
-    print(json.dumps({
+    out_doc: dict[str, Any] = {
         "ok": ok,
         "run_id": run_id,
         "artifact_paths": artifact_paths,
         "error_class": None if ok else "CONNECTOR_NOT_CONFIGURED",
         "recommended_next_action": rec,
-    }))
+    }
+    if gmail_status_val is not None:
+        out_doc["gmail_status"] = gmail_status_val
+    if gmail_reason_val is not None:
+        out_doc["gmail_reason"] = gmail_reason_val
+    print(json.dumps(out_doc))
     return 0 if ok else 1
 
 

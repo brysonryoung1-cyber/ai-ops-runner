@@ -147,18 +147,24 @@ echo ""
 echo "=== STEP 6 — Trigger ONE Apply from HQ (no-click) ==="
 APPLY_EXIT=0
 APPLY_OUTPUT=""
+APPLY_SCRIPT="$OPS_DIR/vps_apply_aiops1.sh"
 if [ "$DELIV_HOST_EXECUTOR_REACHABLE" = "true" ]; then
-  APPLY_OUTPUT="$(OPENCLAW_HQ_BASE="$BASE" ./ops/hq_apply.sh apply 2>&1)" || APPLY_EXIT=$?
+  if [ ! -x "$APPLY_SCRIPT" ]; then
+    echo "ERROR: Apply script missing or not executable: $APPLY_SCRIPT (fail-closed)" >&2
+    exit 1
+  fi
+  APPLY_OUTPUT="$(OPENCLAW_HQ_BASE="$BASE" "$APPLY_SCRIPT" 2>&1)" || APPLY_EXIT=$?
   echo "$APPLY_OUTPUT"
+  DELIV_APPLY_EXIT_CODE="$APPLY_EXIT"
   DELIV_APPLY_RUN_ID="$(echo "$APPLY_OUTPUT" | sed -n 's/run_id: *//p' | head -1)"
   DELIV_APPLY_STATUS="$(echo "$APPLY_OUTPUT" | sed -n 's/status: *//p' | head -1)"
-  DELIV_APPLY_EXIT_CODE="$(echo "$APPLY_OUTPUT" | sed -n 's/exit_code: *//p' | head -1)"
+  [ -z "$DELIV_APPLY_STATUS" ] && DELIV_APPLY_STATUS="vps_apply_exit_${APPLY_EXIT}"
   DELIV_APPLY_ERROR_SUMMARY="$(echo "$APPLY_OUTPUT" | sed -n 's/error_summary: *//p' | head -1)"
   DELIV_APPLY_ARTIFACT_LINK="$(echo "$APPLY_OUTPUT" | sed -n 's/artifacts_link: *//p' | head -1)"
-  if [ -n "$DELIV_APPLY_RUN_ID" ]; then
+  if [ -n "$DELIV_APPLY_RUN_ID" ] && [ "$DELIV_APPLY_RUN_ID" != "—" ]; then
     curl -sS "$BASE/api/runs?id=$DELIV_APPLY_RUN_ID" | jq . 2>/dev/null || true
   fi
-  if [ "$APPLY_EXIT" -ne 0 ] && [ -n "$DELIV_APPLY_ARTIFACT_LINK" ]; then
+  if [ "$APPLY_EXIT" -ne 0 ] && [ -n "$DELIV_APPLY_ARTIFACT_LINK" ] && [ "$DELIV_APPLY_ARTIFACT_LINK" != "—" ]; then
     ARTIFACT_DIR="$(echo "$APPLY_OUTPUT" | sed -n 's/artifact_dir: *//p' | head -1)"
     if [ -n "$ARTIFACT_DIR" ]; then
       STDR="$(curl -sS "$BASE/api/artifacts/browse?path=${ARTIFACT_DIR}/stderr.txt" 2>/dev/null | jq -r '.content // .error' 2>/dev/null)"

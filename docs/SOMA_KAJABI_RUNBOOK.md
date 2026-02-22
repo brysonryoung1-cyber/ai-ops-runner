@@ -104,7 +104,7 @@ sudo chmod 600 /etc/ai-ops-runner/secrets/sms_allowlist
 echo -n "your-token" | security add-generic-password -a KAJABI_SESSION_TOKEN -s ai-ops-runner -T "" -w
 ```
 
-### Kajabi Session Token Capture
+### Kajabi Session Token Capture (legacy)
 
 The Kajabi session token must be captured from a browser session:
 
@@ -115,7 +115,25 @@ The Kajabi session token must be captured from a browser session:
 
 **Important:** Session tokens expire. When operations fail with "session expired", re-capture the token.
 
-### Gmail App Password
+### Kajabi storage_state (Playwright, preferred for Phase 0)
+
+- **Path**: `/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json` (mode 600, root:root). No contents in logs.
+- **Capture**: On aiops-1 run `python3 ops/scripts/kajabi_capture_storage_state.py` (headed). Sign in at https://app.kajabi.com and land on the dashboard; script saves to `/tmp/kajabi_storage_state.json`. Then install: `sudo cp /tmp/kajabi_storage_state.json /etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json && sudo chmod 600 ...`
+- **Full unblock**: `./ops/csr_soma_unblock.sh` (run on aiops-1) runs Phase 0 prep, Kajabi capture + Gmail device flow, connectors check, Phase 0, Zane punch list, re-enables autopilot. Pauses only for human: Kajabi login, Gmail client upload, device approval.
+
+### Phase 0: Kajabi-only mode (Gmail optional)
+
+Phase 0 succeeds with **Kajabi-only** when Gmail OAuth is not configured. Missing `/etc/ai-ops-runner/secrets/soma_kajabi/gmail_oauth.json` no longer causes `CONNECTOR_NOT_CONFIGURED` or non-zero exit. When Gmail is skipped:
+- `result.json` includes `gmail_status: "skipped"` and `gmail_reason: "oauth token not found at ..."`
+- `gmail_harvest.jsonl` is written as a single metadata line so downstream consumers can rely on file existence
+- `video_manifest.csv` is empty; Zane finish plan marks Gmail-dependent items as BLOCKED
+
+### Gmail OAuth (Phase 0 / Soma)
+
+- **Client JSON**: Upload `gmail_client.json` (Google OAuth Desktop or Limited Input Device app) via **HQ → Settings → Connectors → Gmail OAuth**. Stored on-box at `/etc/ai-ops-runner/secrets/soma_kajabi/gmail_client.json` (path only; no contents in logs).
+- **Token**: After device flow (Start → user approves at verification URL → Finalize), refresh token is written to `/etc/ai-ops-runner/secrets/soma_kajabi/gmail_oauth.json`. Do not print or log file contents.
+
+### Gmail App Password (IMAP fallback)
 
 1. Go to Google Account → Security → 2-Step Verification → App passwords
 2. Generate a new app password for "Mail"
@@ -221,6 +239,14 @@ python3 -m pytest tests/ -v
 ```bash
 ./ops/soma_smoke.sh
 ```
+
+### Stability verification (aiops-1)
+
+```bash
+./ops/stability_verify_aiops1.sh
+```
+
+Runs on aiops-1 to confirm guard timer produces PASS and litellm-proxy stays healthy for ~3 minutes. Exit 0 = STABLE, 1 = UNSTABLE.
 
 ### Selftests
 
