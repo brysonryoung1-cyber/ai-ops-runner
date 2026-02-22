@@ -207,14 +207,14 @@ def _session_token_from_storage_state(path: Path) -> str | None:
     return None
 
 
-def _run_kajabi_snapshot(root: Path, out_dir: Path, run_id: str, cfg: dict) -> tuple[bool, str | None]:
-    """Capture Kajabi structure. Returns (ok, recommended_next_action)."""
+def _run_kajabi_snapshot(root: Path, out_dir: Path, run_id: str, cfg: dict) -> tuple[bool, str | None, str | None]:
+    """Capture Kajabi structure. Returns (ok, recommended_next_action, error_class)."""
     import os
     kajabi_cfg = cfg.get("kajabi") or {}
     mode = kajabi_cfg.get("mode", cfg.get("kajabi_capture_mode", "manual"))
     if mode == "manual":
         _write_kajabi_snapshot_fail_closed(out_dir, run_id, mode)
-        return False, "Switch to playwright mode and provide credential reference in config/projects/soma_kajabi.json"
+        return False, "Switch to playwright mode and provide credential reference in config/projects/soma_kajabi.json", "CONNECTOR_NOT_CONFIGURED"
 
     # Try playwright or API via soma_kajabi_sync
     try:
@@ -222,7 +222,7 @@ def _run_kajabi_snapshot(root: Path, out_dir: Path, run_id: str, cfg: dict) -> t
         from services.soma_kajabi_sync.snapshot import snapshot_kajabi
     except ImportError:
         _write_kajabi_snapshot_fail_closed(out_dir, run_id, mode)
-        return False, "soma_kajabi_sync not available; ensure services.soma_kajabi_sync is importable"
+        return False, "soma_kajabi_sync not available; ensure services.soma_kajabi_sync is importable", "CONNECTOR_NOT_CONFIGURED"
 
     token: str | None = None
     if mode == "storage_state":
@@ -236,14 +236,14 @@ def _run_kajabi_snapshot(root: Path, out_dir: Path, run_id: str, cfg: dict) -> t
         token = load_secret("KAJABI_SESSION_TOKEN", required=False)
     if not token:
         _write_kajabi_snapshot_fail_closed(out_dir, run_id, mode)
-        return False, "KAJABI_SESSION_TOKEN not configured; store in env or /etc/ai-ops-runner/secrets/kajabi_session_token"
+        return False, "KAJABI_SESSION_TOKEN not configured; store in env or /etc/ai-ops-runner/secrets/kajabi_session_token", "CONNECTOR_NOT_CONFIGURED"
 
     try:
         home_result = snapshot_kajabi("Home User Library", smoke=False)
         pract_result = snapshot_kajabi("Practitioner Library", smoke=False)
     except SystemExit:
         _write_kajabi_snapshot_fail_closed(out_dir, run_id, mode)
-        return False, "Kajabi capture failed; check session token and network"
+        return False, "Kajabi capture failed; check session token and network", "CONNECTOR_NOT_CONFIGURED"
 
     home_cats = []
     pract_cats = []
@@ -261,7 +261,33 @@ def _run_kajabi_snapshot(root: Path, out_dir: Path, run_id: str, cfg: dict) -> t
     home_data = {"modules": [c.get("name", "") for c in home_cats], "lessons": home_lessons}
     pract_data = {"modules": [c.get("name", "") for c in pract_cats], "lessons": pract_lessons}
     _write_kajabi_snapshot_success(out_dir, run_id, mode, home_data, pract_data)
-    return True, None
+    # Fail-closed: reject empty "success" snapshots
+    total = (
+        len(home_data.get("modules", []))
+        + len(home_data.get("lessons", []))
+        + len(pract_data.get("modules", []))
+        + len(pract_data.get("lessons", []))
+    )
+    snap_path = out_dir / "kajabi_library_snapshot.json"
+    if total == 0 or (snap_path.exists() and snap_path.stat().st_size < 2048):
+        debug = {
+            "captured_at": _now_iso(),
+            "final_url": "unknown",
+            "title": "unknown",
+            "method": mode,
+            "home_modules": len(home_data.get("modules", [])),
+            "home_lessons": len(home_data.get("lessons", [])),
+            "practitioner_modules": len(pract_data.get("modules", [])),
+            "practitioner_lessons": len(pract_data.get("lessons", [])),
+            "snapshot_bytes": snap_path.stat().st_size if snap_path.exists() else 0,
+        }
+        (out_dir / "kajabi_capture_debug.json").write_text(json.dumps(debug, indent=2))
+        rec = (
+            "Kajabi snapshot empty; run soma_kajabi_discover and inspect artifacts "
+            "(final_url, title, screenshot, page.html) to fix product mapping/session"
+        )
+        return False, rec, "EMPTY_SNAPSHOT"
+    return True, None, None
 
 
 def _write_gmail_harvest_fail_closed(out_dir: Path, error_class: str, recommended_next_action: str) -> Path:
@@ -618,7 +644,7 @@ def main() -> int:
     # Future: if action were phase1+, block with PHASE_GATE_BLOCKED
 
     # Snapshot
-    kajabi_ok, kajabi_next = _run_kajabi_snapshot(root, out_dir, run_id, cfg)
+    kajabi_ok, kajabi_next, kajabi_error_class = _run_kajabi_snapshot(root, out_dir, run_id, cfg)
 
     # Harvest: run Gmail when ready; otherwise skip (Kajabi-only mode)
     gmail_status_val: str | None = None
@@ -641,13 +667,18 @@ def main() -> int:
 
     ok = kajabi_ok and harvest_ok
     rec = kajabi_next or harvest_next
+    error_class = None
+    if not ok:
+        error_class = kajabi_error_class if kajabi_error_class else "CONNECTOR_NOT_CONFIGURED"
+        if error_class == "EMPTY_SNAPSHOT" and (out_dir / "kajabi_capture_debug.json").exists():
+            artifact_paths.append(str(ARTIFACTS_ROOT / run_id / "kajabi_capture_debug.json"))
     _write_result(
         out_dir,
         ok=ok,
         action="soma_kajabi_phase0",
         run_id=run_id,
         artifact_paths=artifact_paths,
-        error_class=None if ok else "CONNECTOR_NOT_CONFIGURED",
+        error_class=error_class,
         recommended_next_action=rec,
         gmail_status=gmail_status_val,
         gmail_reason=gmail_reason_val,
@@ -680,7 +711,7 @@ def main() -> int:
         "ok": ok,
         "run_id": run_id,
         "artifact_paths": artifact_paths,
-        "error_class": None if ok else "CONNECTOR_NOT_CONFIGURED",
+        "error_class": error_class,
         "recommended_next_action": rec,
     }
     if gmail_status_val is not None:

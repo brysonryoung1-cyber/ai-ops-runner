@@ -16,6 +16,18 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+def test_allowlist_contains_soma_kajabi_discover():
+    """job_allowlist.yaml must contain soma_kajabi_discover job."""
+    root = _repo_root()
+    import yaml
+    allowlist_path = root / "configs" / "job_allowlist.yaml"
+    assert allowlist_path.exists()
+    data = yaml.safe_load(allowlist_path.read_text())
+    jobs = data.get("jobs", {})
+    assert "soma_kajabi_discover" in jobs
+    assert jobs["soma_kajabi_discover"].get("timeout_sec") == 180
+
+
 def test_soma_kajabi_discoverable_in_projects():
     """soma_kajabi must appear in config/projects.json."""
     root = _repo_root()
@@ -141,3 +153,36 @@ def test_phase0_fails_when_kajabi_storage_state_missing():
     # With default config (kajabi manual or storage_state missing), must fail
     assert parsed.get("error_class") == "CONNECTOR_NOT_CONFIGURED"
     assert parsed.get("ok") is False
+
+
+def test_phase0_returns_empty_snapshot_when_snapshot_empty():
+    """Phase0 returns ok:false, error_class=EMPTY_SNAPSHOT when modules+lessons all zero."""
+    from unittest.mock import patch
+
+    root = _repo_root()
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        out_dir = tmp_path / "artifacts" / "soma_kajabi" / "phase0" / "run1"
+        out_dir.mkdir(parents=True)
+        run_id = "run1"
+
+        def _mock_snapshot(_product: str, smoke: bool = False):
+            art = tmp_path / "soma_art"
+            art.mkdir(parents=True, exist_ok=True)
+            (art / "snapshot.json").write_text(json.dumps({"categories": []}))
+            return {"artifacts_dir": str(art)}
+
+        with patch("services.soma_kajabi_sync.snapshot.snapshot_kajabi", side_effect=_mock_snapshot):
+            with patch("services.soma_kajabi_sync.config.load_secret", return_value="fake_token"):
+                from services.soma_kajabi.phase0_runner import _run_kajabi_snapshot
+
+                cfg = {
+                    "kajabi": {"mode": "session_token"},
+                    "gmail": {},
+                    "artifacts": {},
+                }
+                ok, rec, err_class = _run_kajabi_snapshot(tmp_path, out_dir, run_id, cfg)
+        assert ok is False
+        assert err_class == "EMPTY_SNAPSHOT"
+        assert "soma_kajabi_discover" in (rec or "")
+        assert (out_dir / "kajabi_capture_debug.json").exists()

@@ -29,6 +29,7 @@ export type ActionName =
   | "soma_last_errors"
   | "sms_status"
   | "soma_kajabi_phase0"
+  | "soma_kajabi_discover"
   | "soma_zane_finish_plan"
   | "orb.backtest.bulk"
   | "orb.backtest.confirm_nt8"
@@ -224,6 +225,15 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     remoteCommand:
       "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi.phase0_runner",
     timeoutSec: 300,
+  },
+  soma_kajabi_discover: {
+    name: "soma_kajabi_discover",
+    label: "Kajabi Discover (Soma)",
+    description:
+      "Playwright discovery of Kajabi admin: verify login, capture products/offers. Writes discover.json, screenshot.png, page.html.",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && python3 ./ops/scripts/kajabi_discover.py",
+    timeoutSec: 180,
   },
   soma_zane_finish_plan: {
     name: "soma_zane_finish_plan",

@@ -94,6 +94,26 @@ def _load_video_manifest(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _snapshot_empty(phase0_dir: Path) -> bool:
+    """True if Phase0 snapshot has zero modules+lessons (EMPTY_SNAPSHOT)."""
+    snap_path = phase0_dir / "kajabi_library_snapshot.json"
+    if not snap_path.exists():
+        return True
+    try:
+        data = json.loads(snap_path.read_text())
+        home = data.get("home", {})
+        pract = data.get("practitioner", {})
+        total = (
+            len(home.get("modules", []))
+            + len(home.get("lessons", []))
+            + len(pract.get("modules", []))
+            + len(pract.get("lessons", []))
+        )
+        return total == 0
+    except Exception:
+        return True
+
+
 def _gmail_skipped(phase0_dir: Path) -> bool:
     harvest_path = phase0_dir / "gmail_harvest.jsonl"
     if not harvest_path.exists():
@@ -108,7 +128,9 @@ def _gmail_skipped(phase0_dir: Path) -> bool:
         return False
 
 
-def _build_punchlist(snapshot: dict, manifest: list[dict], gmail_skipped: bool) -> list[dict[str, Any]]:
+def _build_punchlist(
+    snapshot: dict, manifest: list[dict], gmail_skipped: bool, snapshot_empty: bool = False
+) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     home = snapshot.get("home", {})
     pract = snapshot.get("practitioner", {})
@@ -116,7 +138,12 @@ def _build_punchlist(snapshot: dict, manifest: list[dict], gmail_skipped: bool) 
     home_lessons = home.get("lessons", [])
     pract_lessons = pract.get("lessons", [])
 
-    # A) Library structure + mirroring completeness
+    # A) Library structure + mirroring completeness — BLOCKED when snapshot empty
+    snapshot_block_reason = (
+        "Kajabi snapshot empty; run soma_kajabi_discover and fix product mapping/session"
+        if snapshot_empty
+        else None
+    )
     items.append({
         "id": "A1",
         "category": "A",
@@ -124,8 +151,8 @@ def _build_punchlist(snapshot: dict, manifest: list[dict], gmail_skipped: bool) 
         "priority": "P0",
         "title": "Verify Home Library module structure",
         "description": f"Home has {len(home_modules)} modules, {len(home_lessons)} lessons",
-        "blocked": False,
-        "blocked_reason": None,
+        "blocked": snapshot_empty,
+        "blocked_reason": snapshot_block_reason,
         "kajabi_ui": True,
     })
     items.append({
@@ -135,8 +162,8 @@ def _build_punchlist(snapshot: dict, manifest: list[dict], gmail_skipped: bool) 
         "priority": "P0",
         "title": "Verify Practitioner Library mirror completeness",
         "description": f"Practitioner has {len(pract_lessons)} lessons",
-        "blocked": False,
-        "blocked_reason": None,
+        "blocked": snapshot_empty,
+        "blocked_reason": snapshot_block_reason,
         "kajabi_ui": True,
     })
     items.append({
@@ -146,8 +173,8 @@ def _build_punchlist(snapshot: dict, manifest: list[dict], gmail_skipped: bool) 
         "priority": "P1",
         "title": "Run mirror diff (Home → Practitioner)",
         "description": "Ensure all Home content is mirrored to Practitioner",
-        "blocked": False,
-        "blocked_reason": None,
+        "blocked": snapshot_empty,
+        "blocked_reason": snapshot_block_reason,
         "kajabi_ui": True,
     })
 
@@ -281,12 +308,13 @@ def main() -> int:
     snapshot = _load_snapshot(phase0_dir / "kajabi_library_snapshot.json")
     manifest = _load_video_manifest(phase0_dir / "video_manifest.csv")
     gmail_skipped = _gmail_skipped(phase0_dir)
+    snapshot_empty = _snapshot_empty(phase0_dir)
 
     run_id = _generate_run_id()
     out_dir = root / ARTIFACTS_ROOT / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    items = _build_punchlist(snapshot, manifest, gmail_skipped)
+    items = _build_punchlist(snapshot, manifest, gmail_skipped, snapshot_empty)
     next_10 = _next_10_actions(items)
 
     # PUNCHLIST.csv
