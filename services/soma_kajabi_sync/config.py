@@ -6,6 +6,7 @@ NEVER prints raw secrets. Fail-closed on missing required secrets.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -60,12 +61,29 @@ SECRET_SPECS: dict[str, dict] = {
 }
 
 # ---------------------------------------------------------------------------
-# Kajabi product slugs
+# Kajabi product slugs (fallback when kajabi_products.json not present)
 # ---------------------------------------------------------------------------
 KAJABI_PRODUCTS = {
     "Home User Library": "home-user-library",
     "Practitioner Library": "practitioner-library",
 }
+
+KAJABI_PRODUCTS_PATH = Path("/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_products.json")
+
+
+def load_kajabi_products() -> dict[str, str]:
+    """Load product name → slug/url from kajabi_products.json if present.
+    Returns dict of product_name -> slug (or URL). Falls back to KAJABI_PRODUCTS.
+    """
+    if KAJABI_PRODUCTS_PATH.exists() and KAJABI_PRODUCTS_PATH.stat().st_size > 0:
+        try:
+            data = json.loads(KAJABI_PRODUCTS_PATH.read_text())
+            products = data.get("products") if isinstance(data, dict) else {}
+            if isinstance(products, dict) and products:
+                return dict(products)
+        except Exception:
+            pass
+    return dict(KAJABI_PRODUCTS)
 
 
 def load_secret(name: str, required: bool = True) -> Optional[str]:
