@@ -5,13 +5,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-PYTHON="${PYTHON:-/usr/bin/python3}"
+VENV_PYTHON="$ROOT_DIR/.venv-hostd/bin/python"
 UNIT_PATH="/etc/systemd/system/openclaw-hostd.service"
 
 if [ ! -f "$ROOT_DIR/ops/openclaw_hostd.py" ]; then
   echo "ERROR: openclaw_hostd.py not found under $ROOT_DIR" >&2
   exit 1
 fi
+
+# Ensure hostd venv with Playwright + Chromium (required for /api/exec soma_kajabi_phase0)
+sudo bash "$ROOT_DIR/ops/scripts/ensure_hostd_venv_playwright.sh"
 
 # Ensure hostd env has OPENCLAW_VPS_SSH_IDENTITY when deploy key exists (Apply SSH to self)
 SECRETS_DIR="/etc/ai-ops-runner/secrets"
@@ -33,7 +36,8 @@ After=network.target
 [Service]
 Type=simple
 EnvironmentFile=-/etc/ai-ops-runner/secrets/openclaw_hostd.env
-ExecStart=$PYTHON $ROOT_DIR/ops/openclaw_hostd.py
+Environment=PLAYWRIGHT_BROWSERS_PATH=/var/lib/ai-ops-runner/playwright-browsers
+ExecStart=$VENV_PYTHON $ROOT_DIR/ops/openclaw_hostd.py
 WorkingDirectory=$ROOT_DIR
 Restart=always
 RestartSec=1

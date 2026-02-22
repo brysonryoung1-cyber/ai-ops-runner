@@ -118,6 +118,7 @@ The Kajabi session token must be captured from a browser session:
 ### Kajabi storage_state (Playwright, preferred for Phase 0)
 
 - **Path**: `/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json` (mode 600, root:root). No contents in logs.
+- **Playwright**: Installed for hostd via `ops/scripts/ensure_hostd_venv_playwright.sh` (called by `install_openclaw_hostd.sh`). Required for Kajabi capture fallback. No manual pip installs on aiops-1 needed.
 - **Capture**: On aiops-1 run `python3 ops/scripts/kajabi_capture_storage_state.py` (headed). Sign in at https://app.kajabi.com and land on the dashboard; script saves to `/tmp/kajabi_storage_state.json`. Then install: `sudo cp /tmp/kajabi_storage_state.json /etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json && sudo chmod 600 ...`
 - **Full unblock**: `./ops/csr_soma_unblock.sh` (run on aiops-1) runs Phase 0 prep, Kajabi capture + Gmail device flow, connectors check, Phase 0, Zane punch list, re-enables autopilot. Pauses only for human: Kajabi login, Gmail client upload, device approval.
 
@@ -271,7 +272,7 @@ Re-capture the session token from browser DevTools.
 3. Verify `SMS_ALLOWLIST` contains valid phone numbers
 
 ### "Module import failed"
-Ensure you're running from the repo root: `cd /opt/ai-ops-runner`
+Ensure you're running from the repo root: `cd /opt/ai-ops-runner`. If hostd lacks Playwright, run `sudo ./ops/install_openclaw_hostd.sh` to install the managed venv with Playwright + Chromium.
 
 ### "No snapshot found" (mirror)
 Run snapshot for both products before running mirror:
