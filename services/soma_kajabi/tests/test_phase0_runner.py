@@ -156,7 +156,7 @@ def test_phase0_fails_when_kajabi_storage_state_missing():
 
 
 def test_phase0_returns_empty_snapshot_when_snapshot_empty():
-    """Phase0 returns ok:false, error_class=EMPTY_SNAPSHOT when modules+lessons all zero."""
+    """Phase0 returns ok:false, error_class=KAJABI_SNAPSHOT_EMPTY when modules+lessons all zero."""
     from unittest.mock import patch
 
     root = _repo_root()
@@ -166,7 +166,7 @@ def test_phase0_returns_empty_snapshot_when_snapshot_empty():
         out_dir.mkdir(parents=True)
         run_id = "run1"
 
-        def _mock_snapshot(_product: str, smoke: bool = False):
+        def _mock_snapshot(_product: str, smoke: bool = False, **kwargs):
             art = tmp_path / "soma_art"
             art.mkdir(parents=True, exist_ok=True)
             (art / "snapshot.json").write_text(json.dumps({"categories": []}))
@@ -183,6 +183,6 @@ def test_phase0_returns_empty_snapshot_when_snapshot_empty():
                 }
                 ok, rec, err_class = _run_kajabi_snapshot(tmp_path, out_dir, run_id, cfg)
         assert ok is False
-        assert err_class == "EMPTY_SNAPSHOT"
-        assert "soma_kajabi_discover" in (rec or "")
+        assert err_class == "KAJABI_SNAPSHOT_EMPTY"
+        assert "soma_kajabi_snapshot_debug" in (rec or "") or "screenshot" in (rec or "")
         assert (out_dir / "kajabi_capture_debug.json").exists()

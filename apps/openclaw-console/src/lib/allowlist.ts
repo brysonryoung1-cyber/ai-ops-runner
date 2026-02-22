@@ -29,6 +29,7 @@ export type ActionName =
   | "soma_last_errors"
   | "sms_status"
   | "soma_kajabi_phase0"
+  | "soma_kajabi_snapshot_debug"
   | "soma_kajabi_discover"
   | "soma_zane_finish_plan"
   | "orb.backtest.bulk"
@@ -225,6 +226,15 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     remoteCommand:
       "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi.phase0_runner",
     timeoutSec: 300,
+  },
+  soma_kajabi_snapshot_debug: {
+    name: "soma_kajabi_snapshot_debug",
+    label: "Kajabi Snapshot Debug",
+    description:
+      "Dry-run snapshot only: Home + Practitioner with full debug artifacts (screenshot, page.html, debug.json). Canary when Kajabi changes.",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && /opt/ai-ops-runner/.venv-hostd/bin/python -m services.soma_kajabi.snapshot_debug_runner",
+    timeoutSec: 180,
   },
   soma_kajabi_discover: {
     name: "soma_kajabi_discover",
