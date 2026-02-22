@@ -120,11 +120,14 @@ def test_zane_finish_plan_blocks_a1_a2_a3_when_snapshot_empty():
         )
         assert r.returncode == 0, f"stdout={r.stdout} stderr={r.stderr}"
 
+        out_json = json.loads(r.stdout.strip())
+        zane_run_id = out_json.get("run_id")
+        assert zane_run_id, "zane_finish_plan must return run_id"
+
         zane_base = root / "artifacts" / "soma_kajabi" / "zane_finish_plan"
-        run_dirs = [d for d in zane_base.iterdir() if d.is_dir()]
-        assert run_dirs
-        latest = max(run_dirs, key=lambda d: d.name)
-        punchlist_csv = list(csv.DictReader((latest / "PUNCHLIST.csv").open(encoding="utf-8")))
+        out_dir = zane_base / zane_run_id
+        assert out_dir.exists(), f"Expected output dir {out_dir}"
+        punchlist_csv = list(csv.DictReader((out_dir / "PUNCHLIST.csv").open(encoding="utf-8")))
         a_items = [r for r in punchlist_csv if r.get("id", "").startswith("A")]
         a1_a2_a3 = [r for r in a_items if r.get("id") in ("A1", "A2", "A3")]
         for row in a1_a2_a3:

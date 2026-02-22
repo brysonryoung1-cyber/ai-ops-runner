@@ -35,6 +35,7 @@ export const ACTION_TO_HOSTD: Record<string, string> = {
   "soma_kajabi_gmail_connect_start": "soma_kajabi_gmail_connect_start",
   "soma_kajabi_gmail_connect_status": "soma_kajabi_gmail_connect_status",
   "soma_kajabi_phase0": "soma_kajabi_phase0",
+  "soma_kajabi_snapshot_debug": "soma_kajabi_snapshot_debug",
   "soma_last_errors": "soma_last_errors",
   "soma_mirror": "soma_mirror",
   "soma_snapshot_home": "soma_snapshot_home",
@@ -47,6 +48,6 @@ export const ACTION_TO_HOSTD: Record<string, string> = {
 
 /** Project ID -> set of allowlisted action ids for POST /api/projects/[projectId]/run */
 export const PROJECT_ACTIONS: Record<string, ReadonlySet<string>> = {
-  "soma_kajabi": new Set(["soma_connectors_status", "soma_kajabi_bootstrap_finalize", "soma_kajabi_bootstrap_start", "soma_kajabi_bootstrap_status", "soma_kajabi_discover", "soma_kajabi_gmail_connect_finalize", "soma_kajabi_gmail_connect_start", "soma_kajabi_gmail_connect_status", "soma_zane_finish_plan"]),
+  "soma_kajabi": new Set(["soma_connectors_status", "soma_kajabi_bootstrap_finalize", "soma_kajabi_bootstrap_start", "soma_kajabi_bootstrap_status", "soma_kajabi_discover", "soma_kajabi_gmail_connect_finalize", "soma_kajabi_gmail_connect_start", "soma_kajabi_gmail_connect_status", "soma_kajabi_snapshot_debug", "soma_zane_finish_plan"]),
 };
 
