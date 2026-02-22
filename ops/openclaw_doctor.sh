@@ -488,6 +488,20 @@ else
   fi
 fi
 
+# --- 9c. hostd Playwright (required for Soma Phase0 /api/exec) ---
+HOSTD_VENV_PYTHON="$ROOT_DIR/.venv-hostd/bin/python"
+PYPLAYWRIGHT_OK=0
+if [ -x "$HOSTD_VENV_PYTHON" ]; then
+  if PLAYWRIGHT_OUT="$("$HOSTD_VENV_PYTHON" -c "import playwright; print('PLAYWRIGHT_IMPORT_OK')" 2>/dev/null)" && [ "$PLAYWRIGHT_OUT" = "PLAYWRIGHT_IMPORT_OK" ]; then
+    pass "hostd venv Playwright import OK (Soma Phase0 ready)"
+    PYPLAYWRIGHT_OK=1
+  fi
+fi
+if [ "$PYPLAYWRIGHT_OK" -ne 1 ]; then
+  fail "hostd Playwright not available (Soma Phase0 requires it)"
+  echo "  Run: sudo ./ops/install_openclaw_hostd.sh" >&2
+fi
+
 # --- 10. Project State Files (fail-closed: repo is canonical brain) ---
 echo "--- Project State Files ---"
 CURRENT_MD="$ROOT_DIR/docs/OPENCLAW_CURRENT.md"
