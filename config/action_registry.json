@@ -15,6 +15,7 @@
     { "id": "soma_mirror", "label": "Mirror Home → Practitioner", "timeout_sec": 60, "cmd_template": "cd ${ROOT_DIR} && python3 -m services.soma_kajabi_sync.mirror --dry-run" },
     { "id": "soma_status", "label": "Soma Status", "timeout_sec": 15, "cmd_template": "cd ${ROOT_DIR} && python3 -m services.soma_kajabi_sync.sms status" },
     { "id": "soma_kajabi_phase0", "label": "Soma Kajabi Phase 0", "timeout_sec": 300, "cmd_template": "cd ${ROOT_DIR} && python3 -m services.soma_kajabi.phase0_runner" },
+    { "id": "soma_zane_finish_plan", "label": "Zane Finish Plan", "project_id": "soma_kajabi", "timeout_sec": 60, "cmd_template": "cd ${ROOT_DIR} && python3 -m services.soma_kajabi.zane_finish_plan" },
     { "id": "soma_connectors_status", "label": "Connectors Status", "project_id": "soma_kajabi", "timeout_sec": 15, "cmd_template": "cd ${ROOT_DIR} && python3 -m services.soma_kajabi.connectors_status" },
     { "id": "soma_kajabi_bootstrap_start", "label": "Kajabi Bootstrap Start", "project_id": "soma_kajabi", "timeout_sec": 30, "cmd_template": "cd ${ROOT_DIR} && python3 -m services.soma_kajabi.bootstrap kajabi start" },
     { "id": "soma_kajabi_bootstrap_status", "label": "Kajabi Bootstrap Status", "project_id": "soma_kajabi", "timeout_sec": 10, "cmd_template": "cd ${ROOT_DIR} && python3 -m services.soma_kajabi.bootstrap kajabi status" },

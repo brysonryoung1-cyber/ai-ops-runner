@@ -121,3 +121,23 @@ def test_no_secrets_in_json_output():
     out = r.stdout + r.stderr
     # Output should be valid JSON with known keys only; no raw passwords
     assert "GMAIL_APP_PASSWORD" not in out or "env" in out
+
+
+def test_phase0_fails_when_kajabi_storage_state_missing():
+    """Phase0 returns CONNECTOR_NOT_CONFIGURED when Kajabi storage_state is missing/invalid."""
+    root = _repo_root()
+    env = {**os.environ, "OPENCLAW_REPO_ROOT": str(root)}
+    r = subprocess.run(
+        ["python3", "-m", "services.soma_kajabi.phase0_runner"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+    out = r.stdout.strip()
+    lines = [l for l in out.split("\n") if l.strip().startswith("{")]
+    parsed = json.loads(lines[-1]) if lines else {}
+    # With default config (kajabi manual or storage_state missing), must fail
+    assert parsed.get("error_class") == "CONNECTOR_NOT_CONFIGURED"
+    assert parsed.get("ok") is False

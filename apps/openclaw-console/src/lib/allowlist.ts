@@ -29,6 +29,7 @@ export type ActionName =
   | "soma_last_errors"
   | "sms_status"
   | "soma_kajabi_phase0"
+  | "soma_zane_finish_plan"
   | "orb.backtest.bulk"
   | "orb.backtest.confirm_nt8"
   | "pred_markets.mirror.run"
@@ -219,10 +220,19 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     name: "soma_kajabi_phase0",
     label: "Soma Kajabi Phase 0",
     description:
-      "Read-only: Kajabi snapshot + Gmail harvest (Zane McCourtney, has:attachment) + video_manifest.csv",
+      "Read-only: Kajabi snapshot + Gmail harvest (Zane McCourtney, has:attachment) + video_manifest.csv. Gmail optional (Kajabi-only mode).",
     remoteCommand:
       "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi.phase0_runner",
     timeoutSec: 300,
+  },
+  soma_zane_finish_plan: {
+    name: "soma_zane_finish_plan",
+    label: "Zane Finish Plan",
+    description:
+      "Read-only punchlist from Phase0 artifacts: PUNCHLIST.md, PUNCHLIST.csv, SUMMARY.json. Prioritized P0/P1/P2.",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && python3 -m services.soma_kajabi.zane_finish_plan",
+    timeoutSec: 60,
   },
   soma_last_errors: {
     name: "soma_last_errors",

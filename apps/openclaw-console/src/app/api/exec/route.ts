@@ -337,6 +337,7 @@ export async function POST(req: NextRequest) {
     let responsePayload: Record<string, unknown> = { ...result };
     const isProjectAction =
       actionName === "soma_kajabi_phase0" ||
+      actionName === "soma_zane_finish_plan" ||
       actionName.startsWith("pred_markets.");
     if (isProjectAction && result.stdout) {
       try {
