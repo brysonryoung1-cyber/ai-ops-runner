@@ -127,16 +127,13 @@ def main() -> int:
         page = context.new_page()
 
         try:
-            # 1) Land on base
-            page.goto(KAJABI_BASE, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_load_state("networkidle", timeout=15000)
+            # 1) Land on base (use "load" not "networkidle" — Kajabi admin has continuous polling)
+            page.goto(KAJABI_BASE, wait_until="load", timeout=30000)
 
             # 2) Navigate to /admin — detect 404
-            resp = page.goto(KAJABI_ADMIN, wait_until="domcontentloaded", timeout=30000)
+            resp = page.goto(KAJABI_ADMIN, wait_until="load", timeout=30000)
             if resp and resp.status == 404:
                 admin_404 = True
-            else:
-                page.wait_for_load_state("networkidle", timeout=15000)
         except Exception as e:
             _write_error(
                 out_dir,
@@ -225,7 +222,7 @@ def main() -> int:
         if products_link:
             try:
                 products_link.click()
-                page.wait_for_load_state("networkidle", timeout=15000)
+                page.wait_for_load_state("load", timeout=30000)
                 try:
                     page.screenshot(path=str(out_dir / "screenshot.png"))
                 except Exception:
