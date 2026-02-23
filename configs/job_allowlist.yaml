@@ -63,6 +63,14 @@ jobs:
     argv: ["python3", "./ops/scripts/kajabi_discover.py"]
     timeout_sec: 180
 
+  soma_kajabi_capture_interactive:
+    argv: ["python3", "./ops/scripts/kajabi_capture_interactive.py"]
+    timeout_sec: 1320
+
+  soma_kajabi_unblock_and_run:
+    argv: ["python3", "./ops/scripts/soma_kajabi_unblock_and_run.py"]
+    timeout_sec: 900
+
   soma_kajabi_snapshot_debug:
     argv: ["python3", "-m", "services.soma_kajabi.snapshot_debug_runner"]
     timeout_sec: 180

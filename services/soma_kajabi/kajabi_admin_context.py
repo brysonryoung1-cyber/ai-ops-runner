@@ -59,10 +59,15 @@ class BootstrapResult:
     artifact_path: str | None = None
 
 
-def _is_cloudflare_blocked(content: str) -> bool:
-    """Detect Cloudflare block (not session expiry)."""
-    content_lower = (content or "").lower()[:8192]
-    return "cloudflare" in content_lower and ("blocked" in content_lower or "attention required" in content_lower)
+def _is_cloudflare_blocked(content: str, title: str | None = None) -> bool:
+    """Detect Cloudflare block (not session expiry).
+
+    Matches: 'Attention Required! | Cloudflare', 'Sorry, you have been blocked'.
+    """
+    combined = ((title or "") + " " + (content or "")).lower()[:8192]
+    return "cloudflare" in combined and (
+        "blocked" in combined or "attention required" in combined
+    )
 
 
 def _is_login_page(url: str, content: str) -> bool:
@@ -232,12 +237,12 @@ def ensure_kajabi_soma_admin_context(
     if _is_cloudflare_blocked(content_check):
         _write_bootstrap_artifact(
             out_dir, attempts, KAJABI_CLOUDFLARE_BLOCKED,
-            "Cloudflare blocking headless browser. Run capture on machine with human browser, or use headed mode.",
+            "Run soma_kajabi_capture_interactive to refresh session, then rerun discover.",
         )
         return BootstrapResult(
             ok=False,
             error_class=KAJABI_CLOUDFLARE_BLOCKED,
-            recommended_next_action="Cloudflare blocking headless browser. Run capture on machine with human browser, or use headed mode.",
+            recommended_next_action="Run soma_kajabi_capture_interactive to refresh session, then rerun discover.",
             attempts=attempts,
             artifact_path=str(out_dir / "bootstrap_failure.json"),
         )
@@ -247,12 +252,12 @@ def ensure_kajabi_soma_admin_context(
         if _is_cloudflare_blocked(content_for_check):
             _write_bootstrap_artifact(
                 out_dir, attempts, KAJABI_CLOUDFLARE_BLOCKED,
-                "Cloudflare blocking headless browser. Run capture on machine with human browser, or use headed mode.",
+                "Run soma_kajabi_capture_interactive to refresh session, then rerun discover.",
             )
             return BootstrapResult(
                 ok=False,
                 error_class=KAJABI_CLOUDFLARE_BLOCKED,
-                recommended_next_action="Cloudflare blocking headless browser. Run capture on machine with human browser, or use headed mode.",
+                recommended_next_action="Run soma_kajabi_capture_interactive to refresh session, then rerun discover.",
                 login_detected=False,
                 attempts=attempts,
                 artifact_path=str(out_dir / "bootstrap_failure.json"),

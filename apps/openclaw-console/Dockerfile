@@ -16,6 +16,8 @@ RUN npm run build
 
 FROM node:20-alpine AS runner
 WORKDIR /app
+ARG OPENCLAW_BUILD_SHA=unknown
+ENV OPENCLAW_BUILD_SHA=$OPENCLAW_BUILD_SHA
 ENV NODE_ENV=production
 ENV PORT=3000
 
