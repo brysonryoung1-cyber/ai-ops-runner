@@ -1,0 +1,10 @@
+[Unit]
+Description=OpenClaw Soma Kajabi Auto-Finish (daily at 6am UTC)
+Requires=openclaw-soma-auto-finish.service
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

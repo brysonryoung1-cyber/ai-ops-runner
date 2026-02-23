@@ -35,6 +35,8 @@ interface ProjectData {
   };
   tags: string[];
   last_run: LastRun | null;
+  last_auto_finish_status?: "PASS" | "FAIL";
+  last_auto_finish_run_id?: string;
 }
 
 const SOMA_PROJECT_IDS = new Set(["soma_kajabi", "soma_kajabi_library_ownership"]);
@@ -350,9 +352,32 @@ export default function ProjectDetailsPage() {
           <div className="mb-6">
             <h3 className="text-lg font-semibold text-white/95 mb-3">Phase 0</h3>
             <ActionButton
+              label="Auto-Finish Soma (Phase0 → Finish Plan)"
+              description="Runs connectors_status → Phase0 → Finish Plan automatically. Handles Cloudflare (noVNC). Produces single summary artifact."
+              variant="primary"
+              loading={execLoading === "soma_kajabi_auto_finish"}
+              disabled={execLoading !== null && execLoading !== "soma_kajabi_auto_finish"}
+              onClick={() => handleExec("soma_kajabi_auto_finish")}
+            />
+            {project.last_auto_finish_status && (
+              <div className="mt-2 flex items-center gap-2 text-xs">
+                <span className={project.last_auto_finish_status === "PASS" ? "text-emerald-400" : "text-red-400"}>
+                  Last: {project.last_auto_finish_status}
+                </span>
+                {project.last_auto_finish_run_id && (
+                  <Link
+                    href={`/artifacts?path=artifacts/soma_kajabi/auto_finish/${project.last_auto_finish_run_id}/SUMMARY.md`}
+                    className="text-blue-400 hover:text-blue-300"
+                  >
+                    Open Summary
+                  </Link>
+                )}
+              </div>
+            )}
+            <ActionButton
               label="Run Phase 0"
               description="Read-only: Kajabi snapshot + Gmail harvest (Zane McCourtney, has:attachment) + video_manifest.csv. Gmail optional (Kajabi-only mode)."
-              variant="primary"
+              variant="secondary"
               loading={execLoading === "soma_kajabi_phase0"}
               disabled={execLoading !== null && execLoading !== "soma_kajabi_phase0"}
               onClick={() => handleExec("soma_kajabi_phase0")}

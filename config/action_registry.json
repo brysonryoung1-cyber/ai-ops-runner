@@ -127,6 +127,13 @@
       "cmd_template": "cd ${ROOT_DIR} && ${ROOT_DIR}/.venv-hostd/bin/python -m services.soma_kajabi.zane_finish_plan"
     },
     {
+      "id": "soma_kajabi_auto_finish",
+      "label": "Auto-Finish Soma (Phase0 → Finish Plan)",
+      "project_id": "soma_kajabi",
+      "timeout_sec": 1800,
+      "cmd_template": "cd ${ROOT_DIR} && ${ROOT_DIR}/.venv-hostd/bin/python ./ops/scripts/soma_kajabi_auto_finish.py"
+    },
+    {
       "id": "soma_connectors_status",
       "label": "Connectors Status",
       "project_id": "soma_kajabi",
