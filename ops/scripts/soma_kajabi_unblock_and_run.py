@@ -30,12 +30,13 @@ def _repo_root() -> Path:
     return Path(env or "/opt/ai-ops-runner")
 
 
-def _run(cmd: list[str], timeout: int = 600) -> tuple[int, str]:
-    """Run command, return (exit_code, stdout)."""
+def _run(cmd: list[str], timeout: int = 600, stream_stderr: bool = False) -> tuple[int, str]:
+    """Run command, return (exit_code, stdout). If stream_stderr, stderr goes to terminal (for noVNC URL)."""
     try:
         result = subprocess.run(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=sys.stderr if stream_stderr else subprocess.PIPE,
             text=True,
             timeout=timeout,
             cwd=str(_repo_root()),
@@ -73,8 +74,12 @@ def main() -> int:
             break
         if error_class == KAJABI_CLOUDFLARE_BLOCKED and capture_attempts < max_capture_attempts:
             capture_attempts += 1
-            print(f"Cloudflare blocked. Running soma_kajabi_capture_interactive (attempt {capture_attempts})...", file=sys.stderr)
-            cap_rc, cap_out = _run([str(venv_python), str(root / "ops" / "scripts" / "kajabi_capture_interactive.py")], timeout=1320)
+            print("Cloudflare blocked. Open the noVNC URL below to complete the challenge:", file=sys.stderr)
+            cap_rc, cap_out = _run(
+                [str(venv_python), str(root / "ops" / "scripts" / "kajabi_capture_interactive.py")],
+                timeout=1320,
+                stream_stderr=True,
+            )
             if cap_rc != 0:
                 print(json.dumps({"ok": False, "error_class": "KAJABI_CAPTURE_INTERACTIVE_FAILED", "output": cap_out[:500]}))
                 return 1

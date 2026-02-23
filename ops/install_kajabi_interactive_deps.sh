@@ -14,9 +14,11 @@ echo "==> install_kajabi_interactive_deps.sh (idempotent)"
 
 # apt: Xvfb, x11vnc; Chromium runtime deps (Playwright headed mode): libnss3, fonts
 apt-get update -qq
-apt-get install -y --no-install-recommends \
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   xvfb \
   x11vnc \
+  python3-websockify \
+  novnc \
   libnss3 \
   libnspr4 \
   libatk1.0-0 \
@@ -31,10 +33,9 @@ apt-get install -y --no-install-recommends \
   libgbm1 \
   libasound2 \
   fonts-liberation \
-  fonts-noto-core \
-  2>/dev/null || true
+  fonts-noto-core
 
-# websockify: pip (more portable than apt novnc)
+# websockify: prefer apt python3-websockify; fallback to pip
 if ! command -v websockify >/dev/null 2>&1 && ! python3 -c "import websockify" 2>/dev/null; then
   pip3 install --break-system-packages websockify 2>/dev/null || \
   pip3 install websockify 2>/dev/null || true
