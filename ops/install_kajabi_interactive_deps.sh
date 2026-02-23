@@ -38,12 +38,25 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
 apt-get install -y --no-install-recommends libasound2t64 2>/dev/null || \
   apt-get install -y --no-install-recommends libasound2 2>/dev/null || true
 
-# websockify: prefer apt python3-websockify; fallback to pip
+# websockify: prefer apt python3-websockify; pip fallback is opt-in and must be pinned
 if ! command -v websockify >/dev/null 2>&1 && ! python3 -c "import websockify" 2>/dev/null; then
-  if pip3 install --help 2>/dev/null | grep -q -- '--break-system-packages'; then
-    pip3 install --break-system-packages websockify 2>/dev/null || true
+  PIP_WEBSOCKIFY_SPEC="${PIP_WEBSOCKIFY_SPEC:-}"
+  if [ -n "$PIP_WEBSOCKIFY_SPEC" ]; then
+    case "$PIP_WEBSOCKIFY_SPEC" in
+      websockify==*)
+        ;;
+      *)
+        echo "ERROR: PIP_WEBSOCKIFY_SPEC must be pinned like websockify==0.12.0" >&2
+        exit 1
+        ;;
+    esac
+    if pip3 install --help 2>/dev/null | grep -q -- '--break-system-packages'; then
+      pip3 install --break-system-packages "$PIP_WEBSOCKIFY_SPEC" 2>/dev/null || true
+    else
+      pip3 install "$PIP_WEBSOCKIFY_SPEC" 2>/dev/null || true
+    fi
   else
-    pip3 install websockify 2>/dev/null || true
+    echo "  websockify apt package unavailable; skipping unpinned pip fallback (set PIP_WEBSOCKIFY_SPEC=websockify==<version> to enable)"
   fi
 fi
 
