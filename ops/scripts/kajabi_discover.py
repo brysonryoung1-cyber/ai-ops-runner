@@ -2,8 +2,8 @@
 """Kajabi Discover — Playwright-based discovery of Kajabi admin product identifiers.
 
 Uses storage_state at /etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json.
-Opens https://app.kajabi.com, navigates to Products list via UI (click-based),
-extracts product name → admin URL/slug mapping for Home User Library and Practitioner Library.
+Bootstraps admin context via Soma site hostname (zane-mccourtney.mykajabi.com) when
+app.kajabi.com returns 404. No CDP, no manual steps.
 
 Artifacts: artifacts/soma_kajabi/discover/<run_id>/{products.json, screenshot.png, page.html, debug.json}
 Persists: /etc/ai-ops-runner/secrets/soma_kajabi/kajabi_products.json (names + URLs only; NO cookies/tokens)
@@ -13,12 +13,15 @@ Error classes:
   PLAYWRIGHT_NOT_INSTALLED
   KAJABI_NAVIGATION_FAILED
   KAJABI_NOT_LOGGED_IN
-  KAJABI_WRONG_SITE_OR_PERMISSIONS — /admin 404 after confirmed login
+  KAJABI_SESSION_EXPIRED — redirect to login; complete login+2FA once
+  KAJABI_ADMIN_404_AFTER_BOOTSTRAP — all bootstrap attempts 404
+  KAJABI_PRODUCTS_PAGE_NO_MATCH — page loaded but target products not found
 """
 
 from __future__ import annotations
 
 import json
+import sys
 import os
 import sys
 import uuid
@@ -28,8 +31,6 @@ from pathlib import Path
 
 STORAGE_STATE_PATH = Path("/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json")
 KAJABI_PRODUCTS_PATH = Path("/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_products.json")
-KAJABI_BASE = "https://app.kajabi.com"
-KAJABI_ADMIN = "https://app.kajabi.com/admin"
 TARGET_PRODUCTS = ["Home User Library", "Practitioner Library"]
 
 
@@ -89,6 +90,10 @@ def _write_error(out_dir: Path, error_class: str, **kwargs) -> dict:
 
 
 def main() -> int:
+    root = _repo_root()
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
     out_dir = _artifact_dir()
     captured_at = _now_iso()
 
@@ -119,7 +124,7 @@ def main() -> int:
     products_map: dict[str, dict] = {}  # canonical_name -> {slug, url, display_name}
     final_url = ""
     title = ""
-    admin_404 = False
+    site_origin: str | None = None
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -127,13 +132,8 @@ def main() -> int:
         page = context.new_page()
 
         try:
-            # 1) Land on base (use "load" not "networkidle" — Kajabi admin has continuous polling)
-            page.goto(KAJABI_BASE, wait_until="load", timeout=30000)
-
-            # 2) Navigate to /admin — detect 404
-            resp = page.goto(KAJABI_ADMIN, wait_until="load", timeout=30000)
-            if resp and resp.status == 404:
-                admin_404 = True
+            from services.soma_kajabi.kajabi_admin_context import ensure_kajabi_soma_admin_context
+            bootstrap = ensure_kajabi_soma_admin_context(page, artifact_dir=out_dir)
         except Exception as e:
             _write_error(
                 out_dir,
@@ -154,24 +154,16 @@ def main() -> int:
             print(json.dumps({"ok": False, "error_class": "KAJABI_NAVIGATION_FAILED", "artifact_dir": str(out_dir)}))
             return 1
 
-        final_url = page.url
-        title = page.title() or ""
-        logged_in = "/admin" in final_url and "login" not in final_url.lower() and "sign_in" not in final_url
-
-        if admin_404 or not logged_in:
-            error_class = "KAJABI_WRONG_SITE_OR_PERMISSIONS" if admin_404 else "KAJABI_NOT_LOGGED_IN"
-            rec = (
-                "In Kajabi: click profile → Switch Site → select Soma site (the one with Home User Library), then re-capture storage_state and retry."
-                if admin_404
-                else "Re-capture storage_state; session expired or redirect to login"
-            )
+        if not bootstrap.ok:
+            error_class = bootstrap.error_class or "KAJABI_ADMIN_404_AFTER_BOOTSTRAP"
+            rec = bootstrap.recommended_next_action or "Complete Kajabi login + 2FA once on aiops-1 capture flow."
             doc = _write_error(
                 out_dir,
                 error_class,
-                final_url=final_url,
-                title=title,
-                logged_in=logged_in,
-                admin_404=admin_404,
+                final_url=page.url,
+                title=page.title() or "",
+                logged_in=not bootstrap.login_detected,
+                admin_404=bootstrap.admin_404,
                 recommended_next_action=rec,
                 artifact_dir=str(out_dir),
             )
@@ -188,6 +180,10 @@ def main() -> int:
             print(json.dumps({"ok": False, "error_class": error_class, "artifact_dir": str(out_dir)}))
             return 1
 
+        site_origin = bootstrap.site_origin or "https://zane-mccourtney.mykajabi.com"
+        final_url = page.url
+        title = page.title() or ""
+
         try:
             page.screenshot(path=str(out_dir / "screenshot.png"))
         except Exception:
@@ -197,41 +193,7 @@ def main() -> int:
         except Exception:
             pass
 
-        # 3) Navigate to Products list — click-based (not hardcoded /admin/products/<slug>)
-        products_link = None
-        for sel in [
-            'a[href*="/products"]',
-            'a[href*="/admin/products"]',
-            'a:has-text("Products")',
-            '[data-testid*="products"]',
-            'a:has-text("Courses")',
-        ]:
-            try:
-                el = page.query_selector(sel)
-                if el:
-                    href = el.get_attribute("href") or ""
-                    if "/products" in href or "products" in href.lower():
-                        products_link = el
-                        break
-                    # Click text-based link
-                    products_link = el
-                    break
-            except Exception:
-                pass
-
-        if products_link:
-            try:
-                products_link.click()
-                page.wait_for_load_state("load", timeout=30000)
-                try:
-                    page.screenshot(path=str(out_dir / "screenshot.png"))
-                except Exception:
-                    pass
-                (out_dir / "page.html").write_text(page.content(), encoding="utf-8")
-            except Exception:
-                pass
-
-        # 4) Extract product links: name → slug/url
+        # Extract product links: name → slug/url (page is already on products list from bootstrap)
         seen: set[str] = set()
         for el in page.query_selector_all('a[href*="/products/"], a[href*="/admin/products/"]'):
             try:
@@ -245,7 +207,8 @@ def main() -> int:
                     continue
                 matched = _match_product_name(text, TARGET_PRODUCTS)
                 if matched:
-                    full_url = href if href.startswith("http") else f"{KAJABI_BASE}{href}" if href.startswith("/") else f"{KAJABI_ADMIN}/products/{slug}"
+                    base = site_origin or "https://zane-mccourtney.mykajabi.com"
+                    full_url = href if href.startswith("http") else f"{base}{href}" if href.startswith("/") else f"{base}/admin/products/{slug}"
                     products_map[matched] = {"slug": slug, "url": full_url, "display_name": text}
             except Exception:
                 pass
@@ -264,7 +227,8 @@ def main() -> int:
                         continue
                     matched = _match_product_name(text, TARGET_PRODUCTS)
                     if matched and matched not in products_map:
-                        full_url = href if href.startswith("http") else f"{KAJABI_BASE}{href}" if href.startswith("/") else f"{KAJABI_ADMIN}/products/{slug}"
+                        base = site_origin or "https://zane-mccourtney.mykajabi.com"
+                        full_url = href if href.startswith("http") else f"{base}{href}" if href.startswith("/") else f"{base}/admin/products/{slug}"
                         products_map[matched] = {"slug": slug, "url": full_url, "display_name": text}
                 except Exception:
                     pass

@@ -225,11 +225,40 @@ def _fetch_kajabi_structure_playwright(
                 ])
 
         page = context.new_page()
+
+        # Bootstrap admin context (Soma site) before navigating to product
+        try:
+            from services.soma_kajabi.kajabi_admin_context import (
+                ensure_kajabi_soma_admin_context,
+                KAJABI_SESSION_EXPIRED,
+                KAJABI_ADMIN_404_AFTER_BOOTSTRAP,
+                KAJABI_PRODUCTS_PAGE_NO_MATCH,
+            )
+            art_dir = Path(debug_artifact_dir) if debug_artifact_dir else None
+            bootstrap = ensure_kajabi_soma_admin_context(page, artifact_dir=art_dir)
+            if not bootstrap.ok:
+                err_class = bootstrap.error_class or KAJABI_ADMIN_404_AFTER_BOOTSTRAP
+                msg = bootstrap.recommended_next_action or "Bootstrap failed."
+                if err_class == KAJABI_SESSION_EXPIRED:
+                    raise KajabiSnapshotError("KAJABI_NOT_LOGGED_IN", msg)
+                if err_class == KAJABI_ADMIN_404_AFTER_BOOTSTRAP:
+                    raise KajabiSnapshotError(
+                        "KAJABI_PRODUCT_NOT_FOUND",
+                        "Admin 404 after bootstrap. Run soma_kajabi_discover to refresh.",
+                    )
+                raise KajabiSnapshotError(err_class, msg)
+            site_origin = bootstrap.site_origin or "https://zane-mccourtney.mykajabi.com"
+        except KajabiSnapshotError:
+            raise
+        except ImportError as e:
+            # Fallback when helper not available
+            site_origin = "https://app.kajabi.com"
+
         # product_slug may be full URL (from discover) or slug
         if product_slug.startswith("http"):
             url = product_slug
         else:
-            url = f"https://app.kajabi.com/admin/products/{product_slug}"
+            url = f"{site_origin}/admin/products/{product_slug}"
         debug_data["target_url"] = url
 
         resp = None
