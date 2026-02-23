@@ -420,7 +420,7 @@ config/
   - **Launcher**: `./ops/openclaw_console_up.sh` — ensures deps, creates `.env.local`, starts on port 8787
   - **Docs**: `docs/OPENCLAW_CONSOLE.md` — quick start, security model, troubleshooting
 - **OpenClaw safety permanently locked** — Two new automation layers ensure OpenClaw security cannot regress:
-  - **One-command apply+verify** — `ops/openclaw_apply_remote.sh [host]` SSHes to aiops-1 (default `root@100.123.61.57`), syncs to origin/main, rebuilds Docker stack, applies SSH Tailscale-only fix, runs full doctor, and prints port proof. Exits nonzero if doctor fails. Tailscale-down guard: skips SSH fix if Tailscale is not up (avoids lockout).
+  - **One-command apply+verify** — `ops/openclaw_apply_remote.sh [host]` applies to aiops-1 (default `root@100.123.61.57`). **No self-SSH**: when target IP matches this host's Tailscale IPv4, runs deploy steps locally; otherwise SSHs (requires `OPENCLAW_VPS_SSH_IDENTITY`). Syncs to origin/main, rebuilds Docker stack, applies SSH Tailscale-only fix, runs full doctor, and prints port proof. Exits nonzero if doctor fails. Tailscale-down guard: skips SSH fix if Tailscale is not up (avoids lockout).
   - **Continuous VPS guard** — `openclaw-guard.timer` runs every 10 minutes via systemd:
     - Runs `openclaw_doctor.sh`. If PASS → logs and exits 0.
     - If FAIL: checks Tailscale IPv4 availability AND whether sshd is bound to a public address.

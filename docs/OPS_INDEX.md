@@ -40,7 +40,7 @@ Complete index of all operational scripts and commands in ai-ops-runner. This do
 | Script | Description | Run As |
 |--------|-------------|--------|
 | `ops/openclaw_fix_ssh_tailscale_only.sh` | Lock sshd to Tailscale IP | root |
-| `ops/openclaw_apply_remote.sh [host]` | Remote sync + build + fix + verify | any (SSHes as root) |
+| `ops/openclaw_apply_remote.sh [host]` | Apply + verify (local when target=this host; SSH when remote) | any |
 | `ops/openclaw_install_guard.sh` | Install/update guard systemd units | root |
 
 ### Notifications
