@@ -2,7 +2,7 @@
 
 Complete index of all operational scripts and commands in ai-ops-runner. This document is canonical and MUST be updated on every change.
 
-**Last Updated**: 2026-02-17
+**Last Updated**: 2026-02-23
 
 ## Quick Reference
 
@@ -22,7 +22,8 @@ Complete index of all operational scripts and commands in ai-ops-runner. This do
 
 | Script | Description | Run As | Frequency |
 |--------|-------------|--------|-----------|
-| `ops/openclaw_doctor.sh` | Full health check (Tailscale, Docker, API, ports, disk, keys) | any | hourly (timer) |
+| `ops/openclaw_doctor.sh` | Full health check (Tailscale, Docker, API, ports, disk, keys, hostd) | any | hourly (timer) |
+| `ops/hostd_watchdog.sh` | hostd auto-heal (probe /health, restart on fail; via timer) | root | 60s (timer) |
 | `ops/openclaw_heal.sh` | Apply + verify + evidence bundle | root | on-demand |
 | `ops/openclaw_guard.sh` | Regression guard with safe auto-remediation | root | 10min (timer) |
 | `ops/doctor_repo.sh` | Repo health (files, hooks, configs) | any | on-demand |
@@ -119,6 +120,8 @@ Complete index of all operational scripts and commands in ai-ops-runner. This do
 | `openclaw-guard.timer` | Regression guard | every 10 min |
 | `openclaw-doctor.timer` | Health check | hourly |
 | `openclaw-nightly.timer` | Nightly maintenance | daily |
+| `openclaw-hostd-watchdog.timer` | hostd auto-heal (probe /health, restart on fail) | every 60s |
+| `openclaw-executor-watchdog.timer` | hostd + console→hostd connectivity | every 2.5 min |
 | `ai-ops-runner.service` | Runner stack | always |
 | `ai-ops-runner-health.timer` | Runner health | periodic |
 

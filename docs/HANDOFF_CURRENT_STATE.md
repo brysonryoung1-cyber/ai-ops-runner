@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-2026-02-17 (Soma connectors UI + guard)
+2026-02-23 (hostd auto-heal + watchdog)
 
 ## Status
 
@@ -49,6 +49,7 @@ Docker smoke test passing. Full ops/review/ship framework active. ORB integratio
 | Heal | One-command entrypoint | `ops/openclaw_heal.sh` |
 | **Soma Kajabi Sync** | Active (on-demand) | `services/soma_kajabi_sync/` |
 | **SMS Commands** | Active (Twilio) | `ops/openclaw_sms.sh` |
+| **hostd auto-heal** | 60s watchdog (probe /health, restart on fail) | `ops/hostd_watchdog.sh`, `openclaw-hostd-watchdog.timer` |
 | Artifacts | `./artifacts/<job_id>/` | Per-job output directories |
 | Soma Artifacts | `./artifacts/soma/<run_id>/` | Snapshots, manifests, reports |
 
@@ -63,6 +64,13 @@ Docker smoke test passing. Full ops/review/ship framework active. ORB integratio
 7. Key health (OpenAI masked fingerprint, Pushover)
 8. Console bind verification
 9. Guard timer health (active + recent PASS/FAIL entries)
+
+### hostd Auto-Heal
+
+- **Watchdog**: `openclaw-hostd-watchdog.timer` runs every 60s via `ops/hostd_watchdog.sh`
+- Probes `http://127.0.0.1:8877/health`; on failure → `systemctl restart openclaw-hostd`
+- Logs to journald (tag: `openclaw-hostd-watchdog`): `journalctl -t openclaw-hostd-watchdog`
+- Verify from HQ: `GET /api/host-executor/status` returns `hostd_status: "up"` when reachable, `hostd_status: "down"` + `error_class: "HOSTD_UNREACHABLE"` when down
 
 ### Guard Behavior
 

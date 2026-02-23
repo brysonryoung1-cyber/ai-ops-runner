@@ -142,6 +142,7 @@ export async function GET(req: NextRequest) {
       payload.error_class = "HOSTD_UNREACHABLE";
       payload.message_redacted = messageRedacted;
     }
+    (payload as Record<string, unknown>).hostd_status = result.ok ? "up" : "down";
     return NextResponse.json(payload, { status: result.ok ? 200 : 502 });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -158,6 +159,7 @@ export async function GET(req: NextRequest) {
         last_error_redacted: msg.includes("timed out") ? "Host Executor unreachable (timeout)" : "[REDACTED]",
         error_class: "HOSTD_TIMEOUT",
         message_redacted: msg.includes("timed out") ? "Host Executor unreachable (timeout)" : "[REDACTED]",
+        hostd_status: "down",
       },
       { status: 502 }
     );

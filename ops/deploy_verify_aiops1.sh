@@ -76,9 +76,13 @@ sudo systemctl is-active openclaw-hostd 2>/dev/null || true
 sudo systemctl is-enabled openclaw-hostd 2>/dev/null || true
 DELIV_WATCHDOG_TIMER_ACTIVE="$(sudo systemctl is-active openclaw-executor-watchdog.timer 2>/dev/null || echo "unknown")"
 DELIV_WATCHDOG_ENABLED="$(sudo systemctl is-enabled openclaw-executor-watchdog.timer 2>/dev/null || echo "unknown")"
+DELIV_HOSTD_WATCHDOG_ACTIVE="$(sudo systemctl is-active openclaw-hostd-watchdog.timer 2>/dev/null || echo "unknown")"
 sudo systemctl is-active openclaw-executor-watchdog.timer 2>/dev/null || true
 sudo systemctl is-enabled openclaw-executor-watchdog.timer 2>/dev/null || true
+sudo systemctl is-active openclaw-hostd-watchdog.timer 2>/dev/null || true
+sudo systemctl is-enabled openclaw-hostd-watchdog.timer 2>/dev/null || true
 sudo systemctl status openclaw-executor-watchdog.timer --no-pager 2>/dev/null || true
+sudo systemctl status openclaw-hostd-watchdog.timer --no-pager 2>/dev/null || true
 sudo tail -40 /var/lib/ai-ops-runner/executor_watchdog/watchdog.log 2>/dev/null || true
 DELIV_WATCHDOG_LAST_LOG="$(sudo tail -15 /var/lib/ai-ops-runner/executor_watchdog/watchdog.log 2>/dev/null | sed 's/^/  /' || echo "  (no log)")"
 
@@ -110,7 +114,7 @@ AUTH_STATUS="$(curl -sS "$BASE/api/auth/status" 2>/dev/null || echo '{}')"
 echo "$AUTH_STATUS" | jq '{ ok, host_executor_reachable, admin_token_loaded, trust_tailscale, notes }' 2>/dev/null || true
 DELIV_HOST_EXECUTOR_REACHABLE="$(echo "$AUTH_STATUS" | jq -r '.host_executor_reachable // "unknown"')"
 HOST_EXEC_STATUS="$(curl -sS "$BASE/api/host-executor/status" 2>/dev/null || echo '{}')"
-echo "$HOST_EXEC_STATUS" | jq '{ ok, console_can_reach_hostd, console_network_mode, executor_url, last_success_at, last_failure_at, error_class, message_redacted }' 2>/dev/null || true
+echo "$HOST_EXEC_STATUS" | jq '{ ok, hostd_status, console_can_reach_hostd, console_network_mode, executor_url, last_success_at, last_failure_at, error_class, message_redacted }' 2>/dev/null || true
 DELIV_HOST_EXECUTOR_STATUS_JSON="$HOST_EXEC_STATUS"
 curl -sS -i "$BASE/api/autopilot/status" 2>/dev/null | head -n 25 || true
 
@@ -198,6 +202,6 @@ echo "- apply run_id: $DELIV_APPLY_RUN_ID"
 echo "- apply status + exit_code: $DELIV_APPLY_STATUS + $DELIV_APPLY_EXIT_CODE"
 echo "- apply error_summary (if any): $DELIV_APPLY_ERROR_SUMMARY"
 echo "- apply artifact link + stderr.txt exists when failing: $DELIV_APPLY_ARTIFACT_LINK  stderr_exists=$DELIV_APPLY_STDERR_EXISTS"
-echo "- watchdog status (timer active + last log lines): timer_active=$DELIV_WATCHDOG_TIMER_ACTIVE  enabled=$DELIV_WATCHDOG_ENABLED"
+echo "- watchdog status (timer active + last log lines): executor_timer=$DELIV_WATCHDOG_TIMER_ACTIVE  hostd_timer=$DELIV_HOSTD_WATCHDOG_ACTIVE  enabled=$DELIV_WATCHDOG_ENABLED"
 echo "$DELIV_WATCHDOG_LAST_LOG"
 echo "--- END DELIVERABLES ---"
