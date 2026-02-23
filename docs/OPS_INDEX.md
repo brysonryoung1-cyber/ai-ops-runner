@@ -85,6 +85,13 @@ Complete index of all operational scripts and commands in ai-ops-runner. This do
 | `ops/autoheal_codex.sh` | Auto-fix blockers from verdict |
 | `ops/openclaw_codex_review.sh` | Automated diff-only review via OpenAI API |
 
+## Kajabi Exit Node (Laptop Mode)
+
+| Script | Description |
+|--------|-------------|
+| `ops/with_exit_node.sh [EXIT_NODE] -- COMMAND` | Temporarily use Tailscale exit node for Kajabi runs; ALWAYS restores. Reads from `KAJABI_EXIT_NODE` or `/etc/ai-ops-runner/config/soma_kajabi_exit_node.txt` |
+| `ops/what_is_my_ip.sh` | Show public egress IP (for exit-node proof) |
+
 ## Runner & Jobs
 
 | Script | Description |
@@ -140,6 +147,7 @@ All tests run hermetically (no network, no real secrets).
 | `ops/tests/openclaw_notify_selftest.sh` | Notifications + rate limiting |
 | `ops/tests/openclaw_console_auth_selftest.sh` | Console auth + allowlist |
 | `ops/tests/openclaw_hq_selftest.sh` | HQ schema + run recorder + UI guard |
+| `ops/tests/with_exit_node_selftest.sh` | Exit node wrapper (fail-closed, trap) |
 | `ops/tests/openclaw_codex_review_selftest.sh` | Automated review pipeline |
 | `ops/tests/openclaw_vps_deploy_selftest.sh` | VPS deploy (mocked SSH, fail-closed) |
 | `ops/tests/review_bundle_selftest.sh` | Review bundle generation |

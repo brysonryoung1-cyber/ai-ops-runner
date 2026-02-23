@@ -96,14 +96,14 @@
       "label": "Kajabi Snapshot Debug",
       "project_id": "soma_kajabi",
       "timeout_sec": 180,
-      "cmd_template": "cd ${ROOT_DIR} && ${ROOT_DIR}/.venv-hostd/bin/python -m services.soma_kajabi.snapshot_debug_runner"
+      "cmd_template": "cd ${ROOT_DIR} && ./ops/with_exit_node.sh -- ${ROOT_DIR}/.venv-hostd/bin/python -m services.soma_kajabi.snapshot_debug_runner"
     },
     {
       "id": "soma_kajabi_discover",
       "label": "Kajabi Discover (Soma)",
       "project_id": "soma_kajabi",
       "timeout_sec": 180,
-      "cmd_template": "cd ${ROOT_DIR} && ${ROOT_DIR}/.venv-hostd/bin/python ./ops/scripts/kajabi_discover.py"
+      "cmd_template": "cd ${ROOT_DIR} && ./ops/with_exit_node.sh -- ${ROOT_DIR}/.venv-hostd/bin/python ./ops/scripts/kajabi_discover.py"
     },
     {
       "id": "soma_kajabi_capture_interactive",
@@ -117,7 +117,7 @@
       "label": "Soma Unblock and Run (Discover\u2192Snapshot\u2192Phase0\u2192Finish)",
       "project_id": "soma_kajabi",
       "timeout_sec": 900,
-      "cmd_template": "cd ${ROOT_DIR} && ${ROOT_DIR}/.venv-hostd/bin/python ./ops/scripts/soma_kajabi_unblock_and_run.py"
+      "cmd_template": "cd ${ROOT_DIR} && ./ops/with_exit_node.sh -- ${ROOT_DIR}/.venv-hostd/bin/python ./ops/scripts/soma_kajabi_unblock_and_run.py"
     },
     {
       "id": "soma_zane_finish_plan",
