@@ -153,9 +153,10 @@ echo ""
 # --- Step 2c: Install Kajabi interactive capture deps (Xvfb, x11vnc, websockify) ---
 echo "==> Step 2c: Install Kajabi interactive deps"
 if [ -f "$SCRIPT_DIR/install_kajabi_interactive_deps.sh" ]; then
-  if ! "$SCRIPT_DIR/install_kajabi_interactive_deps.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/kajabi_deps_install.log"; then
-    write_fail "kajabi_deps_install" "kajabi_deps_install_failed" "Fix install_kajabi_interactive_deps.sh and re-run deploy" "artifacts/deploy/$RUN_ID/kajabi_deps_install.log"
-    exit 2
+  if ! bash "$SCRIPT_DIR/install_kajabi_interactive_deps.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/kajabi_deps_install.log"; then
+    echo "  WARNING: Kajabi interactive deps failed (non-fatal; noVNC may be unavailable if Cloudflare blocks)" >&2
+  else
+    echo "  Kajabi interactive deps: PASS"
   fi
 else
   echo "  (install_kajabi_interactive_deps.sh not found — skip)"
