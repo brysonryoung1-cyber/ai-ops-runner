@@ -164,7 +164,7 @@ if [ -f "docker-compose.console.yml" ]; then
   export OPENCLAW_ADMIN_TOKEN="${ADMIN_TOKEN}"
   AIOPS_HOST="$(tailscale ip -4 2>/dev/null | head -n1 | tr -d '[:space:]')"
   [ -n "$AIOPS_HOST" ] && export AIOPS_HOST
-  if ! docker compose -f docker-compose.yml -f docker-compose.console.yml build openclaw_console 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/console_build.log"; then
+  if ! OPENCLAW_BUILD_SHA="$GIT_HEAD" docker compose -f docker-compose.yml -f docker-compose.console.yml build --build-arg OPENCLAW_BUILD_SHA="$GIT_HEAD" openclaw_console 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/console_build.log"; then
     echo "console_build_failed" >"$DEPLOY_ARTIFACT_DIR/console_build_failed"
     # --- Diagnostic probe: capture toolchain info from the builder base image ---
     PROBE_IMG="$(grep -m1 'FROM node:' apps/openclaw-console/Dockerfile | awk '{print $2}' 2>/dev/null || echo 'node:20-alpine')"
@@ -263,6 +263,23 @@ if [ "$DOD_HTTP" != "200" ]; then
   exit 2
 fi
 echo "  Console route gate: PASS (/api/ai-status ok:true, /api/dod/last 200)"
+echo ""
+
+# --- Step 5a2: build_sha consistency (deploy proof) ---
+STEP="build_sha_verify"
+echo "==> Step 5a2: Verify health_public.build_sha == git HEAD"
+HEALTH_JSON="$(curl -sf --connect-timeout 5 --max-time 10 "$ROUTE_BASE/api/ui/health_public" 2>/dev/null)" || true
+if [ -z "$HEALTH_JSON" ]; then
+  write_fail "$STEP" "health_public_unreachable" "Console /api/ui/health_public unreachable" "artifacts/deploy/$RUN_ID/verify.log"
+  exit 2
+fi
+BUILD_SHA="$(echo "$HEALTH_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('build_sha',''))" 2>/dev/null)" || BUILD_SHA=""
+if [ "$BUILD_SHA" != "$GIT_HEAD" ]; then
+  echo "  FAIL: build_sha=$BUILD_SHA != GIT_HEAD=$GIT_HEAD (console image not rebuilt)" >&2
+  write_fail "$STEP" "build_sha_mismatch" "Console build_sha ($BUILD_SHA) != deploy SHA ($GIT_HEAD). Rebuild console: docker compose -f docker-compose.yml -f docker-compose.console.yml build --no-cache openclaw_console" "artifacts/deploy/$RUN_ID/verify.log"
+  exit 2
+fi
+echo "  build_sha == deploy_sha == $GIT_HEAD: PASS"
 echo ""
 
 # --- Step 5b: Definition-of-Done (executable DoD; fail deploy if any check fails) ---

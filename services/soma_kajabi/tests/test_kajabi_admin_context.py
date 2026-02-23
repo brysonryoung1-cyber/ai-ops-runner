@@ -85,4 +85,7 @@ def test_cloudflare_not_login():
 
     cf_content = "<html><title>Attention Required! | Cloudflare</title><body>Sorry, you have been blocked</body></html>"
     assert _is_cloudflare_blocked(cf_content) is True
+    assert _is_cloudflare_blocked("", title="Attention Required! | Cloudflare") is True
+    assert _is_cloudflare_blocked("Sorry, you have been blocked", title="Cloudflare") is True
+    assert _is_cloudflare_blocked("normal page", title="Kajabi Admin") is False
     assert _is_login_page("https://app.kajabi.com/login", cf_content) is False

@@ -16,6 +16,8 @@ services:
     build:
       context: ./apps/openclaw-console
       dockerfile: Dockerfile
+      args:
+        OPENCLAW_BUILD_SHA: ${OPENCLAW_BUILD_SHA:-unknown}
     network_mode: host
     environment:
       PORT: "8787"

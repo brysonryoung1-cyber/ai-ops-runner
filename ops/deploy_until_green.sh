@@ -20,7 +20,7 @@ DEPLOY_DIR="$ARTIFACTS_DIR/deploy"
 DOD_DIR="$ARTIFACTS_DIR/dod"
 
 # Error classes that require code fix — do NOT retry. Joinable 409 (ALREADY_RUNNING/doctor 409) is retryable.
-FAIL_CLOSED_CLASSES="console_build_failed|missing_route_dod_last|docker_compose_failed|console_compose_failed|update_state_failed|update_state_missing|verification_failed|git_fetch_failed|hostd_install_failed|deploy_lock_held|deploy_script_contains_push|push_capability_detected"
+FAIL_CLOSED_CLASSES="console_build_failed|missing_route_dod_last|build_sha_mismatch|health_public_unreachable|docker_compose_failed|console_compose_failed|update_state_failed|update_state_missing|verification_failed|git_fetch_failed|hostd_install_failed|deploy_lock_held|deploy_script_contains_push|push_capability_detected"
 # dod_failed is fail-closed UNLESS subclass is joinable 409 (then retry)
 
 write_triage() {

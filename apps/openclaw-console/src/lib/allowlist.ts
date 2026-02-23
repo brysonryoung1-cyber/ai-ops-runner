@@ -31,6 +31,8 @@ export type ActionName =
   | "soma_kajabi_phase0"
   | "soma_kajabi_snapshot_debug"
   | "soma_kajabi_discover"
+  | "soma_kajabi_capture_interactive"
+  | "soma_kajabi_unblock_and_run"
   | "soma_zane_finish_plan"
   | "orb.backtest.bulk"
   | "orb.backtest.confirm_nt8"
@@ -244,6 +246,24 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     remoteCommand:
       "cd /opt/ai-ops-runner && /opt/ai-ops-runner/.venv-hostd/bin/python ./ops/scripts/kajabi_discover.py",
     timeoutSec: 180,
+  },
+  soma_kajabi_capture_interactive: {
+    name: "soma_kajabi_capture_interactive",
+    label: "Kajabi Interactive Capture (Cloudflare Unblock)",
+    description:
+      "Headed browser over Tailscale-only noVNC. Human completes Cloudflare check, then exports storage_state. Run when discover returns KAJABI_CLOUDFLARE_BLOCKED.",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && /opt/ai-ops-runner/.venv-hostd/bin/python ./ops/scripts/kajabi_capture_interactive.py",
+    timeoutSec: 1320,
+  },
+  soma_kajabi_unblock_and_run: {
+    name: "soma_kajabi_unblock_and_run",
+    label: "Soma Unblock and Run",
+    description:
+      "Try discover; if Cloudflare blocked, run capture_interactive then rerun discover → snapshot_debug → phase0 → finish_plan.",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && /opt/ai-ops-runner/.venv-hostd/bin/python ./ops/scripts/soma_kajabi_unblock_and_run.py",
+    timeoutSec: 900,
   },
   soma_zane_finish_plan: {
     name: "soma_zane_finish_plan",
