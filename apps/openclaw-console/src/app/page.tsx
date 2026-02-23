@@ -97,9 +97,14 @@ function deriveStatus(result?: ExecResult, loading?: boolean): CardStatus {
   return result.ok ? "pass" : "fail";
 }
 
-function parseDoctorSummary(stdout: string): string {
-  // Try to extract the final summary line like "Doctor: 8/8 checks passed"
-  const lines = stdout.split("\n");
+/** Null-safe split: returns [] if value is not a string. */
+function safeSplit(value: unknown, sep: string): string[] {
+  if (typeof value !== "string") return [];
+  return value.split(sep);
+}
+
+function parseDoctorSummary(stdout: string | undefined): string {
+  const lines = safeSplit(stdout, "\n");
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim();
     if (line.includes("checks passed") || line.includes("PASS") || line.includes("FAIL")) {
@@ -109,9 +114,9 @@ function parseDoctorSummary(stdout: string): string {
   return "";
 }
 
-function parsePortSummary(stdout: string): { lines: string[]; sshBind: string } {
-  const raw = stdout.replace(/\x1b\[[0-9;]*m/g, "");
-  const lines = raw.split("\n").filter((l) => l.trim() && l.includes(":22 "));
+function parsePortSummary(stdout: string | undefined): { lines: string[]; sshBind: string } {
+  const raw = typeof stdout === "string" ? stdout.replace(/\x1b\[[0-9;]*m/g, "") : "";
+  const lines = safeSplit(raw, "\n").filter((l) => l.trim() && l.includes(":22 "));
   const sshLine = lines.find((l) => l.includes("sshd") || l.includes(":22"));
   const sshBind = sshLine
     ? sshLine.includes("0.0.0.0")
@@ -123,8 +128,8 @@ function parsePortSummary(stdout: string): { lines: string[]; sshBind: string } 
   return { lines, sshBind };
 }
 
-function parseTimerStatus(stdout: string): string {
-  const raw = stdout.replace(/\x1b\[[0-9;]*m/g, "");
+function parseTimerStatus(stdout: string | undefined): string {
+  const raw = typeof stdout === "string" ? stdout.replace(/\x1b\[[0-9;]*m/g, "") : "";
   if (raw.includes("active (waiting)")) return "Active (waiting)";
   if (raw.includes("active (running)")) return "Active (running)";
   if (raw.includes("inactive")) return "Inactive";
@@ -132,17 +137,17 @@ function parseTimerStatus(stdout: string): string {
   return "Unknown";
 }
 
-function parseDockerStatus(stdout: string): string {
-  const raw = stdout.replace(/\x1b\[[0-9;]*m/g, "");
+function parseDockerStatus(stdout: string | undefined): string {
+  const raw = typeof stdout === "string" ? stdout.replace(/\x1b\[[0-9;]*m/g, "") : "";
   if (raw.includes("Docker") && raw.includes("PASS")) return "Healthy";
   if (raw.includes("Docker") && raw.includes("FAIL")) return "Unhealthy";
   return "—";
 }
 
 /** Extract the last N lines from a string. */
-function lastNLines(text: string, n: number): string {
-  const raw = text.replace(/\x1b\[[0-9;]*m/g, "");
-  const lines = raw.split("\n").filter((l) => l.trim());
+function lastNLines(text: string | undefined, n: number): string {
+  const raw = typeof text === "string" ? text.replace(/\x1b\[[0-9;]*m/g, "") : "";
+  const lines = safeSplit(raw, "\n").filter((l) => l.trim());
   return lines.slice(-n).join("\n");
 }
 
@@ -630,7 +635,7 @@ export default function OverviewPage() {
         >
           {doctorResult && (
             <CollapsibleOutput
-              output={doctorResult.stdout.replace(/\x1b\[[0-9;]*m/g, "") + (doctorResult.stderr ? "\n" + doctorResult.stderr : "")}
+              output={(doctorResult.stdout ?? "").replace(/\x1b\[[0-9;]*m/g, "") + (doctorResult.stderr ? "\n" + (doctorResult.stderr ?? "") : "")}
               label="Full doctor output"
             />
           )}
@@ -653,7 +658,7 @@ export default function OverviewPage() {
         >
           {portsResult && (
             <CollapsibleOutput
-              output={portsResult.stdout.replace(/\x1b\[[0-9;]*m/g, "")}
+              output={(portsResult.stdout ?? "").replace(/\x1b\[[0-9;]*m/g, "")}
               label="Full port listing"
             />
           )}
@@ -676,7 +681,7 @@ export default function OverviewPage() {
         >
           {timerResult && (
             <CollapsibleOutput
-              output={timerResult.stdout.replace(/\x1b\[[0-9;]*m/g, "") + (timerResult.stderr ? "\n" + timerResult.stderr : "")}
+              output={(timerResult.stdout ?? "").replace(/\x1b\[[0-9;]*m/g, "") + (timerResult.stderr ? "\n" + (timerResult.stderr ?? "") : "")}
               label="Timer details"
             />
           )}
