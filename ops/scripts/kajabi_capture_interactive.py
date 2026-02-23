@@ -29,6 +29,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Use bootstrap flow (Kajabi admin → sites → products) to avoid 404 on direct /admin/products
+KAJABI_ADMIN = "https://app.kajabi.com/admin"
+KAJABI_SITES = "https://app.kajabi.com/admin/sites"
 KAJABI_PRODUCTS_URL = "https://app.kajabi.com/admin/products"
 STORAGE_STATE_PATH = Path("/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json")
 TARGET_PRODUCTS = ["Home User Library", "Practitioner Library"]
@@ -346,6 +349,17 @@ def main() -> int:
                 browser = p.chromium.launch(headless=False, env=env)
                 context = browser.new_context()
                 page = context.new_page()
+                # Bootstrap: admin → sites (establishes session/site context) → products
+                page.goto(KAJABI_ADMIN, wait_until="domcontentloaded", timeout=60000)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=15000)
+                except Exception:
+                    pass
+                page.goto(KAJABI_SITES, wait_until="domcontentloaded", timeout=60000)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=15000)
+                except Exception:
+                    pass
                 page.goto(KAJABI_PRODUCTS_URL, wait_until="domcontentloaded", timeout=60000)
                 start = time.time()
                 while time.time() - start < TIMEOUT_SEC:
