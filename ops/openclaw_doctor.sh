@@ -135,8 +135,9 @@ echo "--- Public Port Audit ---"
 #   1. 127.0.0.0/8 / ::1       → always allowed (loopback — includes systemd-resolve etc.)
 #   2. 100.64.0.0/10            → PRIVATE (tailnet); allowed for any process
 #   3. tailscaled / tailscale   → allowed on any address (DERP relay, etc.)
-#   4. sshd on 0.0.0.0 / ::    → FAIL (must bind to tailnet IP only)
-#   5. Any other on 0.0.0.0/:: → FAIL
+#   4. websockify on :6080      → allowed (noVNC; UFW restricts to Tailscale CIDR)
+#   5. sshd on 0.0.0.0 / ::    → FAIL (must bind to tailnet IP only)
+#   6. Any other on 0.0.0.0/::  → FAIL
 if command -v ss >/dev/null 2>&1; then
   PORT_RESULT="$(ss -tlnp 2>/dev/null | python3 -c "
 import sys, re
@@ -204,6 +205,10 @@ for line in sys.stdin:
         continue
 
     if proc in ('tailscaled', 'tailscale'):
+        continue
+
+    # websockify on 6080: UFW restricts to Tailscale CIDR (ufw_novnc_tailscale_only.sh); allowed
+    if proc == 'websockify' and port == '6080':
         continue
 
     # Any remaining address is a violation (wildcard 0.0.0.0/:: or specific public IP)
