@@ -12,9 +12,24 @@ cd "$ROOT_DIR"
 
 echo "==> install_kajabi_interactive_deps.sh (idempotent)"
 
+# Install only packages that are not already present to avoid version drift on reruns.
+apt_install_if_missing() {
+  local missing=()
+  local pkg
+  for pkg in "$@"; do
+    if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+      missing+=("$pkg")
+    fi
+  done
+  if [ "${#missing[@]}" -eq 0 ]; then
+    return 0
+  fi
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+}
+
 # apt: Xvfb, x11vnc; Chromium runtime deps (Playwright headed mode): libnss3, fonts
 apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+apt_install_if_missing \
   xvfb \
   x11vnc \
   python3-websockify \
@@ -35,8 +50,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   fonts-noto-core
 
 # libasound2: Ubuntu 24.04 uses libasound2t64
-apt-get install -y --no-install-recommends libasound2t64 2>/dev/null || \
-  apt-get install -y --no-install-recommends libasound2 2>/dev/null || true
+apt_install_if_missing libasound2t64 2>/dev/null || \
+  apt_install_if_missing libasound2 2>/dev/null || true
 
 # websockify: prefer apt python3-websockify; pip fallback is opt-in and must be pinned
 if ! command -v websockify >/dev/null 2>&1 && ! python3 -c "import websockify" 2>/dev/null; then
