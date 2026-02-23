@@ -29,6 +29,7 @@ TARGET_PRODUCTS = ["Home User Library", "Practitioner Library"]
 
 # Error classes (replace KAJABI_WRONG_SITE_OR_PERMISSIONS)
 KAJABI_SESSION_EXPIRED = "KAJABI_SESSION_EXPIRED"
+KAJABI_CLOUDFLARE_BLOCKED = "KAJABI_CLOUDFLARE_BLOCKED"
 KAJABI_ADMIN_404_AFTER_BOOTSTRAP = "KAJABI_ADMIN_404_AFTER_BOOTSTRAP"
 KAJABI_PRODUCTS_PAGE_NO_MATCH = "KAJABI_PRODUCTS_PAGE_NO_MATCH"
 
@@ -58,8 +59,16 @@ class BootstrapResult:
     artifact_path: str | None = None
 
 
+def _is_cloudflare_blocked(content: str) -> bool:
+    """Detect Cloudflare block (not session expiry)."""
+    content_lower = (content or "").lower()[:8192]
+    return "cloudflare" in content_lower and ("blocked" in content_lower or "attention required" in content_lower)
+
+
 def _is_login_page(url: str, content: str) -> bool:
-    """Detect login/sign-in page."""
+    """Detect login/sign-in page. Excludes Cloudflare block (check first)."""
+    if _is_cloudflare_blocked(content or ""):
+        return False  # Cloudflare block, not login
     url_lower = url.lower()
     if "/login" in url_lower or "sign_in" in url_lower or "sign-in" in url_lower:
         return True
@@ -219,7 +228,35 @@ def ensure_kajabi_soma_admin_context(
     screenshot_path, html_excerpt = _screenshot_and_html("attempt1_kajabi_sites")
     _capture_attempt(KAJABI_SITES, final_url, title, admin_404, login_detected, screenshot_path, html_excerpt)
 
+    content_check = (html_excerpt or "") + (page.content()[:8192] if hasattr(page, "content") else "")
+    if _is_cloudflare_blocked(content_check):
+        _write_bootstrap_artifact(
+            out_dir, attempts, KAJABI_CLOUDFLARE_BLOCKED,
+            "Cloudflare blocking headless browser. Run capture on machine with human browser, or use headed mode.",
+        )
+        return BootstrapResult(
+            ok=False,
+            error_class=KAJABI_CLOUDFLARE_BLOCKED,
+            recommended_next_action="Cloudflare blocking headless browser. Run capture on machine with human browser, or use headed mode.",
+            attempts=attempts,
+            artifact_path=str(out_dir / "bootstrap_failure.json"),
+        )
+
     if login_detected:
+        content_for_check = (html_excerpt or "") + (page.content()[:8192] if hasattr(page, "content") else "")
+        if _is_cloudflare_blocked(content_for_check):
+            _write_bootstrap_artifact(
+                out_dir, attempts, KAJABI_CLOUDFLARE_BLOCKED,
+                "Cloudflare blocking headless browser. Run capture on machine with human browser, or use headed mode.",
+            )
+            return BootstrapResult(
+                ok=False,
+                error_class=KAJABI_CLOUDFLARE_BLOCKED,
+                recommended_next_action="Cloudflare blocking headless browser. Run capture on machine with human browser, or use headed mode.",
+                login_detected=False,
+                attempts=attempts,
+                artifact_path=str(out_dir / "bootstrap_failure.json"),
+            )
         _write_bootstrap_artifact(
             out_dir, attempts, KAJABI_SESSION_EXPIRED,
             "Complete Kajabi login + 2FA once on aiops-1 capture flow.",
