@@ -151,9 +151,14 @@ except Exception:
 }
 trap _restore_exit_node EXIT
 
-# Enable exit node
-if ! tailscale up --exit-node="$EXIT_NODE" --exit-node-allow-lan-access=false --accept-routes 2>/dev/null; then
-  _fail_closed "EXIT_NODE_ENABLE_FAILED" "Failed to set exit node to $EXIT_NODE"
+# Enable exit node (--exit-node expects IP or short hostname, not full MagicDNS)
+# Try short name if value looks like MagicDNS (contains .tail)
+EXIT_NODE_ARG="$EXIT_NODE"
+if [[ "$EXIT_NODE" == *".tail"* ]]; then
+  EXIT_NODE_ARG="${EXIT_NODE%%.*}"
+fi
+if ! tailscale up --exit-node="$EXIT_NODE_ARG" --exit-node-allow-lan-access=false --accept-routes 2>/dev/null; then
+  _fail_closed "EXIT_NODE_ENABLE_FAILED" "Failed to set exit node. Approve exit node for $EXIT_NODE_ARG in Tailscale Admin → Machines → Edit route settings → Use as exit node."
 fi
 _log "EXIT_NODE_ENABLED=$EXIT_NODE"
 
