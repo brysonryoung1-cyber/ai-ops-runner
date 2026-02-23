@@ -41,7 +41,6 @@ ExecStart=$VENV_PYTHON $ROOT_DIR/ops/openclaw_hostd.py
 WorkingDirectory=$ROOT_DIR
 Restart=on-failure
 RestartSec=2
-StartLimitIntervalSec=0
 TimeoutStartSec=10
 TimeoutStopSec=10
 
