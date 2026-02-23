@@ -162,6 +162,19 @@ else
 fi
 echo ""
 
+# --- Step 2d: noVNC firewall (port 6080 Tailscale-only) ---
+echo "==> Step 2d: noVNC firewall (Tailscale-only)"
+if [ -f "$SCRIPT_DIR/ufw_novnc_tailscale_only.sh" ]; then
+  if sudo "$SCRIPT_DIR/ufw_novnc_tailscale_only.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/ufw_novnc.log"; then
+    echo "  noVNC firewall: PASS"
+  else
+    echo "  WARNING: ufw_novnc_tailscale_only.sh failed (non-fatal; noVNC may still work if ufw allows tailscale0)" >&2
+  fi
+else
+  echo "  (ufw_novnc_tailscale_only.sh not found — skip)"
+fi
+echo ""
+
 # --- Step 3a: Explicit console build (fail-closed; no || true bypass) ---
 if [ -f "docker-compose.console.yml" ]; then
   STEP="console_build"

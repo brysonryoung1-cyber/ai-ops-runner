@@ -2,9 +2,9 @@
 """Kajabi interactive capture — headed browser over Tailscale-only noVNC.
 
 When Playwright hits Cloudflare block, this action starts a headed Chromium session
-in Xvfb, exposes it via noVNC (bound to 127.0.0.1/Tailscale only), and waits for
-a human to complete the Cloudflare check/login. Then exports storage_state and
-reruns discover.
+in Xvfb, exposes it via noVNC (bound to 0.0.0.0 or Tailscale IP; firewall restricts
+to 100.64.0.0/10), and waits for a human to complete the Cloudflare check/login.
+Then exports storage_state and reruns discover.
 
 Usage: Run on aiops-1. Requires: Xvfb, x11vnc, noVNC (or websockify).
   python3 ops/scripts/kajabi_capture_interactive.py
@@ -82,8 +82,27 @@ def _page_has_both_products(content: str) -> tuple[bool, list[str]]:
     return len(found) == len(TARGET_PRODUCTS), found
 
 
-def _get_tailscale_url() -> str:
-    """Get Tailscale-only URL for noVNC. Binds to 127.0.0.1; user accesses via tailscale serve."""
+NOVNC_PORT = 6080
+
+
+def _get_tailscale_ip() -> str:
+    """Get Tailscale IPv4 via tailscale ip -4. Prefer for binding."""
+    try:
+        out = subprocess.run(
+            ["tailscale", "ip", "-4"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip().split()[0]
+    except Exception:
+        pass
+    return ""
+
+
+def _get_tailscale_hostname() -> str:
+    """Get Tailscale hostname (e.g. aiops-1.tailc75c62.ts.net) from tailscale status --json."""
     try:
         out = subprocess.run(
             ["tailscale", "status", "--json"],
@@ -93,26 +112,29 @@ def _get_tailscale_url() -> str:
         )
         if out.returncode == 0:
             data = json.loads(out.stdout)
-            hostname = data.get("Self", {}).get("HostName") or data.get("Self", {}).get("DNSName")
-            if hostname:
-                return f"https://{hostname}/vnc (Tailscale only — ensure tailscale serve exposes /vnc)"
+            self_data = data.get("Self", {})
+            dns_name = (self_data.get("DNSName") or "").rstrip(".")
+            host_name = self_data.get("HostName") or ""
+            if dns_name and ".ts.net" in dns_name:
+                return dns_name
+            if host_name:
+                return host_name
     except Exception:
         pass
-    ip = ""
-    try:
-        out = subprocess.run(
-            ["tailscale", "ip", "-4"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-        if out.returncode == 0 and out.stdout.strip():
-            ip = out.stdout.strip().split()[0]
-    except Exception:
-        pass
+    return ""
+
+
+def _get_tailscale_url() -> str:
+    """Get Tailscale-only noVNC URL. Never emits 127.0.0.1."""
+    hostname = _get_tailscale_hostname()
+    ip = _get_tailscale_ip()
+    port = NOVNC_PORT
+    path = f"/vnc.html?autoconnect=1"
+    if hostname:
+        return f"http://{hostname}:{port}{path}"
     if ip:
-        return f"http://{ip}:6080/vnc.html (Tailscale only)"
-    return "http://127.0.0.1:6080/vnc.html (port-forward or tailscale serve)"
+        return f"http://{ip}:{port}{path}"
+    return f"http://<TAILSCALE_IP>:{port}{path} (run on aiops-1 with Tailscale)"
 
 
 def _ensure_xvfb_and_novnc(artifact_dir: Path) -> tuple[subprocess.Popen | None, subprocess.Popen | None, subprocess.Popen | None]:
@@ -162,11 +184,18 @@ def _ensure_xvfb_and_novnc(artifact_dir: Path) -> tuple[subprocess.Popen | None,
         )
         return xvfb_proc, None, None
 
-    # Start websockify (VNC -> WebSocket) — try noVNC's websockify or python -m websockify
-    for cmd in [
-        ["websockify", "127.0.0.1:6080", "127.0.0.1:5900"],
-        ["python3", "-m", "websockify", "127.0.0.1:6080", "127.0.0.1:5900"],
-    ]:
+    # Start websockify (VNC -> WebSocket) with noVNC web client if available.
+    # Bind to 0.0.0.0 or Tailscale IP so reachable over Tailscale; firewall restricts to 100.64.0.0/10.
+    bind_addr = _get_tailscale_ip() or "0.0.0.0"
+    bind_spec = f"{bind_addr}:{NOVNC_PORT}"
+    web_dir = "/usr/share/novnc" if (Path("/usr/share/novnc/vnc.html").exists()) else None
+    base_cmd = ["websockify", bind_spec, "127.0.0.1:5900"]
+    if web_dir:
+        base_cmd = ["websockify", "--web", web_dir, bind_spec, "127.0.0.1:5900"]
+    fallback_cmd = ["python3", "-m", "websockify", bind_spec, "127.0.0.1:5900"]
+    if web_dir:
+        fallback_cmd = ["python3", "-m", "websockify", "--web", web_dir, bind_spec, "127.0.0.1:5900"]
+    for cmd in [base_cmd, fallback_cmd]:
         try:
             novnc_proc = subprocess.Popen(
                 cmd,
@@ -183,8 +212,9 @@ def _ensure_xvfb_and_novnc(artifact_dir: Path) -> tuple[subprocess.Popen | None,
             continue
 
     if novnc_proc is None:
+        url = _get_tailscale_url()
         (artifact_dir / "instructions.txt").write_text(
-            "websockify not installed. Run: pip install websockify (or apt install novnc)"
+            f"websockify not installed. Run: pip install websockify (or apt install novnc). URL would be: {url}"
         )
         return xvfb_proc, x11vnc_proc, None
 
@@ -204,8 +234,9 @@ def main() -> int:
     xvfb_proc, x11vnc_proc, novnc_proc = _ensure_xvfb_and_novnc(out_dir)
     if novnc_proc is None:
         url = _get_tailscale_url()
-        instructions = f"Open {url} and complete Cloudflare/login, then return here. (noVNC stack failed to start; see instructions.txt)"
-        (out_dir / "instructions.txt").write_text(instructions)
+        (out_dir / "instructions.txt").write_text(
+            f"{url}\n(noVNC stack failed to start; install: apt install xvfb x11vnc novnc)"
+        )
         summary = {
             "ok": False,
             "error_class": "KAJABI_INTERACTIVE_CAPTURE_NO_VNC",
@@ -217,9 +248,8 @@ def main() -> int:
         return 1
 
     tailscale_url = _get_tailscale_url()
-    instructions = f"Open {tailscale_url} and complete Cloudflare/login, then return here"
-    (out_dir / "instructions.txt").write_text(instructions)
-    print(instructions, file=sys.stderr)
+    (out_dir / "instructions.txt").write_text(tailscale_url)
+    print(tailscale_url, file=sys.stderr)
 
     try:
         from playwright.sync_api import sync_playwright
