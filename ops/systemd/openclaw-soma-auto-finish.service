@@ -1,0 +1,13 @@
+[Unit]
+Description=OpenClaw Soma Kajabi Auto-Finish (daily)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai-ops-runner
+ExecStart=/opt/ai-ops-runner/ops/scripts/soma_kajabi_auto_finish_daily.sh
+Environment=OPENCLAW_REPO_ROOT=/opt/ai-ops-runner
+TimeoutStartSec=2100
+
+[Install]
+WantedBy=multi-user.target

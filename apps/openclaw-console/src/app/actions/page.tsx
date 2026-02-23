@@ -69,6 +69,13 @@ const ACTIONS: ActionDef[] = [
       "Read-only: Kajabi snapshot + Gmail harvest (Zane McCourtney, has:attachment) + video_manifest.csv",
     variant: "primary",
   },
+  {
+    action: "soma_kajabi_auto_finish",
+    label: "Auto-Finish Soma (Phase0 → Finish Plan)",
+    description:
+      "Runs connectors_status → Phase0 → Finish Plan automatically. Handles Cloudflare (noVNC). Produces single summary artifact.",
+    variant: "primary",
+  },
 ];
 
 const ORB_BACKTEST_ACTIONS: ActionDef[] = [

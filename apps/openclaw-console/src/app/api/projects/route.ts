@@ -1,6 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
 import { loadProjectRegistrySafe } from "@/lib/projects";
 import { getLastRunForProject } from "@/lib/run-recorder";
+
+type ProjectStateExt = { last_auto_finish_status?: "PASS" | "FAIL"; last_auto_finish_run_id?: string };
+
+function loadProjectStateProjects(): Record<string, ProjectStateExt> {
+  const repoRoot = process.env.OPENCLAW_REPO_ROOT || process.cwd();
+  const configPath = join(repoRoot, "config", "project_state.json");
+  if (!existsSync(configPath)) return {};
+  try {
+    const data = JSON.parse(readFileSync(configPath, "utf-8"));
+    const raw = data.projects ?? {};
+    return raw as Record<string, ProjectStateExt>;
+  } catch {
+    return {};
+  }
+}
 
 /**
  * GET /api/projects
@@ -25,9 +42,12 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Enrich each project with last run info
+  const stateProjects = loadProjectStateProjects();
+
+  // Enrich each project with last run info + project_state (e.g. last_auto_finish_*)
   const enriched = registry.projects.map((project) => {
     const lastRun = getLastRunForProject(project.id);
+    const stateProj = stateProjects[project.id];
     return {
       ...project,
       last_run: lastRun
@@ -40,6 +60,8 @@ export async function GET(req: NextRequest) {
             error_summary: lastRun.error_summary,
           }
         : null,
+      last_auto_finish_status: stateProj?.last_auto_finish_status,
+      last_auto_finish_run_id: stateProj?.last_auto_finish_run_id,
     };
   });
 
