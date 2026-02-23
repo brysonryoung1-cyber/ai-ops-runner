@@ -1,0 +1,31 @@
+[Unit]
+Description=OpenClaw noVNC (Xvfb + x11vnc + websockify) for Kajabi interactive capture
+After=network.target
+
+[Service]
+Type=simple
+# Fallback defaults (overridden by next.env when capture writes it)
+Environment=OPENCLAW_NOVNC_ARTIFACT_DIR=/run/openclaw-novnc
+Environment=OPENCLAW_NOVNC_PORT=6080
+Environment=OPENCLAW_NOVNC_DISPLAY=:99
+# Params from next.env (written by kajabi_capture_interactive.py before start)
+EnvironmentFile=-/run/openclaw-novnc/next.env
+
+ExecStart=/opt/ai-ops-runner/ops/novnc_supervisor.sh
+WorkingDirectory=/opt/ai-ops-runner
+Restart=always
+RestartSec=2
+TimeoutStartSec=15
+TimeoutStopSec=15
+
+# Clean shutdown: supervisor traps TERM and kills children
+KillMode=mixed
+KillSignal=SIGTERM
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openclaw-novnc
+
+[Install]
+# Not enabled by default; started on demand by kajabi_capture_interactive
+WantedBy=multi-user.target

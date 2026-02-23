@@ -57,7 +57,9 @@ def _repo_root() -> Path:
 def _artifact_dir() -> Path:
     env = os.environ.get("ARTIFACT_DIR")
     if env:
-        return Path(env)
+        p = Path(env)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
     root = _repo_root()
     run_id = f"capture_interactive_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
     out = root / "artifacts" / "soma_kajabi" / "capture_interactive" / run_id
@@ -129,12 +131,72 @@ def _get_tailscale_url() -> str:
     hostname = _get_tailscale_hostname()
     ip = _get_tailscale_ip()
     port = NOVNC_PORT
-    path = f"/vnc.html?autoconnect=1"
+    path = "/vnc.html?autoconnect=1"
     if hostname:
         return f"http://{hostname}:{port}{path}"
     if ip:
         return f"http://{ip}:{port}{path}"
     return f"http://<TAILSCALE_IP>:{port}{path} (run on aiops-1 with Tailscale)"
+
+
+def _write_instructions(artifact_dir: Path, url: str) -> None:
+    """Write instructions.txt with single clickable URL and reconnection guidance."""
+    text = f"{url}\nIf you get 'Failed to connect', refresh the page; the viewer auto-restarts."
+    (artifact_dir / "instructions.txt").write_text(text)
+
+
+def _start_novnc_systemd(artifact_dir: Path, run_id: str) -> bool:
+    """Start openclaw-novnc via systemd. Return True if reachable."""
+    env_dir = Path("/run/openclaw-novnc")
+    try:
+        env_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    env_file = env_dir / "next.env"
+    env_file.write_text(
+        f"OPENCLAW_NOVNC_RUN_ID={run_id}\n"
+        f"OPENCLAW_NOVNC_ARTIFACT_DIR={artifact_dir}\n"
+        f"OPENCLAW_NOVNC_PORT={NOVNC_PORT}\n"
+        f"OPENCLAW_NOVNC_DISPLAY=:99\n"
+    )
+    try:
+        subprocess.run(
+            ["systemctl", "stop", "openclaw-novnc"],
+            capture_output=True,
+            timeout=10,
+        )
+        subprocess.run(
+            ["systemctl", "start", "openclaw-novnc"],
+            check=True,
+            capture_output=True,
+            timeout=10,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+    # Wait for websockify port
+    for _ in range(30):
+        try:
+            import socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(2)
+            s.connect(("127.0.0.1", NOVNC_PORT))
+            s.close()
+            return True
+        except OSError:
+            time.sleep(1)
+    return False
+
+
+def _stop_novnc_systemd() -> None:
+    """Stop openclaw-novnc service."""
+    try:
+        subprocess.run(
+            ["systemctl", "stop", "openclaw-novnc"],
+            capture_output=True,
+            timeout=15,
+        )
+    except Exception:
+        pass
 
 
 def _ensure_xvfb_and_novnc(artifact_dir: Path) -> tuple[subprocess.Popen | None, subprocess.Popen | None, subprocess.Popen | None]:
@@ -227,15 +289,23 @@ def main() -> int:
         sys.path.insert(0, str(root))
 
     out_dir = _artifact_dir()
+    run_id = out_dir.name
     screenshots_dir = out_dir / "screenshots"
     screenshots_dir.mkdir(exist_ok=True)
 
-    # Start Xvfb + noVNC stack
-    xvfb_proc, x11vnc_proc, novnc_proc = _ensure_xvfb_and_novnc(out_dir)
-    if novnc_proc is None:
+    # Prefer systemd noVNC (supervised, auto-restart); fall back to legacy
+    use_systemd_novnc = False
+    xvfb_proc, x11vnc_proc, novnc_proc = None, None, None
+
+    if _start_novnc_systemd(out_dir, run_id):
+        use_systemd_novnc = True
+    else:
+        xvfb_proc, x11vnc_proc, novnc_proc = _ensure_xvfb_and_novnc(out_dir)
+
+    if not use_systemd_novnc and novnc_proc is None:
         url = _get_tailscale_url()
         (out_dir / "instructions.txt").write_text(
-            f"{url}\n(noVNC stack failed to start; install: apt install xvfb x11vnc novnc)"
+            f"{url}\n(noVNC stack failed; install: apt install xvfb x11vnc novnc)"
         )
         summary = {
             "ok": False,
@@ -248,7 +318,7 @@ def main() -> int:
         return 1
 
     tailscale_url = _get_tailscale_url()
-    (out_dir / "instructions.txt").write_text(tailscale_url)
+    _write_instructions(out_dir, tailscale_url)
     print(tailscale_url, file=sys.stderr)
 
     try:
@@ -341,14 +411,20 @@ def main() -> int:
             "message": "Capture thread did not complete",
         })
 
-    # Cleanup
-    for proc in [novnc_proc, x11vnc_proc, xvfb_proc]:
-        if proc and proc.poll() is None:
-            try:
-                proc.terminate()
-                proc.wait(timeout=5)
-            except Exception:
-                proc.kill()
+    # Cleanup: stop systemd unit or kill legacy procs (AFTER storage_state export in run_playwright)
+    if use_systemd_novnc:
+        _stop_novnc_systemd()
+    else:
+        for proc in [novnc_proc, x11vnc_proc, xvfb_proc]:
+            if proc and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
 
     summary = result_holder[0].copy()
     summary["artifact_dir"] = str(out_dir)
