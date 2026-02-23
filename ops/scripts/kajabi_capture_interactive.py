@@ -29,7 +29,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Use bootstrap flow (Kajabi admin → sites → products) to avoid 404 on direct /admin/products
+# Use bootstrap flow: admin → sites → click Soma → products (avoids 404 on direct /admin/products)
 KAJABI_ADMIN = "https://app.kajabi.com/admin"
 KAJABI_SITES = "https://app.kajabi.com/admin/sites"
 KAJABI_PRODUCTS_URL = "https://app.kajabi.com/admin/products"
@@ -349,7 +349,7 @@ def main() -> int:
                 browser = p.chromium.launch(headless=False, env=env)
                 context = browser.new_context()
                 page = context.new_page()
-                # Bootstrap: admin → sites (establishes session/site context) → products
+                # Bootstrap: admin → sites → click Soma → products (avoids 404)
                 page.goto(KAJABI_ADMIN, wait_until="domcontentloaded", timeout=60000)
                 try:
                     page.wait_for_load_state("networkidle", timeout=15000)
@@ -360,6 +360,22 @@ def main() -> int:
                     page.wait_for_load_state("networkidle", timeout=15000)
                 except Exception:
                     pass
+                # Click Soma site (matches kajabi_admin_context._try_click_soma_site)
+                try:
+                    link = page.get_by_role("link", name="Soma")
+                    if link.count() > 0:
+                        link.first.click()
+                        page.wait_for_load_state("load", timeout=15000)
+                except Exception:
+                    for sel in ["text=Soma", "text=zane-mccourtney", '[href*="zane-mccourtney"]']:
+                        try:
+                            el = page.query_selector(sel)
+                            if el and el.is_visible():
+                                el.click()
+                                page.wait_for_load_state("load", timeout=15000)
+                                break
+                        except Exception:
+                            pass
                 page.goto(KAJABI_PRODUCTS_URL, wait_until="domcontentloaded", timeout=60000)
                 start = time.time()
                 while time.time() - start < TIMEOUT_SEC:
