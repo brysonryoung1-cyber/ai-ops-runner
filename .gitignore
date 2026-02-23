@@ -17,6 +17,8 @@ venv/
 review_packets/
 .locks/
 ops/remote/
+ops/_tmp/
+ops/kajabi_state_export_summary.json
 # Ignore .cursor except rules (rule files must travel with repo)
 .cursor/*
 !.cursor/rules/
