@@ -271,7 +271,8 @@ To reduce Cloudflare challenges, aiops-1 can route Kajabi traffic through a Mac 
 Create on aiops-1:
 
 ```bash
-echo "brysons-macbook-pro.tailc75c62.ts.net" | sudo tee /etc/ai-ops-runner/config/soma_kajabi_exit_node.txt
+# Use short hostname (tailscale up --exit-node requires IP or unique node name, not full MagicDNS)
+echo "brysons-macbook-pro" | sudo tee /etc/ai-ops-runner/config/soma_kajabi_exit_node.txt
 ```
 
 Or set `KAJABI_EXIT_NODE` env (MagicDNS hostname or Tailscale IP).
