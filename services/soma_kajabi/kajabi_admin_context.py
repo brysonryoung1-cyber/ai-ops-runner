@@ -91,6 +91,40 @@ def _page_has_products(content: str, targets: list[str]) -> tuple[bool, list[str
     return len(found) > 0, found, missing
 
 
+def _try_click_soma_site(page: Any) -> None:
+    """Try to click the Soma site in the site picker. No-op if not found."""
+    selectors = [
+        'a:has-text("Soma")',
+        'a:has-text("zane-mccourtney")',
+        'button:has-text("Soma")',
+        '[role="link"]:has-text("Soma")',
+        '[data-testid*="site"]:has-text("Soma")',
+        'text=Soma',
+        'text=zane-mccourtney',
+        'text="Soma"',
+        '[href*="soma"], [href*="zane-mccourtney"]',
+        'div:has-text("Soma") >> a',
+        'tr:has-text("Soma") >> a',
+    ]
+    for sel in selectors:
+        try:
+            el = page.query_selector(sel)
+            if el and el.is_visible():
+                el.click()
+                page.wait_for_load_state("load", timeout=15000)
+                return
+        except Exception:
+            pass
+    # Try get_by_role / get_by_text (Playwright 1.20+)
+    try:
+        link = page.get_by_role("link", name="Soma")
+        if link.count() > 0:
+            link.first.click()
+            page.wait_for_load_state("load", timeout=15000)
+    except Exception:
+        pass
+
+
 def _try_navigate(page: Any, url: str, timeout: int = 30000) -> tuple[str, str, bool, bool]:
     """Navigate to url, return (final_url, title, admin_404, login_detected)."""
     try:
@@ -174,10 +208,16 @@ def ensure_kajabi_soma_admin_context(
             pass
         return path, html
 
-    # --- Attempt 1: SOMA_PRODUCTS directly ---
-    final_url, title, admin_404, login_detected = _try_navigate(page, SOMA_PRODUCTS)
-    screenshot_path, html_excerpt = _screenshot_and_html("attempt1_soma_products")
-    _capture_attempt(SOMA_PRODUCTS, final_url, title, admin_404, login_detected, screenshot_path, html_excerpt)
+    # --- Attempt 1: KAJABI_ADMIN (dashboard) then KAJABI_SITES (site picker) — admin is only at app.kajabi.com ---
+    # Land on dashboard first to establish session, then site picker to switch to Soma.
+    _try_navigate(page, KAJABI_ADMIN)
+    try:
+        page.wait_for_load_state("networkidle", timeout=10000)
+    except Exception:
+        page.wait_for_load_state("load", timeout=5000)
+    final_url, title, admin_404, login_detected = _try_navigate(page, KAJABI_SITES)
+    screenshot_path, html_excerpt = _screenshot_and_html("attempt1_kajabi_sites")
+    _capture_attempt(KAJABI_SITES, final_url, title, admin_404, login_detected, screenshot_path, html_excerpt)
 
     if login_detected:
         _write_bootstrap_artifact(
@@ -194,38 +234,35 @@ def ensure_kajabi_soma_admin_context(
         )
 
     if not admin_404:
-        content = (html_excerpt or "") + (page.content()[:8192] if hasattr(page, "content") else "")
-        has_any, found, missing = _page_has_products(content, TARGET_PRODUCTS)
-        if has_any:
-            origin = final_url.split("/admin")[0] if "/admin" in final_url else SOMA_SITE
-            return BootstrapResult(
-                ok=True,
-                admin_404=False,
-                products_found=found,
-                products_missing=missing,
-                site_origin=origin,
-                attempts=attempts,
-            )
-        # Page loaded but products not found
-        _write_bootstrap_artifact(
-            out_dir, attempts, KAJABI_PRODUCTS_PAGE_NO_MATCH,
-            "Products page loaded but Home User Library / Practitioner Library not found. Check site.",
-        )
-        return BootstrapResult(
-            ok=False,
-            error_class=KAJABI_PRODUCTS_PAGE_NO_MATCH,
-            recommended_next_action="Products page loaded but target products not found. Check site.",
-            admin_404=False,
-            products_found=found,
-            products_missing=missing,
-            attempts=attempts,
-            artifact_path=str(out_dir / "bootstrap_failure.json"),
-        )
+        # Sites page loaded — try to select Soma site, then go to products
+        _try_click_soma_site(page)
+        final_url, title, admin_404, login_detected = _try_navigate(page, KAJABI_PRODUCTS)
+        screenshot_path, html_excerpt = _screenshot_and_html("attempt1_sites_then_products")
+        _capture_attempt(KAJABI_PRODUCTS, final_url, title, admin_404, login_detected, screenshot_path, html_excerpt)
+        if login_detected:
+            _write_bootstrap_artifact(out_dir, attempts, KAJABI_SESSION_EXPIRED,
+                                     "Complete Kajabi login + 2FA once on aiops-1 capture flow.")
+            return BootstrapResult(ok=False, error_class=KAJABI_SESSION_EXPIRED,
+                                  recommended_next_action="Complete Kajabi login + 2FA once on aiops-1 capture flow.",
+                                  login_detected=True, attempts=attempts,
+                                  artifact_path=str(out_dir / "bootstrap_failure.json"))
+        if not admin_404:
+            content = (html_excerpt or "") + (page.content()[:8192] if hasattr(page, "content") else "")
+            has_any, found, missing = _page_has_products(content, TARGET_PRODUCTS)
+            if has_any:
+                origin = final_url.split("/admin")[0] if "/admin" in final_url else "https://app.kajabi.com"
+                return BootstrapResult(ok=True, admin_404=False, products_found=found, products_missing=missing,
+                                      site_origin=origin, attempts=attempts)
+            _write_bootstrap_artifact(out_dir, attempts, KAJABI_PRODUCTS_PAGE_NO_MATCH,
+                                     "Products page loaded but target products not found. Check site.")
+            return BootstrapResult(ok=False, error_class=KAJABI_PRODUCTS_PAGE_NO_MATCH,
+                                  recommended_next_action="Products page loaded but target products not found.",
+                                  admin_404=False, products_found=[], products_missing=TARGET_PRODUCTS,
+                                  attempts=attempts, artifact_path=str(out_dir / "bootstrap_failure.json"))
 
-    # --- Attempt 2: SOMA_ADMIN then SOMA_PRODUCTS ---
-    _try_navigate(page, SOMA_ADMIN)
+    # --- Attempt 2: SOMA_PRODUCTS (mykajabi.com — storefront; /admin may 404) ---
     final_url, title, admin_404, login_detected = _try_navigate(page, SOMA_PRODUCTS)
-    screenshot_path, html_excerpt = _screenshot_and_html("attempt2_soma_admin_products")
+    screenshot_path, html_excerpt = _screenshot_and_html("attempt2_soma_products")
     _capture_attempt(SOMA_PRODUCTS, final_url, title, admin_404, login_detected, screenshot_path, html_excerpt)
 
     if login_detected:
@@ -250,7 +287,7 @@ def ensure_kajabi_soma_admin_context(
                               admin_404=False, products_found=found, products_missing=missing,
                               attempts=attempts, artifact_path=str(out_dir / "bootstrap_failure.json"))
 
-    # --- Attempt 3: KAJABI_ADMIN then KAJABI_PRODUCTS ---
+    # --- Attempt 3: KAJABI_ADMIN then KAJABI_PRODUCTS (direct) ---
     _try_navigate(page, KAJABI_ADMIN)
     final_url, title, admin_404, login_detected = _try_navigate(page, KAJABI_PRODUCTS)
     screenshot_path, html_excerpt = _screenshot_and_html("attempt3_kajabi_products")
@@ -278,27 +315,9 @@ def ensure_kajabi_soma_admin_context(
                               admin_404=False, products_found=found, products_missing=missing,
                               attempts=attempts, artifact_path=str(out_dir / "bootstrap_failure.json"))
 
-    # --- Attempt 4: KAJABI_SITES, select Soma, retry KAJABI_PRODUCTS ---
+    # --- Attempt 4: KAJABI_SITES again, select Soma, retry KAJABI_PRODUCTS ---
     _try_navigate(page, KAJABI_SITES)
-    try:
-        # Click site whose text contains "Soma" or "zane-mccourtney.mykajabi.com"
-        for sel in [
-            f'a:has-text("Soma")',
-            f'a:has-text("zane-mccourtney")',
-            '[data-testid*="site"]:has-text("Soma")',
-            f'text=Soma',
-            f'text=zane-mccourtney',
-        ]:
-            try:
-                el = page.query_selector(sel)
-                if el:
-                    el.click()
-                    page.wait_for_load_state("load", timeout=15000)
-                    break
-            except Exception:
-                pass
-    except Exception:
-        pass
+    _try_click_soma_site(page)
 
     final_url, title, admin_404, login_detected = _try_navigate(page, KAJABI_PRODUCTS)
     screenshot_path, html_excerpt = _screenshot_and_html("attempt4_sites_then_products")
