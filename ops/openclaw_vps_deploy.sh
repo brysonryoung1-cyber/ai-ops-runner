@@ -138,10 +138,11 @@ step "Docker compose rebuild"
 _ssh_script <<REMOTE_DOCKER
 set -euo pipefail
 cd '${VPS_DIR}'
-# Ensure secrets dir exists and is readable by container user (1000:1000)
-sudo mkdir -p /etc/ai-ops-runner/secrets
+# Ensure secrets and config dirs exist (config for soma_kajabi_exit_node.txt)
+sudo mkdir -p /etc/ai-ops-runner/secrets /etc/ai-ops-runner/config
 sudo chown -R 1000:1000 /etc/ai-ops-runner/secrets 2>/dev/null || true
 sudo chmod 750 /etc/ai-ops-runner/secrets
+sudo chmod 755 /etc/ai-ops-runner/config
 docker compose up -d --build 2>&1 | tail -10
 echo "  Docker compose: rebuilt"
 REMOTE_DOCKER

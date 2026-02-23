@@ -256,6 +256,44 @@ Runs on aiops-1 to confirm guard timer produces PASS and litellm-proxy stays hea
 ./ops/tests/openclaw_sms_selftest.sh
 ```
 
+## Kajabi via Exit Node (Laptop Mode)
+
+To reduce Cloudflare challenges, aiops-1 can route Kajabi traffic through a Mac laptop as a Tailscale exit node. No Kajabi API purchase required.
+
+### Requirements
+
+- **Mac laptop**: Tailscale installed, exit node advertised (`tailscale up --advertise-exit-node --accept-routes`)
+- **Tailscale admin**: Approve exit node for the Mac in Tailscale Admin → Machines → Edit route settings → Use as exit node
+- **Laptop on/awake** during runs
+
+### Config
+
+Create on aiops-1:
+
+```bash
+echo "brysons-macbook-pro.tailc75c62.ts.net" | sudo tee /etc/ai-ops-runner/config/soma_kajabi_exit_node.txt
+```
+
+Or set `KAJABI_EXIT_NODE` env (MagicDNS hostname or Tailscale IP).
+
+### Behavior
+
+- **soma_kajabi_unblock_and_run**, **soma_kajabi_discover**, **soma_kajabi_snapshot_debug** run via `ops/with_exit_node.sh`
+- If config missing: runs without exit node (fallback to interactive noVNC if Cloudflare blocks)
+- If exit node unreachable (laptop off): fail-closed with `EXIT_NODE_OFFLINE` — "Turn on laptop (keep awake) and rerun"
+- Wrapper ALWAYS restores previous exit-node state (trap) even on failure
+
+### Verify
+
+```bash
+# On aiops-1: public IP before/after (optional)
+./ops/what_is_my_ip.sh
+```
+
+### When Offline
+
+If `EXIT_NODE_OFFLINE` triggers: turn on/keep awake the Mac exit node (Tailscale running), then rerun `soma_kajabi_unblock_and_run`.
+
 ## Troubleshooting
 
 ### "Kajabi session expired"
