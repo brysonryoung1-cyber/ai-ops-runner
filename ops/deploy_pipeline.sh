@@ -150,6 +150,18 @@ else
 fi
 echo ""
 
+# --- Step 2c: Install Kajabi interactive capture deps (Xvfb, x11vnc, websockify) ---
+echo "==> Step 2c: Install Kajabi interactive deps"
+if [ -f "$SCRIPT_DIR/install_kajabi_interactive_deps.sh" ]; then
+  if ! "$SCRIPT_DIR/install_kajabi_interactive_deps.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/kajabi_deps_install.log"; then
+    write_fail "kajabi_deps_install" "kajabi_deps_install_failed" "Fix install_kajabi_interactive_deps.sh and re-run deploy" "artifacts/deploy/$RUN_ID/kajabi_deps_install.log"
+    exit 2
+  fi
+else
+  echo "  (install_kajabi_interactive_deps.sh not found — skip)"
+fi
+echo ""
+
 # --- Step 3a: Explicit console build (fail-closed; no || true bypass) ---
 if [ -f "docker-compose.console.yml" ]; then
   STEP="console_build"
