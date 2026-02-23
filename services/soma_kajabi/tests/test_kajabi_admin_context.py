@@ -8,6 +8,7 @@ import pytest
 
 from services.soma_kajabi.kajabi_admin_context import (
     KAJABI_ADMIN_404_AFTER_BOOTSTRAP,
+    KAJABI_CLOUDFLARE_BLOCKED,
     KAJABI_PRODUCTS_PAGE_NO_MATCH,
     KAJABI_SESSION_EXPIRED,
     KAJABI_ADMIN,
@@ -73,5 +74,15 @@ def test_page_has_products():
 def test_error_classes_defined():
     """Error classes must be distinct."""
     assert KAJABI_SESSION_EXPIRED == "KAJABI_SESSION_EXPIRED"
+    assert KAJABI_CLOUDFLARE_BLOCKED == "KAJABI_CLOUDFLARE_BLOCKED"
     assert KAJABI_ADMIN_404_AFTER_BOOTSTRAP == "KAJABI_ADMIN_404_AFTER_BOOTSTRAP"
     assert KAJABI_PRODUCTS_PAGE_NO_MATCH == "KAJABI_PRODUCTS_PAGE_NO_MATCH"
+
+
+def test_cloudflare_not_login():
+    """Cloudflare block must not be classified as login."""
+    from services.soma_kajabi.kajabi_admin_context import _is_cloudflare_blocked, _is_login_page
+
+    cf_content = "<html><title>Attention Required! | Cloudflare</title><body>Sorry, you have been blocked</body></html>"
+    assert _is_cloudflare_blocked(cf_content) is True
+    assert _is_login_page("https://app.kajabi.com/login", cf_content) is False

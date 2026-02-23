@@ -14,6 +14,7 @@ Error classes:
   KAJABI_NAVIGATION_FAILED
   KAJABI_NOT_LOGGED_IN
   KAJABI_SESSION_EXPIRED — redirect to login; complete login+2FA once
+  KAJABI_CLOUDFLARE_BLOCKED — Cloudflare blocking headless browser
   KAJABI_ADMIN_404_AFTER_BOOTSTRAP — all bootstrap attempts 404
   KAJABI_PRODUCTS_PAGE_NO_MATCH — page loaded but target products not found
 """
