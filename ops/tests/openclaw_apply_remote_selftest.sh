@@ -178,6 +178,27 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Test 13: Local target detection (no self-SSH)
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 13: Local mode (no self-SSH) ---"
+if grep -q 'APPLY_MODE' "$APPLY_SCRIPT"; then
+  pass "Has APPLY_MODE detection"
+else
+  fail "Missing APPLY_MODE detection"
+fi
+if grep -q 'APPLY_MODE.*local' "$APPLY_SCRIPT" || grep -q 'local.*APPLY_MODE' "$APPLY_SCRIPT"; then
+  pass "Has local mode branch (no SSH when target is this host)"
+else
+  fail "Missing local mode branch"
+fi
+if grep -q 'tailscale ip -4' "$APPLY_SCRIPT"; then
+  pass "Uses tailscale ip -4 for local detection"
+else
+  fail "Missing tailscale ip -4 for local detection"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""

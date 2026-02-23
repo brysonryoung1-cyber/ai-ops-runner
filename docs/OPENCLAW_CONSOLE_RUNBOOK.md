@@ -183,7 +183,7 @@ Common causes of 255: SSH from the host running hostd to the VPS failed (no key,
 
 ### Fix Apply SSH (deploy key one-time setup)
 
-Apply runs on the **ship host** (the machine where hostd runs); it SSHs to the target (default `root@100.123.61.57`). To fix "Permission denied (publickey,password)":
+Apply runs on the **ship host** (the machine where hostd runs). **No self-SSH**: when the target is this host (Tailscale IP match), Apply runs deploy steps locally. When the target is a different host, it SSHs (default `root@100.123.61.57`). To fix "Permission denied (publickey,password)" for remote targets:
 
 1. **On the ship host** (e.g. the VPS where HQ/hostd run, or the box that has Tailscale reachability to the target), run once:
 
