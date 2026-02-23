@@ -31,9 +31,12 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   libxfixes3 \
   libxrandr2 \
   libgbm1 \
-  libasound2 \
   fonts-liberation \
   fonts-noto-core
+
+# libasound2: Ubuntu 24.04 uses libasound2t64
+apt-get install -y --no-install-recommends libasound2t64 2>/dev/null || \
+  apt-get install -y --no-install-recommends libasound2 2>/dev/null || true
 
 # websockify: prefer apt python3-websockify; fallback to pip
 if ! command -v websockify >/dev/null 2>&1 && ! python3 -c "import websockify" 2>/dev/null; then
