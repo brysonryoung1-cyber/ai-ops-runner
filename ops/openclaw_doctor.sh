@@ -685,6 +685,45 @@ else
   pass "pred_markets check N/A (service not found)"
 fi
 
+# --- 10z. Hostname Routing (Tailscale Serve) — regression guard ---
+echo "--- Hostname Routing (Tailscale Serve) ---"
+# Fail if hostname root serves noVNC dir listing instead of HQ; /api/ui/health_public must be JSON.
+# Ensures: https://aiops-1.tailc75c62.ts.net/ → HQ (8787), NOT noVNC (6080).
+TS_HOSTNAME=""
+if command -v tailscale >/dev/null 2>&1; then
+  TS_HOSTNAME="$(tailscale status --json 2>/dev/null | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    name = (d.get('Self') or {}).get('DNSName', '').rstrip('.')
+    print(name if name else '')
+except Exception:
+    pass
+" 2>/dev/null || echo "")"
+fi
+if [ -n "$TS_HOSTNAME" ]; then
+  CURL_OPTS="-kfsS --connect-timeout 5 --max-time 10"
+  HEALTH_JSON="$(curl $CURL_OPTS "https://${TS_HOSTNAME}/api/ui/health_public" 2>/dev/null)" || true
+  if [ -z "$HEALTH_JSON" ]; then
+    fail "Hostname /api/ui/health_public unreachable (https://${TS_HOSTNAME})"
+  elif ! echo "$HEALTH_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') is True else 1)" 2>/dev/null; then
+    fail "Hostname /api/ui/health_public not valid JSON or ok!=true"
+  else
+    pass "Hostname /api/ui/health_public returns HQ JSON"
+  fi
+  ROOT_BODY="$(curl $CURL_OPTS "https://${TS_HOSTNAME}/" 2>/dev/null)" || true
+  if [ -n "$ROOT_BODY" ] && echo "$ROOT_BODY" | grep -q "Directory listing for /"; then
+    fail "Hostname root serves noVNC dir listing (Tailscale Serve misrouted to 6080; must point to 8787)"
+  elif [ -n "$ROOT_BODY" ] && echo "$ROOT_BODY" | grep -qE "<title>[^<]*vnc\.html[^<]*</title>"; then
+    fail "Hostname root serves noVNC (Tailscale Serve misrouted to 6080; must point to 8787)"
+  else
+    pass "Hostname root serves HQ (not noVNC dir listing)"
+  fi
+else
+  echo "  WARN: Tailscale hostname not available (hostname routing check skipped)"
+  pass "Hostname routing check N/A (no tailnet hostname)"
+fi
+
 # --- 11. Guard Timer Health ---
 echo "--- Guard Timer Health ---"
 if command -v systemctl >/dev/null 2>&1; then
