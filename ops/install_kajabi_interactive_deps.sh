@@ -40,8 +40,11 @@ apt-get install -y --no-install-recommends libasound2t64 2>/dev/null || \
 
 # websockify: prefer apt python3-websockify; fallback to pip
 if ! command -v websockify >/dev/null 2>&1 && ! python3 -c "import websockify" 2>/dev/null; then
-  pip3 install --break-system-packages websockify 2>/dev/null || \
-  pip3 install websockify 2>/dev/null || true
+  if pip3 install --help 2>/dev/null | grep -q -- '--break-system-packages'; then
+    pip3 install --break-system-packages websockify 2>/dev/null || true
+  else
+    pip3 install websockify 2>/dev/null || true
+  fi
 fi
 
 echo "  Xvfb:       $(command -v Xvfb 2>/dev/null || echo 'MISSING')"
