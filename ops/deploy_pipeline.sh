@@ -163,6 +163,19 @@ else
 fi
 echo ""
 
+# --- Step 2c2: Install openclaw-novnc systemd unit (on-demand noVNC) ---
+echo "==> Step 2c2: Install openclaw-novnc"
+if [ -f "$SCRIPT_DIR/install_openclaw_novnc.sh" ]; then
+  if ! bash "$SCRIPT_DIR/install_openclaw_novnc.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/novnc_install.log"; then
+    echo "  WARNING: openclaw-novnc install failed (non-fatal; capture may fall back to legacy mode)" >&2
+  else
+    echo "  openclaw-novnc: installed"
+  fi
+else
+  echo "  (install_openclaw_novnc.sh not found — skip)"
+fi
+echo ""
+
 # --- Step 2d: noVNC firewall (port 6080 Tailscale-only) ---
 echo "==> Step 2d: noVNC firewall (Tailscale-only)"
 if [ -f "$SCRIPT_DIR/ufw_novnc_tailscale_only.sh" ]; then
