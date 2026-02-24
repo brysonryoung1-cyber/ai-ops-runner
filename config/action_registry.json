@@ -113,6 +113,34 @@
       "cmd_template": "cd ${ROOT_DIR} && ${ROOT_DIR}/.venv-hostd/bin/python ./ops/scripts/kajabi_capture_interactive.py"
     },
     {
+      "id": "soma_kajabi_reauth_and_resume",
+      "label": "Reauth and Resume (Cloudflare → Auto-Finish)",
+      "project_id": "soma_kajabi",
+      "timeout_sec": 1800,
+      "cmd_template": "cd ${ROOT_DIR} && ${ROOT_DIR}/.venv-hostd/bin/python ./ops/scripts/soma_kajabi_reauth_and_resume.py"
+    },
+    {
+      "id": "soma_kajabi_session_warm_enable",
+      "label": "Enable Session Warm (every 6h)",
+      "project_id": "soma_kajabi",
+      "timeout_sec": 10,
+      "cmd_template": "sudo mkdir -p /etc/ai-ops-runner/config && sudo touch /etc/ai-ops-runner/config/soma_kajabi_session_warm_enabled.txt && echo '{\"ok\":true,\"enabled\":true}'"
+    },
+    {
+      "id": "soma_kajabi_session_warm_disable",
+      "label": "Disable Session Warm",
+      "project_id": "soma_kajabi",
+      "timeout_sec": 10,
+      "cmd_template": "sudo rm -f /etc/ai-ops-runner/config/soma_kajabi_session_warm_enabled.txt && echo '{\"ok\":true,\"enabled\":false}'"
+    },
+    {
+      "id": "soma_kajabi_session_warm_status",
+      "label": "Session Warm Status",
+      "project_id": "soma_kajabi",
+      "timeout_sec": 10,
+      "cmd_template": "test -f /etc/ai-ops-runner/config/soma_kajabi_session_warm_enabled.txt && echo '{\"result_summary\":{\"enabled\":true}}' || echo '{\"result_summary\":{\"enabled\":false}}'"
+    },
+    {
       "id": "soma_kajabi_unblock_and_run",
       "label": "Soma Unblock and Run (Discover\u2192Snapshot\u2192Phase0\u2192Finish)",
       "project_id": "soma_kajabi",

@@ -50,6 +50,9 @@ const CONNECTOR_ACTIONS = new Set([
   "soma_kajabi_gmail_connect_start",
   "soma_kajabi_gmail_connect_status",
   "soma_kajabi_gmail_connect_finalize",
+  "soma_kajabi_session_warm_enable",
+  "soma_kajabi_session_warm_disable",
+  "soma_kajabi_session_warm_status",
 ]);
 
 type Toast = { type: "success" | "error"; message: string } | null;
@@ -81,6 +84,7 @@ export default function ProjectDetailsPage() {
   const [error, setError] = useState<string | null>(null);
   const [connectorLoading, setConnectorLoading] = useState<string | null>(null);
   const [connectorResults, setConnectorResults] = useState<Record<string, ConnectorResult>>({});
+  const [sessionWarmEnabled, setSessionWarmEnabled] = useState<boolean | null>(null);
   const [toast, setToast] = useState<Toast>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { exec, loading: execLoading, results } = useExec();
@@ -157,6 +161,8 @@ export default function ProjectDetailsPage() {
         };
         setConnectorResults((prev) => ({ ...prev, [action]: result }));
         if (data.ok) {
+          if (action === "soma_kajabi_session_warm_enable") setSessionWarmEnabled(true);
+          if (action === "soma_kajabi_session_warm_disable") setSessionWarmEnabled(false);
           setToast({
             type: "success",
             message: `Done. Run: ${data.run_id ?? "—"}${data.artifact_dir ? ` · ${data.artifact_dir}` : ""}`,
@@ -209,10 +215,31 @@ export default function ProjectDetailsPage() {
     [projectId, project?.id, token, clearToastAfter]
   );
 
-  // Auto-load connectors status for Soma project (soma_kajabi uses run route)
+  // Auto-load connectors status and session warm status for Soma project
   useEffect(() => {
     if (project?.id === "soma_kajabi") {
       handleConnectorExec("soma_connectors_status");
+      // Fetch session warm status
+      (async () => {
+        try {
+          const headers: Record<string, string> = { "Content-Type": "application/json" };
+          if (token) headers["X-OpenClaw-Token"] = token;
+          const res = await fetch(`/api/projects/${projectId}/run`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ action: "soma_kajabi_session_warm_status" }),
+          });
+          if (res.status === 409) return; // ALREADY_RUNNING, skip status update
+          const data = await res.json();
+          if (data.ok && data.result_summary && typeof data.result_summary === "object") {
+            setSessionWarmEnabled(data.result_summary.enabled === true);
+          } else {
+            setSessionWarmEnabled(null);
+          }
+        } catch {
+          setSessionWarmEnabled(null);
+        }
+      })();
     } else if (project && SOMA_PROJECT_IDS.has(project.id)) {
       exec("soma_connectors_status");
     }
@@ -381,6 +408,47 @@ export default function ProjectDetailsPage() {
                 : (results["soma_connectors_status"] as ConnectorResult)?.artifact_dir
             }
           />
+          <div className="mb-6">
+            <h3 className="text-lg font-semibold text-white/95 mb-3">Reauth &amp; Resume</h3>
+            <ActionButton
+              label="Reauth and Resume (Cloudflare → Auto-Finish)"
+              description="Cloudflare/login is the only human step. Opens noVNC, waits for you to log in, then auto-exports storage_state and runs Auto-Finish."
+              variant="primary"
+              loading={execLoading === "soma_kajabi_reauth_and_resume"}
+              disabled={execLoading !== null && execLoading !== "soma_kajabi_reauth_and_resume"}
+              onClick={() => handleExec("soma_kajabi_reauth_and_resume")}
+            />
+          </div>
+          <div className="mb-6">
+            <h3 className="text-lg font-semibold text-white/95 mb-3">Session Warm</h3>
+            <p className="text-sm text-white/60 mb-2">
+              Optional: ping Kajabi every 6h to keep session warm. If Cloudflare detected, marks NEEDS_REAUTH (no spam).
+            </p>
+            <div className="flex flex-wrap gap-3 items-center">
+              {sessionWarmEnabled === true ? (
+                <ActionButton
+                  label="Disable Session Warm"
+                  description="Remove session warm sentinel file"
+                  variant="secondary"
+                  loading={connectorLoading === "soma_kajabi_session_warm_disable"}
+                  disabled={connectorLoading !== null && connectorLoading !== "soma_kajabi_session_warm_disable"}
+                  onClick={() => handleExec("soma_kajabi_session_warm_disable")}
+                />
+              ) : (
+                <ActionButton
+                  label="Enable Session Warm (every 6h)"
+                  description="Create sentinel file; timer pings Kajabi every 6 hours"
+                  variant="secondary"
+                  loading={connectorLoading === "soma_kajabi_session_warm_enable"}
+                  disabled={connectorLoading !== null && connectorLoading !== "soma_kajabi_session_warm_enable"}
+                  onClick={() => handleExec("soma_kajabi_session_warm_enable")}
+                />
+              )}
+              {sessionWarmEnabled === null && (
+                <span className="text-xs text-white/50">Loading status…</span>
+              )}
+            </div>
+          </div>
           <div className="mb-6">
             <h3 className="text-lg font-semibold text-white/95 mb-3">Phase 0</h3>
             <ActionButton

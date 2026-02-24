@@ -136,7 +136,7 @@ export async function executeAction(actionName: string): Promise<HostdResult> {
       method: "POST",
       headers,
       body: JSON.stringify({ action: hostdAction }),
-      signal: AbortSignal.timeout(920_000), // slightly over max hostd timeout
+      signal: AbortSignal.timeout(1_900_000), // cover reauth (1800s) + buffer
     });
     const durationMs = Date.now() - start;
     const text = await res.text();

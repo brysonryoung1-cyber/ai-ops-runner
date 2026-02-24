@@ -85,14 +85,27 @@ def _run_with_exit_node(cmd: list[str], timeout: int) -> tuple[int, str]:
         return -1, str(e)
 
 
-def _do_warm() -> int:
-    """Headless ping of Kajabi admin/products using persistent profile."""
+def _is_cloudflare_blocked(title: str, content: str) -> bool:
+    combined = ((title or "") + " " + (content or ""))[:4096].lower()
+    if "cloudflare" not in combined:
+        return False
+    if "attention required" in combined or "blocked" in combined or "sorry, you have been blocked" in combined:
+        return True
+    return False
+
+
+def _do_warm(artifact_dir: Path | None) -> tuple[int, bool]:
+    """Headless ping of Kajabi admin/products using persistent profile.
+    Returns (exit_code, cloudflare_detected).
+    If Cloudflare detected: do NOT spam; caller marks NEEDS_REAUTH in last status.
+    """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        return 0
+        return 0, False
 
     profile_dir = str(KAJABI_CHROME_PROFILE_DIR)
+    cloudflare_detected = False
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
@@ -105,17 +118,32 @@ def _do_warm() -> int:
             page.goto(KAJABI_SITES, wait_until="domcontentloaded", timeout=30000)
             page.goto(KAJABI_PRODUCTS_URL, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_load_state("networkidle", timeout=10000)
+            try:
+                title = page.title()
+                content = page.content()[:4096] if page.content() else ""
+                cloudflare_detected = _is_cloudflare_blocked(title, content)
+            except Exception:
+                pass
         except Exception:
             pass
         finally:
             browser.close()
-    return 0
+    return 0, cloudflare_detected
 
 
 def main() -> int:
-    # Inner mode: run only _do_warm (invoked by with_exit_node)
+    # Inner mode: run only _do_warm (invoked by with_exit_node), write result for parent
     if os.environ.get("SOMA_KAJABI_WARM_INNER") == "1":
-        _do_warm()
+        art_dir = os.environ.get("ARTIFACT_DIR")
+        out = Path(art_dir) if art_dir else None
+        _, cloudflare_detected = _do_warm(out)
+        if out:
+            try:
+                (out / "session_warm_result.json").write_text(
+                    json.dumps({"cloudflare_detected": cloudflare_detected}, indent=2)
+                )
+            except Exception:
+                pass
         return 0
 
     if not WARM_ENABLED_FILE.exists() or WARM_ENABLED_FILE.read_text().strip() == "":
@@ -148,11 +176,33 @@ def main() -> int:
         )
         return 0
 
+    # Inner mode returns via ARTIFACT_DIR/session_warm_result.json (cloudflare_detected)
+    cloudflare_detected = False
+    result_file = out_dir / "session_warm_result.json"
+    if result_file.exists():
+        try:
+            data = json.loads(result_file.read_text())
+            cloudflare_detected = data.get("cloudflare_detected", False)
+        except Exception:
+            pass
+
+    status = "NEEDS_REAUTH" if cloudflare_detected else "ok"
     try:
         (out_dir / "summary.json").write_text(json.dumps({
             "run_id": run_id,
-            "ok": True,
+            "ok": not cloudflare_detected,
+            "status": status,
+            "cloudflare_detected": cloudflare_detected,
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        }, indent=2))
+        # Write last status for HQ to display
+        last_status_dir = root / "artifacts" / "soma_kajabi" / "session_warm"
+        last_status_dir.mkdir(parents=True, exist_ok=True)
+        (last_status_dir / "last_status.json").write_text(json.dumps({
+            "status": status,
+            "run_id": run_id,
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "cloudflare_detected": cloudflare_detected,
         }, indent=2))
     except Exception:
         pass
@@ -161,8 +211,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    # Inner mode: _do_warm writes to ARTIFACT_DIR if set
-    if os.environ.get("SOMA_KAJABI_WARM_INNER") == "1":
-        _do_warm()
-        sys.exit(0)
     sys.exit(main())
