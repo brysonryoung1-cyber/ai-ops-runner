@@ -176,6 +176,19 @@ else
 fi
 echo ""
 
+# --- Step 2c3: Install Soma Kajabi Session Warm timer (disabled by default) ---
+echo "==> Step 2c3: Install Soma Kajabi Session Warm timer"
+if [ -f "$SCRIPT_DIR/install_openclaw_soma_kajabi_warm.sh" ]; then
+  if ! bash "$SCRIPT_DIR/install_openclaw_soma_kajabi_warm.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/soma_kajabi_warm_install.log"; then
+    echo "  WARNING: soma-kajabi-warm install failed (non-fatal)" >&2
+  else
+    echo "  soma-kajabi-warm: installed (disabled by default)"
+  fi
+else
+  echo "  (install_openclaw_soma_kajabi_warm.sh not found — skip)"
+fi
+echo ""
+
 # --- Step 2d: noVNC firewall (port 6080 Tailscale-only) ---
 echo "==> Step 2d: noVNC firewall (Tailscale-only)"
 if [ -f "$SCRIPT_DIR/ufw_novnc_tailscale_only.sh" ]; then

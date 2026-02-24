@@ -115,6 +115,27 @@ The Kajabi session token must be captured from a browser session:
 
 **Important:** Session tokens expire. When operations fail with "session expired", re-capture the token.
 
+### Session Check (HQ one-click)
+
+Use **Session Check** on the Soma project page to validate the session can reach Kajabi admin/products and see both libraries (Home User Library, Practitioner Library). Uses the persistent Chromium profile at `/var/lib/openclaw/kajabi_chrome_profile`. If Cloudflare blocks, noVNC URL is shown; complete the challenge and rerun.
+
+### Enable Session Warm (optional, OFF by default)
+
+The Session Warm timer pings Kajabi admin/products every 6 hours to keep the session warm. Only runs when:
+1. `/etc/ai-ops-runner/config/soma_kajabi_session_warm_enabled.txt` exists
+2. Exit node is reachable (if configured)
+
+To enable:
+```bash
+sudo touch /etc/ai-ops-runner/config/soma_kajabi_session_warm_enabled.txt
+sudo systemctl enable --now openclaw-soma-kajabi-warm.timer
+```
+
+To disable:
+```bash
+sudo rm -f /etc/ai-ops-runner/config/soma_kajabi_session_warm_enabled.txt
+```
+
 ### Kajabi storage_state (Playwright, preferred for Phase 0)
 
 - **Path**: `/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json` (mode 600, root:root). No contents in logs.

@@ -352,6 +352,14 @@ export default function ProjectDetailsPage() {
           <div className="mb-6">
             <h3 className="text-lg font-semibold text-white/95 mb-3">Phase 0</h3>
             <ActionButton
+              label="Session Check"
+              description="Validate session can reach Kajabi admin/products and see both libraries. Uses persistent profile. If Cloudflare, noVNC URL shown."
+              variant="secondary"
+              loading={execLoading === "soma_kajabi_session_check"}
+              disabled={execLoading !== null && execLoading !== "soma_kajabi_session_check"}
+              onClick={() => handleExec("soma_kajabi_session_check")}
+            />
+            <ActionButton
               label="Auto-Finish Soma (Phase0 → Finish Plan)"
               description="Runs connectors_status → Phase0 → Finish Plan automatically. Handles Cloudflare (noVNC). Produces single summary artifact."
               variant="primary"
