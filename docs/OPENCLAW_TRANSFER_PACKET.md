@@ -100,18 +100,14 @@ Everything else is FAIL. Enforced by doctor, guard, and UFW.
 
 ## Deployment
 
-From local Mac:
+**Preferred**: Use **HQ Deploy+Verify** (Overview → Deploy+Verify button). No manual deploy commands.
+
+From local Mac (alternative):
 ```bash
 ./ops/openclaw_apply_remote.sh          # sync + build + fix + verify
 ```
 
-On VPS:
-```bash
-cd /opt/ai-ops-runner && git fetch origin && git reset --hard origin/main
-docker compose up -d --build
-sudo ./ops/openclaw_fix_ssh_tailscale_only.sh
-./ops/openclaw_doctor.sh
-```
+On VPS (only if HQ unavailable): Use **Deploy+Verify** via HQ when possible. The deploy pipeline runs `git fetch`, `git reset --hard origin/main`, build, verify, and DoD automatically.
 
 ## Out of Scope
 
