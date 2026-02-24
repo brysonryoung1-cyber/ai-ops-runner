@@ -247,12 +247,11 @@ def main() -> int:
     def run_playwright():
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(
+                context = p.chromium.launch_persistent_context(
+                    profile_dir,
                     headless=False,
                     env=env,
-                    args=[f"--user-data-dir={profile_dir}"],
                 )
-                context = browser.new_context()
                 page = context.new_page()
                 page.goto(KAJABI_ADMIN, wait_until="domcontentloaded", timeout=60000)
                 try:
@@ -308,7 +307,7 @@ def main() -> int:
                             "title": title,
                             "products_found": found,
                         })
-                        browser.close()
+                        context.close()
                         done.set()
                         return
                     time.sleep(5)
@@ -318,7 +317,7 @@ def main() -> int:
                     "final_url": page.url,
                     "title": title,
                 })
-                browser.close()
+                context.close()
         except Exception as e:
             result_holder.append({
                 "ok": False,
