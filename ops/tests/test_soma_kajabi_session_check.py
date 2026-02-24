@@ -20,12 +20,13 @@ def test_session_check_action_registered():
 
 
 def test_session_check_script_has_profile_dir():
-    """Session check uses persistent Chromium profile."""
+    """Session check uses persistent Chromium profile via launch_persistent_context."""
     script = REPO_ROOT / "ops" / "scripts" / "soma_kajabi_session_check.py"
     assert script.exists()
     content = script.read_text()
     assert "kajabi_chrome_profile" in content
     assert "profile_dir_used" in content
+    assert "launch_persistent_context" in content
 
 
 def test_session_check_produces_summary_artifacts():
