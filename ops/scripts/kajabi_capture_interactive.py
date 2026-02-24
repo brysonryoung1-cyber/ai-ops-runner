@@ -149,48 +149,6 @@ def _write_instructions(artifact_dir: Path, url: str) -> None:
     (artifact_dir / "instructions.txt").write_text(text)
 
 
-def _start_novnc_systemd(artifact_dir: Path, run_id: str) -> bool:
-    """Start openclaw-novnc via systemd. Return True if reachable."""
-    env_dir = Path("/run/openclaw-novnc")
-    try:
-        env_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return False
-    env_file = env_dir / "next.env"
-    env_file.write_text(
-        f"OPENCLAW_NOVNC_RUN_ID={run_id}\n"
-        f"OPENCLAW_NOVNC_ARTIFACT_DIR={artifact_dir}\n"
-        f"OPENCLAW_NOVNC_PORT={NOVNC_PORT}\n"
-        f"OPENCLAW_NOVNC_DISPLAY=:99\n"
-    )
-    try:
-        subprocess.run(
-            ["systemctl", "stop", "openclaw-novnc"],
-            capture_output=True,
-            timeout=10,
-        )
-        subprocess.run(
-            ["systemctl", "start", "openclaw-novnc"],
-            check=True,
-            capture_output=True,
-            timeout=10,
-        )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
-        return False
-    # Wait for websockify port
-    for _ in range(30):
-        try:
-            import socket
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(2)
-            s.connect(("127.0.0.1", NOVNC_PORT))
-            s.close()
-            return True
-        except OSError:
-            time.sleep(1)
-    return False
-
-
 def _stop_novnc_systemd() -> None:
     """Stop openclaw-novnc service."""
     try:
@@ -203,90 +161,6 @@ def _stop_novnc_systemd() -> None:
         pass
 
 
-def _ensure_xvfb_and_novnc(artifact_dir: Path) -> tuple[subprocess.Popen | None, subprocess.Popen | None, subprocess.Popen | None]:
-    """Start Xvfb, x11vnc, and noVNC/websockify. Return (xvfb_proc, x11vnc_proc, novnc_proc)."""
-    display = ":99"
-    xvfb_proc = None
-    x11vnc_proc = None
-    novnc_proc = None
-
-    # Start Xvfb
-    try:
-        xvfb_proc = subprocess.Popen(
-            ["Xvfb", display, "-screen", "0", "1280x720x24", "-ac"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-        time.sleep(2)
-        if xvfb_proc.poll() is not None:
-            err = b""
-            if xvfb_proc.stderr:
-                try:
-                    err = xvfb_proc.stderr.read()
-                except Exception:
-                    pass
-            (artifact_dir / "xvfb_stderr.txt").write_text(err.decode("utf-8", errors="replace"))
-            return None, None, None
-    except FileNotFoundError:
-        (artifact_dir / "instructions.txt").write_text(
-            "Xvfb not installed. Run: apt install xvfb (or sudo apt install xvfb)"
-        )
-        return None, None, None
-
-    # Start x11vnc (VNC server on display)
-    try:
-        x11vnc_proc = subprocess.Popen(
-            ["x11vnc", "-display", display, "-rfbport", "5900", "-localhost", "-nopw", "-forever"],
-            env={**os.environ, "DISPLAY": display},
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-        time.sleep(1)
-        if x11vnc_proc.poll() is not None:
-            return xvfb_proc, None, None
-    except FileNotFoundError:
-        (artifact_dir / "instructions.txt").write_text(
-            "x11vnc not installed. Run: apt install x11vnc (or sudo apt install x11vnc)"
-        )
-        return xvfb_proc, None, None
-
-    # Start websockify (VNC -> WebSocket) with noVNC web client if available.
-    # Bind to 0.0.0.0 or Tailscale IP so reachable over Tailscale; firewall restricts to 100.64.0.0/10.
-    bind_addr = _get_tailscale_ip() or "0.0.0.0"
-    bind_spec = f"{bind_addr}:{NOVNC_PORT}"
-    web_dir = "/usr/share/novnc" if (Path("/usr/share/novnc/vnc.html").exists()) else None
-    base_cmd = ["websockify", bind_spec, "127.0.0.1:5900"]
-    if web_dir:
-        base_cmd = ["websockify", "--web", web_dir, bind_spec, "127.0.0.1:5900"]
-    fallback_cmd = ["python3", "-m", "websockify", bind_spec, "127.0.0.1:5900"]
-    if web_dir:
-        fallback_cmd = ["python3", "-m", "websockify", "--web", web_dir, bind_spec, "127.0.0.1:5900"]
-    for cmd in [base_cmd, fallback_cmd]:
-        try:
-            novnc_proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
-            time.sleep(1)
-            if novnc_proc.poll() is not None:
-                novnc_proc = None
-                continue
-            break
-        except FileNotFoundError:
-            novnc_proc = None
-            continue
-
-    if novnc_proc is None:
-        url = _get_tailscale_url()
-        (artifact_dir / "instructions.txt").write_text(
-            f"websockify not installed. Run: pip install websockify (or apt install novnc). URL would be: {url}"
-        )
-        return xvfb_proc, x11vnc_proc, None
-
-    return xvfb_proc, x11vnc_proc, novnc_proc
-
-
 def main() -> int:
     root = _repo_root()
     if str(root) not in sys.path:
@@ -297,32 +171,29 @@ def main() -> int:
     screenshots_dir = out_dir / "screenshots"
     screenshots_dir.mkdir(exist_ok=True)
 
-    # Prefer systemd noVNC (supervised, auto-restart); fall back to legacy
-    use_systemd_novnc = False
-    xvfb_proc, x11vnc_proc, novnc_proc = None, None, None
+    # Restart noVNC + poll probe. Fail-closed if unavailable.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from novnc_ready import ensure_novnc_ready
 
-    if _start_novnc_systemd(out_dir, run_id):
-        use_systemd_novnc = True
-    else:
-        xvfb_proc, x11vnc_proc, novnc_proc = _ensure_xvfb_and_novnc(out_dir)
-
-    if not use_systemd_novnc and novnc_proc is None:
-        url = _get_tailscale_url()
-        (out_dir / "instructions.txt").write_text(
-            f"{url}\n(noVNC stack failed; install: apt install xvfb x11vnc novnc)"
-        )
+    ready, tailscale_url, err_class, journal_artifact = ensure_novnc_ready(out_dir, run_id)
+    if not ready and err_class:
         summary = {
             "ok": False,
-            "error_class": "KAJABI_INTERACTIVE_CAPTURE_NO_VNC",
-            "message": "Xvfb/x11vnc/websockify not available. Install: apt install xvfb x11vnc; pip install websockify",
+            "error_class": err_class,
+            "message": f"noVNC backend unavailable. Journal: {journal_artifact or 'N/A'}",
             "artifact_dir": str(out_dir),
+            "run_id": run_id,
+            "journal_artifact": journal_artifact,
         }
         (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+        (out_dir / "instructions.txt").write_text(
+            f"noVNC failed. See journal: {journal_artifact or 'openclaw_novnc_journal.txt'}"
+        )
         print(json.dumps(summary))
         return 1
 
-    tailscale_url = _get_tailscale_url()
     _write_instructions(out_dir, tailscale_url)
+    print("noVNC READY", file=sys.stderr)
     print(tailscale_url, file=sys.stderr)
 
     try:
@@ -452,20 +323,8 @@ def main() -> int:
             "message": "Capture thread did not complete",
         })
 
-    # Cleanup: stop systemd unit or kill legacy procs (AFTER storage_state export in run_playwright)
-    if use_systemd_novnc:
-        _stop_novnc_systemd()
-    else:
-        for proc in [novnc_proc, x11vnc_proc, xvfb_proc]:
-            if proc and proc.poll() is None:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=5)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
+    # Cleanup: stop systemd unit (AFTER storage_state export in run_playwright)
+    _stop_novnc_systemd()
 
     summary = result_holder[0].copy()
     summary["artifact_dir"] = str(out_dir)

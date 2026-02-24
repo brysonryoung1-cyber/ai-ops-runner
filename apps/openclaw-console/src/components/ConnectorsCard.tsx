@@ -11,6 +11,8 @@ export type ConnectorResult = {
   artifact_dir?: string;
   error_class?: string;
   message?: string;
+  /** When NOVNC_BACKEND_UNAVAILABLE: path to journal artifact for debugging */
+  journal_artifact?: string;
   requirements_endpoint?: string;
   expected_secret_path_redacted?: string;
   next_steps?: { instruction?: string; verification_url?: string | null; user_code?: string | null };

@@ -126,37 +126,6 @@ def _get_tailscale_url() -> str:
     return f"http://<TAILSCALE_IP>:{port}{path}"
 
 
-def _start_novnc_systemd(artifact_dir: Path, run_id: str) -> bool:
-    env_dir = Path("/run/openclaw-novnc")
-    try:
-        env_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return False
-    env_file = env_dir / "next.env"
-    env_file.write_text(
-        f"OPENCLAW_NOVNC_RUN_ID={run_id}\n"
-        f"OPENCLAW_NOVNC_ARTIFACT_DIR={artifact_dir}\n"
-        f"OPENCLAW_NOVNC_PORT={NOVNC_PORT}\n"
-        f"OPENCLAW_NOVNC_DISPLAY=:99\n"
-    )
-    try:
-        subprocess.run(["systemctl", "stop", "openclaw-novnc"], capture_output=True, timeout=10)
-        subprocess.run(["systemctl", "start", "openclaw-novnc"], check=True, capture_output=True, timeout=10)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
-        return False
-    for _ in range(30):
-        try:
-            import socket
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(2)
-            s.connect(("127.0.0.1", NOVNC_PORT))
-            s.close()
-            return True
-        except OSError:
-            time.sleep(1)
-    return False
-
-
 def _stop_novnc_systemd() -> None:
     try:
         subprocess.run(["systemctl", "stop", "openclaw-novnc"], capture_output=True, timeout=15)
@@ -291,11 +260,26 @@ def main() -> int:
                         pass
                     (out_dir / "page_title.txt").write_text(title)
                     if cloudflare:
-                        tailscale_url = _get_tailscale_url()
+                        sys.path.insert(0, str(Path(__file__).resolve().parent))
+                        from novnc_ready import ensure_novnc_ready
+                        ready, tailscale_url, err_class, journal_artifact = ensure_novnc_ready(out_dir, run_id)
+                        if not ready and err_class:
+                            result_holder.append({
+                                "ok": False,
+                                "error_class": err_class,
+                                "message": f"noVNC backend unavailable. Journal: {journal_artifact or 'N/A'}",
+                                "journal_artifact": journal_artifact,
+                                "artifact_dir": str(out_dir),
+                                "run_id": run_id,
+                            })
+                            context.close()
+                            done.set()
+                            return
                         (out_dir / "instructions.txt").write_text(
                             f"{tailscale_url}\nOpen in browser (Tailscale). Complete Cloudflare/login."
                         )
                         print("\n--- WAITING_FOR_HUMAN ---", file=sys.stderr)
+                        print("noVNC READY", file=sys.stderr)
                         print(tailscale_url, file=sys.stderr)
                         sys.stderr.flush()
                         time.sleep(15)
@@ -327,13 +311,26 @@ def main() -> int:
         finally:
             done.set()
 
-    # Start noVNC first (needed if Cloudflare triggers — human completes via noVNC)
+    # Start noVNC first (restart + poll probe). Fail-closed if unavailable.
     use_systemd_novnc = False
     xvfb_proc = x11vnc_proc = novnc_proc = None
-    if _start_novnc_systemd(out_dir, run_id):
-        use_systemd_novnc = True
-    else:
-        xvfb_proc, x11vnc_proc, novnc_proc = _ensure_xvfb_and_novnc(out_dir)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from novnc_ready import ensure_novnc_ready
+    ready, _url, err_class, journal_artifact = ensure_novnc_ready(out_dir, run_id)
+    if not ready and err_class:
+        summary = {
+            "ok": False,
+            "error_class": err_class,
+            "message": f"noVNC backend unavailable. Journal: {journal_artifact or 'N/A'}",
+            "artifact_dir": str(out_dir),
+            "run_id": run_id,
+            "journal_artifact": journal_artifact,
+        }
+        (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+        (out_dir / "SUMMARY.md").write_text(f"# Session Check — FAIL\n\n**{err_class}**: noVNC backend unavailable. See {journal_artifact or 'journal'}.\n")
+        print(json.dumps(summary))
+        return 1
+    use_systemd_novnc = True
 
     t = threading.Thread(target=run_playwright)
     t.start()
