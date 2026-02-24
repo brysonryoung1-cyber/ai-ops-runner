@@ -17,7 +17,7 @@ import sys
 import tempfile
 import time
 from datetime import datetime, timezone
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 
@@ -517,7 +517,7 @@ def main() -> int:
         sys.stderr.write(f"ROOT_DIR {ROOT_DIR} not found; run on VPS.\n")
         return 1
     start_time = time.monotonic()
-    server = HTTPServer((HOST, PORT), Handler)
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
     Handler._start_time = start_time  # type: ignore[attr-defined]
     Handler._version = get_version()  # type: ignore[attr-defined]
     sys.stderr.write(f"openclaw_hostd listening on {HOST}:{PORT}\n")
