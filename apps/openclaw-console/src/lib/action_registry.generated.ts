@@ -16,6 +16,7 @@ export const ACTION_TO_HOSTD: Record<string, string> = {
   "journal": "tail_guard_log",
   "llm.microgpt.canary": "llm.microgpt.canary",
   "llm_doctor": "llm_doctor",
+  "openclaw_novnc_restart": "openclaw_novnc_restart",
   "orb.backtest.bulk": "orb.backtest.bulk",
   "orb.backtest.confirm_nt8": "orb.backtest.confirm_nt8",
   "port_audit": "port_audit",
@@ -52,6 +53,6 @@ export const ACTION_TO_HOSTD: Record<string, string> = {
 
 /** Project ID -> set of allowlisted action ids for POST /api/projects/[projectId]/run */
 export const PROJECT_ACTIONS: Record<string, ReadonlySet<string>> = {
-  "soma_kajabi": new Set(["soma_connectors_status", "soma_kajabi_auto_finish", "soma_kajabi_bootstrap_finalize", "soma_kajabi_bootstrap_start", "soma_kajabi_bootstrap_status", "soma_kajabi_capture_interactive", "soma_kajabi_discover", "soma_kajabi_gmail_connect_finalize", "soma_kajabi_gmail_connect_start", "soma_kajabi_gmail_connect_status", "soma_kajabi_session_check", "soma_kajabi_snapshot_debug", "soma_kajabi_unblock_and_run", "soma_zane_finish_plan"]),
+  "soma_kajabi": new Set(["openclaw_novnc_restart", "soma_connectors_status", "soma_kajabi_auto_finish", "soma_kajabi_bootstrap_finalize", "soma_kajabi_bootstrap_start", "soma_kajabi_bootstrap_status", "soma_kajabi_capture_interactive", "soma_kajabi_discover", "soma_kajabi_gmail_connect_finalize", "soma_kajabi_gmail_connect_start", "soma_kajabi_gmail_connect_status", "soma_kajabi_session_check", "soma_kajabi_snapshot_debug", "soma_kajabi_unblock_and_run", "soma_zane_finish_plan"]),
 };
 

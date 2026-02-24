@@ -98,6 +98,9 @@ def main() -> int:
     out_dir = _artifact_dir()
     captured_at = _now_iso()
 
+    sys.path.insert(0, str(root))
+    from src.playwright_safe import safe_content_excerpt, safe_screenshot, safe_title, safe_url
+
     if not STORAGE_STATE_PATH.exists() or STORAGE_STATE_PATH.stat().st_size == 0:
         doc = _write_error(
             out_dir,
@@ -142,12 +145,9 @@ def main() -> int:
                 recommended_next_action=f"Check network and storage_state; error: {str(e)[:200]}",
                 artifact_dir=str(out_dir),
             )
+            safe_screenshot(page, str(out_dir / "screenshot.png"))
             try:
-                page.screenshot(path=str(out_dir / "screenshot.png"))
-            except Exception:
-                pass
-            try:
-                (out_dir / "page.html").write_text(page.content(), encoding="utf-8")
+                (out_dir / "page.html").write_text(safe_content_excerpt(page, 65536) or "(empty)", encoding="utf-8")
             except Exception:
                 pass
             browser.close()
@@ -161,19 +161,16 @@ def main() -> int:
             doc = _write_error(
                 out_dir,
                 error_class,
-                final_url=page.url,
-                title=page.title() or "",
+                final_url=safe_url(page),
+                title=safe_title(page),
                 logged_in=not bootstrap.login_detected,
                 admin_404=bootstrap.admin_404,
                 recommended_next_action=rec,
                 artifact_dir=str(out_dir),
             )
+            safe_screenshot(page, str(out_dir / "screenshot.png"))
             try:
-                page.screenshot(path=str(out_dir / "screenshot.png"))
-            except Exception:
-                pass
-            try:
-                (out_dir / "page.html").write_text(page.content(), encoding="utf-8")
+                (out_dir / "page.html").write_text(safe_content_excerpt(page, 65536) or "(empty)", encoding="utf-8")
             except Exception:
                 pass
             browser.close()
@@ -182,15 +179,12 @@ def main() -> int:
             return 1
 
         site_origin = bootstrap.site_origin or "https://zane-mccourtney.mykajabi.com"
-        final_url = page.url
-        title = page.title() or ""
+        final_url = safe_url(page)
+        title = safe_title(page)
 
+        safe_screenshot(page, str(out_dir / "screenshot.png"))
         try:
-            page.screenshot(path=str(out_dir / "screenshot.png"))
-        except Exception:
-            pass
-        try:
-            (out_dir / "page.html").write_text(page.content(), encoding="utf-8")
+            (out_dir / "page.html").write_text(safe_content_excerpt(page, 65536) or "(empty)", encoding="utf-8")
         except Exception:
             pass
 

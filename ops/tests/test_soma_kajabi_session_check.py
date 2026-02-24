@@ -53,8 +53,8 @@ def test_session_check_calls_ensure_novnc_before_waiting_for_human():
     assert "ensure_novnc_ready" in content
     assert "WAITING_FOR_HUMAN" in content
     assert "noVNC READY" in content
-    # Within cloudflare block: ensure_novnc_ready before WAITING_FOR_HUMAN (skip docstring at start)
-    cloudflare_idx = content.find("if cloudflare:")
+    # Within cloudflare/login_or_404 block: ensure_novnc_ready before WAITING_FOR_HUMAN (skip docstring at start)
+    cloudflare_idx = content.find("if cloudflare or login_or_404:")
     assert cloudflare_idx >= 0
     # Find ensure_novnc_ready and WAITING_FOR_HUMAN after cloudflare block starts
     ensure_idx = content.find("ensure_novnc_ready", cloudflare_idx)
