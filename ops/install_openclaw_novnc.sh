@@ -14,12 +14,14 @@ if [ ! -f "$ROOT_DIR/ops/novnc_supervisor.sh" ]; then
 fi
 
 chmod +x "$ROOT_DIR/ops/novnc_supervisor.sh"
+[ -f "$ROOT_DIR/ops/novnc_probe.sh" ] && chmod +x "$ROOT_DIR/ops/novnc_probe.sh" || true
 
 # Substitute ROOT_DIR in unit (ExecStart path)
 sed "s|/opt/ai-ops-runner|$ROOT_DIR|g" "$ROOT_DIR/ops/systemd/openclaw-novnc.service" | sudo tee "$UNIT_PATH" >/dev/null
 
 sudo systemctl daemon-reload
-mkdir -p /run/openclaw-novnc
+sudo mkdir -p /run/openclaw-novnc
+sudo mkdir -p /run/openclaw
 
 # Persistent Chromium profile for Kajabi (Cloudflare/cookies persist across runs)
 KAJABI_PROFILE="/var/lib/openclaw/kajabi_chrome_profile"

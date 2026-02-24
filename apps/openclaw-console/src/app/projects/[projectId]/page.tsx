@@ -150,6 +150,7 @@ export default function ProjectDetailsPage() {
           artifact_dir: data.artifact_dir,
           error_class: data.error_class,
           message: data.message,
+          journal_artifact: data.journal_artifact,
           requirements_endpoint: data.requirements_endpoint,
           expected_secret_path_redacted: data.expected_secret_path_redacted,
           next_steps: data.next_steps,
@@ -167,11 +168,17 @@ export default function ProjectDetailsPage() {
             action,
             `${data.error_class ?? "Error"}: ${data.message ?? "Action failed"}`
           );
+          const errParts = [
+            `${data.error_class ?? "Error"}: ${data.message ?? "Action failed"}`,
+            data.run_id ? `Run: ${data.run_id}` : "",
+            data.artifact_dir ? data.artifact_dir : "",
+            data.error_class === "NOVNC_BACKEND_UNAVAILABLE" && data.journal_artifact
+              ? `Journal: ${data.journal_artifact}`
+              : "",
+          ].filter(Boolean);
           setToast({
             type: "error",
-            message: `${data.error_class ?? "Error"}: ${data.message ?? "Action failed"}${
-              data.run_id ? ` · Run: ${data.run_id}` : ""
-            }${data.artifact_dir ? ` · ${data.artifact_dir}` : ""}`,
+            message: errParts.join(" · "),
           });
           clearToastAfter(8000);
         }

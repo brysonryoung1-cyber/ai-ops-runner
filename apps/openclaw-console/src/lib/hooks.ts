@@ -14,6 +14,8 @@ export interface ExecResult {
   error?: string;
   error_class?: string;
   httpStatus?: number;
+  artifact_dir?: string;
+  journal_artifact?: string;
 }
 
 /**

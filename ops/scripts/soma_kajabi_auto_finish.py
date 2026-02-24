@@ -188,7 +188,6 @@ def main() -> int:
             break
 
         if error_class == KAJABI_CLOUDFLARE_BLOCKED and capture_attempt < max_capture_attempts:
-            # Emit WAITING_FOR_HUMAN block with noVNC URL
             cap_script = root / "ops" / "scripts" / "kajabi_capture_interactive.py"
             if not cap_script.exists():
                 return _fail_closed(
@@ -196,8 +195,19 @@ def main() -> int:
                     "kajabi_capture_interactive.py not found"
                 )
 
+            # Ensure noVNC ready before WAITING_FOR_HUMAN (restart + poll probe)
+            sys.path.insert(0, str(root / "ops" / "scripts"))
+            from novnc_ready import ensure_novnc_ready
+            ready, url, err_class, journal_artifact = ensure_novnc_ready(out_dir, run_id)
+            if not ready and err_class:
+                return _fail_closed(
+                    out_dir, run_id, err_class,
+                    f"noVNC backend unavailable. Journal: {journal_artifact or 'N/A'}"
+                )
+
             print("\n--- WAITING_FOR_HUMAN ---")
-            print("Cloudflare blocked. The noVNC URL will appear below.")
+            print("noVNC READY")
+            print(url)
             print("1. Open the URL in your browser (Tailscale network).")
             print("2. Complete the Cloudflare challenge and log in.")
             print("The run will auto-resume after completion.")

@@ -286,6 +286,7 @@ export async function POST(
     let nextSteps: { instruction?: string; verification_url?: string | null; user_code?: string | null } | undefined;
     let parsedErrorClass: string | undefined;
     let parsedMessage: string | undefined;
+    let parsedJournalArtifact: string | undefined;
     let requirementsEndpoint: string | undefined;
     let expectedSecretPathRedacted: string | undefined;
     if (result.stdout) {
@@ -300,6 +301,7 @@ export async function POST(
         }
         if (typeof parsed.error_class === "string") parsedErrorClass = parsed.error_class;
         if (typeof parsed.message === "string") parsedMessage = parsed.message;
+        if (typeof parsed.journal_artifact === "string") parsedJournalArtifact = parsed.journal_artifact;
         if (typeof parsed.requirements_endpoint === "string") requirementsEndpoint = parsed.requirements_endpoint;
         if (typeof parsed.expected_secret_path_redacted === "string") expectedSecretPathRedacted = parsed.expected_secret_path_redacted;
         if (parsed.result_summary != null) {
@@ -385,6 +387,9 @@ export async function POST(
       artifact_dir: result.artifact_dir,
     };
     if (requirementsEndpoint) errorPayload.requirements_endpoint = requirementsEndpoint;
+    if (errorClass === "NOVNC_BACKEND_UNAVAILABLE" && parsedJournalArtifact) {
+      errorPayload.journal_artifact = parsedJournalArtifact;
+    }
     if (expectedSecretPathRedacted) errorPayload.expected_secret_path_redacted = expectedSecretPathRedacted;
     return NextResponse.json(errorPayload, { status: 502 });
   } catch (err) {
