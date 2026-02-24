@@ -71,6 +71,25 @@ def _is_cloudflare_blocked(title: str, content: str) -> bool:
     return False
 
 
+def _is_login_page(content: str, url: str = "") -> bool:
+    """Detect login/sign-in page. Excludes Cloudflare (check first)."""
+    if _is_cloudflare_blocked("", content):
+        return False
+    url_lower = (url or "").lower()
+    if "/login" in url_lower or "sign_in" in url_lower or "sign-in" in url_lower:
+        return True
+    content_lower = (content or "").lower()[:4096]
+    if "sign in" in content_lower or "log in" in content_lower:
+        return True
+    return False
+
+
+def _is_404_page(title: str, content: str) -> bool:
+    """Detect 404 page heuristically."""
+    combined = ((title or "") + " " + (content or ""))[:2048].lower()
+    return "404" in combined or "doesn't exist" in combined or "not found" in combined
+
+
 def _page_has_both_products(content: str) -> tuple[bool, list[str]]:
     content_lower = (content or "").lower()
     found = [t for t in TARGET_PRODUCTS if t.lower() in content_lower]
@@ -194,6 +213,14 @@ def main() -> int:
     run_id = out_dir.name
     profile_dir = str(KAJABI_CHROME_PROFILE_DIR)
 
+    from src.playwright_safe import (
+        is_browser_closed_error,
+        safe_content_excerpt,
+        safe_screenshot,
+        safe_title,
+        safe_url,
+    )
+
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -250,17 +277,14 @@ def main() -> int:
                 page.goto(KAJABI_PRODUCTS_URL, wait_until="domcontentloaded", timeout=60000)
                 start = time.time()
                 while time.time() - start < TIMEOUT_SEC:
-                    title = page.title() or ""
-                    content = page.content()[:8192] if hasattr(page, "content") else ""
-                    cloudflare = _is_cloudflare_blocked(title, content)
-                    has_both, found = _page_has_both_products(content)
-                    try:
-                        page.screenshot(path=str(out_dir / "screenshot.png"))
-                    except Exception:
-                        pass
+                    title = safe_title(page)
+                    content = safe_content_excerpt(page, 8192)
+                    safe_screenshot(page, str(out_dir / "screenshot.png"))
                     (out_dir / "page_title.txt").write_text(title)
-                    if cloudflare:
-                        sys.path.insert(0, str(Path(__file__).resolve().parent))
+                    cloudflare = _is_cloudflare_blocked(title, content)
+                    login_or_404 = _is_login_page(content, safe_url(page)) or _is_404_page(title, content)
+                    has_both, found = _page_has_both_products(content)
+                    if cloudflare or login_or_404:
                         from novnc_ready import ensure_novnc_ready
                         ready, tailscale_url, err_class, journal_artifact = ensure_novnc_ready(out_dir, run_id)
                         if not ready and err_class:
@@ -284,28 +308,36 @@ def main() -> int:
                         sys.stderr.flush()
                         time.sleep(15)
                         continue
+                    has_both, found = _page_has_both_products(content)
                     if has_both:
                         result_holder.append({
                             "ok": True,
-                            "final_url": page.url,
+                            "final_url": safe_url(page),
                             "title": title,
                             "products_found": found,
                         })
-                        context.close()
+                        try:
+                            context.close()
+                        except Exception:
+                            pass
                         done.set()
                         return
                     time.sleep(5)
                 result_holder.append({
                     "ok": False,
                     "error_class": "SESSION_CHECK_TIMEOUT",
-                    "final_url": page.url,
-                    "title": title,
+                    "final_url": safe_url(page),
+                    "title": safe_title(page),
                 })
-                context.close()
+                try:
+                    context.close()
+                except Exception:
+                    pass
         except Exception as e:
+            err_class = "SESSION_CHECK_BROWSER_CLOSED" if is_browser_closed_error(e) else "SESSION_CHECK_ERROR"
             result_holder.append({
                 "ok": False,
-                "error_class": "SESSION_CHECK_ERROR",
+                "error_class": err_class,
                 "message": str(e)[:500],
             })
         finally:
@@ -332,16 +364,31 @@ def main() -> int:
         return 1
     use_systemd_novnc = True
 
-    t = threading.Thread(target=run_playwright)
-    t.start()
-    done.wait(timeout=TIMEOUT_SEC + 30)
+    retry_count = 0
+    max_retries = 1
+    while retry_count <= max_retries:
+        result_holder.clear()
+        done.clear()
+        t = threading.Thread(target=run_playwright)
+        t.start()
+        done.wait(timeout=TIMEOUT_SEC + 30)
 
-    if not result_holder:
-        result_holder.append({
-            "ok": False,
-            "error_class": "SESSION_CHECK_TIMEOUT",
-            "message": "Check thread did not complete",
-        })
+        if not result_holder:
+            result_holder.append({
+                "ok": False,
+                "error_class": "SESSION_CHECK_TIMEOUT",
+                "message": "Check thread did not complete",
+            })
+
+        res = result_holder[0]
+        if (
+            res.get("error_class") == "SESSION_CHECK_BROWSER_CLOSED"
+            and retry_count < max_retries
+        ):
+            retry_count += 1
+            time.sleep(2)
+            continue
+        break
 
     # Cleanup noVNC
     if use_systemd_novnc:
@@ -380,6 +427,16 @@ def main() -> int:
     err = summary.get("error_class", "SESSION_CHECK_FAILED")
     msg = summary.get("message", "Session check failed")
     (out_dir / "SUMMARY.md").write_text(f"# Session Check — FAIL\n\n**{err}**: {msg}\n")
+    if err == "SESSION_CHECK_BROWSER_CLOSED":
+        ready, tailscale_url, _err_class, _journal = ensure_novnc_ready(out_dir, run_id)
+        if ready:
+            (out_dir / "instructions.txt").write_text(
+                f"{tailscale_url}\nOpen in browser (Tailscale). Log in + 2FA, confirm Products shows both libraries."
+            )
+            print("\n--- WAITING_FOR_HUMAN ---", file=sys.stderr)
+            print("noVNC READY", file=sys.stderr)
+            print(tailscale_url, file=sys.stderr)
+            sys.stderr.flush()
     print(json.dumps(summary))
     return 1
 

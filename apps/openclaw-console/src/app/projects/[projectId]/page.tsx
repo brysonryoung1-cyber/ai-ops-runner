@@ -367,6 +367,14 @@ export default function ProjectDetailsPage() {
               onClick={() => handleExec("soma_kajabi_session_check")}
             />
             <ActionButton
+              label="Restart noVNC"
+              description="Restart openclaw-novnc service and run probe. Self-heal when noVNC is stuck."
+              variant="secondary"
+              loading={execLoading === "openclaw_novnc_restart"}
+              disabled={execLoading !== null && execLoading !== "openclaw_novnc_restart"}
+              onClick={() => handleExec("openclaw_novnc_restart")}
+            />
+            <ActionButton
               label="Auto-Finish Soma (Phase0 → Finish Plan)"
               description="Runs connectors_status → Phase0 → Finish Plan automatically. Handles Cloudflare (noVNC). Produces single summary artifact."
               variant="primary"

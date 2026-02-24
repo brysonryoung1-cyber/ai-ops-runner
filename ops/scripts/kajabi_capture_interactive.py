@@ -172,8 +172,14 @@ def main() -> int:
     screenshots_dir.mkdir(exist_ok=True)
 
     # Restart noVNC + poll probe. Fail-closed if unavailable.
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    script_dir = Path(__file__).resolve().parent
+    root = Path(__file__).resolve().parents[2]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    if str(script_dir) not in sys.path:
+        sys.path.insert(0, str(script_dir))
     from novnc_ready import ensure_novnc_ready
+    from src.playwright_safe import safe_content_excerpt, safe_screenshot, safe_title, safe_url
 
     ready, tailscale_url, err_class, journal_artifact = ensure_novnc_ready(out_dir, run_id)
     if not ready and err_class:
@@ -261,14 +267,11 @@ def main() -> int:
                 page.goto(KAJABI_PRODUCTS_URL, wait_until="domcontentloaded", timeout=60000)
                 start = time.time()
                 while time.time() - start < TIMEOUT_SEC:
-                    title = page.title() or ""
-                    content = page.content()[:8192] if hasattr(page, "content") else ""
+                    title = safe_title(page)
+                    content = safe_content_excerpt(page, 8192)
+                    safe_screenshot(page, str(screenshots_dir / f"poll_{int(time.time())}.png"))
                     cloudflare = _is_cloudflare_blocked(title, content)
                     has_both, found = _page_has_both_products(content)
-                    try:
-                        page.screenshot(path=str(screenshots_dir / f"poll_{int(time.time())}.png"))
-                    except Exception:
-                        pass
                     if cloudflare:
                         time.sleep(10)
                         continue
@@ -281,7 +284,7 @@ def main() -> int:
                             pass
                         result_holder.append({
                             "ok": True,
-                            "final_url": page.url,
+                            "final_url": safe_url(page),
                             "title": title,
                             "products_found": found,
                             "cloudflare_detected": False,
@@ -291,17 +294,14 @@ def main() -> int:
                         return
                     time.sleep(10)
                 # Timeout
-                try:
-                    page.screenshot(path=str(out_dir / "screenshots" / "timeout_final.png"))
-                except Exception:
-                    pass
+                safe_screenshot(page, str(out_dir / "screenshots" / "timeout_final.png"))
                 result_holder.append({
                     "ok": False,
                     "error_class": KAJABI_INTERACTIVE_CAPTURE_TIMEOUT,
-                    "final_url": page.url,
-                    "title": page.title() or "",
+                    "final_url": safe_url(page),
+                    "title": safe_title(page),
                     "products_found": [],
-                    "cloudflare_detected": _is_cloudflare_blocked(page.title() or "", page.content()[:8192] if hasattr(page, "content") else ""),
+                    "cloudflare_detected": _is_cloudflare_blocked(safe_title(page), safe_content_excerpt(page, 8192)),
                 })
                 browser.close()
         except Exception as e:

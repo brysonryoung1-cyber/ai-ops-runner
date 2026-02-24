@@ -404,6 +404,9 @@ export async function POST(req: NextRequest) {
     );
     writeRunRecord(runRecord);
 
+    // Always include run_id for hq_apply.sh and Runs UI polling
+    responsePayload.run_id = runId;
+
     return NextResponse.json(responsePayload, { status: result.ok ? 200 : 502 });
   } catch (err) {
     const finishedAt = new Date();

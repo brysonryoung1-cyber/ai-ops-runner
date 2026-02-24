@@ -68,6 +68,7 @@ const ACTION_PROJECT_MAP: Record<string, string> = {
   soma_kajabi_phase0: "soma_kajabi",
   soma_kajabi_auto_finish: "soma_kajabi",
   soma_kajabi_session_check: "soma_kajabi",
+  openclaw_novnc_restart: "soma_kajabi",
   soma_zane_finish_plan: "soma_kajabi",
   soma_connectors_status: "soma_kajabi",
   soma_kajabi_bootstrap_start: "soma_kajabi",

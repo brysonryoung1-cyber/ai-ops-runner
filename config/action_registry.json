@@ -141,6 +141,13 @@
       "cmd_template": "cd ${ROOT_DIR} && ./ops/with_exit_node.sh -- ${ROOT_DIR}/.venv-hostd/bin/python ./ops/scripts/soma_kajabi_session_check.py"
     },
     {
+      "id": "openclaw_novnc_restart",
+      "label": "Restart noVNC",
+      "project_id": "soma_kajabi",
+      "timeout_sec": 30,
+      "cmd_template": "cd ${ROOT_DIR} && bash ./ops/scripts/novnc_restart.sh"
+    },
+    {
       "id": "soma_connectors_status",
       "label": "Connectors Status",
       "project_id": "soma_kajabi",
