@@ -339,6 +339,31 @@ export default function ProjectDetailsPage() {
 
       {isSoma && (
         <>
+          <div className="mb-6 flex flex-wrap items-center gap-3">
+            <Link
+              href="/docs/soma"
+              className="px-3 py-1.5 text-xs font-medium rounded-xl bg-white/10 hover:bg-white/15 text-white/90 border border-white/10"
+            >
+              Open Locked Spec
+            </Link>
+            <Link
+              href="/docs/soma"
+              className="px-3 py-1.5 text-xs font-medium rounded-xl bg-white/10 hover:bg-white/15 text-white/90 border border-white/10"
+            >
+              Open Acceptance Checklist
+            </Link>
+            {project.last_auto_finish_status && (
+              <span
+                className={`px-2 py-0.5 text-xs font-medium rounded ${
+                  project.last_auto_finish_status === "PASS"
+                    ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                    : "bg-red-500/20 text-red-400 border border-red-500/30"
+                }`}
+              >
+                Latest Acceptance: {project.last_auto_finish_status}
+              </span>
+            )}
+          </div>
           <ConnectorsCard
             result={
               project.id === "soma_kajabi"
@@ -382,19 +407,20 @@ export default function ProjectDetailsPage() {
               disabled={execLoading !== null && execLoading !== "soma_kajabi_auto_finish"}
               onClick={() => handleExec("soma_kajabi_auto_finish")}
             />
-            {project.last_auto_finish_status && (
+            {project.last_auto_finish_run_id && (
               <div className="mt-2 flex items-center gap-2 text-xs">
-                <span className={project.last_auto_finish_status === "PASS" ? "text-emerald-400" : "text-red-400"}>
-                  Last: {project.last_auto_finish_status}
-                </span>
-                {project.last_auto_finish_run_id && (
-                  <Link
-                    href={`/artifacts?path=artifacts/soma_kajabi/auto_finish/${project.last_auto_finish_run_id}/SUMMARY.md`}
-                    className="text-blue-400 hover:text-blue-300"
-                  >
-                    Open Summary
-                  </Link>
-                )}
+                <Link
+                  href={`/artifacts/soma_kajabi/auto_finish/${encodeURIComponent(project.last_auto_finish_run_id)}/SUMMARY.md`}
+                  className="text-blue-400 hover:text-blue-300"
+                >
+                  Open Summary
+                </Link>
+                <Link
+                  href={`/artifacts/soma_kajabi/acceptance/${encodeURIComponent(project.last_auto_finish_run_id)}`}
+                  className="text-blue-400 hover:text-blue-300"
+                >
+                  Open Acceptance
+                </Link>
               </div>
             )}
             <ActionButton

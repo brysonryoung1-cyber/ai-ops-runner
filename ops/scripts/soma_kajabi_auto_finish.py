@@ -5,6 +5,7 @@ Runs Phase0→FinishPlan automatically. Handles Cloudflare (spawns capture_inter
 emits WAITING_FOR_HUMAN with noVNC URL, waits for completion, retries Phase0).
 Uses exit node wrapper when /etc/ai-ops-runner/config/soma_kajabi_exit_node.txt exists.
 Produces one canonical summary artifact at artifacts/soma_kajabi/auto_finish/<run_id>/.
+Writes acceptance artifacts under artifacts/soma_kajabi/acceptance/<run_id>/.
 """
 
 from __future__ import annotations
@@ -16,6 +17,9 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Required offer URLs per SOMA_LOCKED_SPEC (fail-closed if not found when checkable)
+REQUIRED_OFFER_URLS = ["/offers/q6ntyjef/checkout", "/offers/MHMmHyVZ/checkout"]
 
 KAJABI_CLOUDFLARE_BLOCKED = "KAJABI_CLOUDFLARE_BLOCKED"
 EXIT_NODE_OFFLINE = "EXIT_NODE_OFFLINE"
@@ -97,6 +101,27 @@ def _parse_last_json_line(text: str) -> dict:
             except json.JSONDecodeError:
                 pass
     return {}
+
+
+def _check_offer_urls(root: Path) -> tuple[str, bool]:
+    """Check required offer URLs. Returns (status, pass).
+    status: 'ok' | 'REQUIRES_HUMAN_CONFIRMATION' | 'FAIL:<reason>'
+    """
+    discover_base = root / "artifacts" / "soma_kajabi" / "discover"
+    if not discover_base.exists():
+        return "REQUIRES_HUMAN_CONFIRMATION", True  # Can't check, don't fail
+    dirs = sorted([d for d in discover_base.iterdir() if d.is_dir()], key=lambda d: d.name, reverse=True)
+    for d in dirs[:3]:
+        page_html = d / "page.html"
+        products_json = d / "products.json"
+        if page_html.exists():
+            content = page_html.read_text(errors="replace")
+            found = [u for u in REQUIRED_OFFER_URLS if u in content]
+            if len(found) < len(REQUIRED_OFFER_URLS):
+                missing = [u for u in REQUIRED_OFFER_URLS if u not in content]
+                return f"FAIL: Offer URLs not found on page: {missing}", False
+            return "ok", True
+    return "REQUIRES_HUMAN_CONFIRMATION", True
 
 
 def _update_project_state_fail(root: Path, run_id: str) -> None:
@@ -273,6 +298,27 @@ def main() -> int:
         if not finish_dir or not (finish_dir / name).exists():
             return _fail_closed(out_dir, run_id, "FINISH_PLAN_ARTIFACTS_MISSING", f"Missing {name}")
 
+    # ── E2) Write acceptance artifacts (Phase 2) ──
+    try:
+        from services.soma_kajabi.acceptance_artifacts import write_acceptance_artifacts
+        accept_dir, accept_summary = write_acceptance_artifacts(root, run_id, phase0_dir)
+        accept_rel = str(accept_dir.relative_to(root))
+    except Exception as e:
+        return _fail_closed(out_dir, run_id, "ACCEPTANCE_ARTIFACTS_FAILED", str(e)[:200])
+
+    # ── E3) Fail-closed gates ──
+    if not accept_summary.get("pass", True):
+        return _fail_closed(
+            out_dir, run_id, "MIRROR_EXCEPTIONS_NON_EMPTY",
+            f"Practitioner not superset of Home above-paywall; {accept_summary.get('exceptions_count', 0)} exceptions"
+        )
+    offer_status, offer_pass = _check_offer_urls(root)
+    if not offer_pass:
+        return _fail_closed(out_dir, run_id, "OFFER_URLS_MISMATCH", offer_status)
+    for name in ["final_library_snapshot.json", "video_manifest.csv", "mirror_report.json", "changelog.md"]:
+        if not (accept_dir / name).exists():
+            return _fail_closed(out_dir, run_id, "REQUIRED_ARTIFACTS_MISSING", f"Missing {name}")
+
     # ── F) Produce canonical summary artifact ──
     base_url = os.environ.get("OPENCLAW_HQ_BASE_URL", "https://hq.example.com")
     phase0_rel = str(phase0_dir.relative_to(root)) if phase0_dir else ""
@@ -283,6 +329,11 @@ def main() -> int:
         "phase0_artifact_dir": f"{base_url}/artifacts?path={phase0_rel}",
         "finish_plan_artifact_dir": f"{base_url}/artifacts?path={finish_rel}",
         "summary_md": f"{base_url}/artifacts?path=artifacts/soma_kajabi/auto_finish/{run_id}/SUMMARY.md",
+        "acceptance_dir": f"{base_url}/artifacts?path={accept_rel}",
+        "final_library_snapshot": f"{base_url}/artifacts?path={accept_rel}/final_library_snapshot.json",
+        "video_manifest": f"{base_url}/artifacts?path={accept_rel}/video_manifest.csv",
+        "mirror_report": f"{base_url}/artifacts?path={accept_rel}/mirror_report.json",
+        "changelog": f"{base_url}/artifacts?path={accept_rel}/changelog.md",
     }
     if capture_run_id:
         links["capture_artifact_dir"] = f"{base_url}/artifacts?path=artifacts/soma_kajabi/capture_interactive/{capture_run_id}"
@@ -301,11 +352,17 @@ def main() -> int:
             "phase0": phase0_rel,
             "finish_plan": finish_rel,
             "auto_finish": f"artifacts/soma_kajabi/auto_finish/{run_id}",
+            "acceptance": accept_rel,
         },
         "snapshot_counts": {
             "home_modules": home_modules,
             "home_lessons": home_lessons,
             "practitioner_lessons": pract_lessons,
+        },
+        "acceptance": {
+            "pass": accept_summary.get("pass", True),
+            "exceptions_count": accept_summary.get("exceptions_count", 0),
+            "offer_urls": offer_status,
         },
         "links": links,
         "next_actions": [
@@ -318,6 +375,15 @@ def main() -> int:
     (out_dir / "LINKS.json").write_text(json.dumps(links, indent=2))
 
     next_actions = "\n".join(f"- {a}" for a in summary_json["next_actions"])
+    acc_pass = accept_summary.get("pass", True)
+    acc_table = f"""| Check | Status |
+|-------|--------|
+| Mirror (Home→Practitioner) | {"PASS" if acc_pass else "FAIL"} |
+| Offer URLs | {offer_status} |
+| Final Library Snapshot | [View]({links["final_library_snapshot"]}) |
+| Video Manifest | [View]({links["video_manifest"]}) |
+| Mirror Report | [View]({links["mirror_report"]}) |
+| Changelog | [View]({links["changelog"]}) |"""
     summary_md = f"""# Auto-Finish Soma — PASS
 
 **Run ID**: {run_id}
@@ -331,11 +397,15 @@ def main() -> int:
 ## Artifact Dirs
 - Phase0: `{phase0_rel}`
 - Finish Plan: `{finish_rel}`
+- Acceptance: `{accept_rel}`
 
 ## Run IDs
 - Phase0: {phase0_run_id}
 - Finish Plan: {finish_run_id}
 {f'- Capture (Cloudflare): {capture_run_id}' if capture_run_id else ''}
+
+## Acceptance Checklist
+{acc_table}
 
 ## Next Actions
 {next_actions}
@@ -344,6 +414,7 @@ def main() -> int:
 - [Open Summary]({links["summary_md"]})
 - [Phase0 Artifacts]({links["phase0_artifact_dir"]})
 - [Finish Plan Artifacts]({links["finish_plan_artifact_dir"]})
+- [Acceptance Artifacts]({links["acceptance_dir"]})
 """
     (out_dir / "SUMMARY.md").write_text(summary_md)
 

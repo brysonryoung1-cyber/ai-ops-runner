@@ -42,9 +42,14 @@ def test_phase0_success_path_produces_summary(tmp_path):
 
     phase0_dir = root / "artifacts" / "soma_kajabi" / "phase0" / "phase0_20250101T120000Z_abc12345"
     phase0_dir.mkdir()
+    # Practitioner must be superset of Home above-paywall (mirror pass)
     (phase0_dir / "kajabi_library_snapshot.json").write_text(
-        json.dumps({"home": {"modules": ["M1"], "lessons": [{"title": "L1"}]}, "practitioner": {"lessons": [{"title": "P1"}]}})
+        json.dumps({
+            "home": {"modules": ["M1"], "lessons": [{"module_name": "M1", "title": "L1", "above_paywall": "yes"}]},
+            "practitioner": {"modules": ["M1"], "lessons": [{"module_name": "M1", "title": "L1"}, {"module_name": "M1", "title": "P1"}]},
+        })
     )
+    (phase0_dir / "video_manifest.csv").write_text("email_id,subject,file_name,sha256,rough_topic,proposed_module,proposed_lesson_title,proposed_description,status\n")
     finish_dir = root / "artifacts" / "soma_kajabi" / "zane_finish_plan" / "zane_20250101T120100Z_def67890"
     finish_dir.mkdir()
     (finish_dir / "PUNCHLIST.md").write_text("# Punchlist\n")
@@ -54,6 +59,9 @@ def test_phase0_success_path_produces_summary(tmp_path):
     storage = tmp_path / "storage.json"
     storage.write_text('{"cookies":[]}')
 
+    # Ensure services.soma_kajabi.acceptance_artifacts is importable (from REPO_ROOT)
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
     spec = importlib.util.spec_from_file_location(
         "soma_kajabi_auto_finish",
         REPO_ROOT / "ops" / "scripts" / "soma_kajabi_auto_finish.py",
@@ -94,6 +102,15 @@ def test_phase0_success_path_produces_summary(tmp_path):
     assert summary["ok"] is True
     assert "snapshot_counts" in summary
     assert summary["snapshot_counts"]["home_modules"] == 1
+    assert "acceptance" in summary
+    assert summary["acceptance"]["pass"] is True
+    run_id = summary["run_id"]
+    accept_dir = root / "artifacts" / "soma_kajabi" / "acceptance" / run_id
+    assert accept_dir.exists()
+    assert (accept_dir / "final_library_snapshot.json").exists()
+    assert (accept_dir / "video_manifest.csv").exists()
+    assert (accept_dir / "mirror_report.json").exists()
+    assert (accept_dir / "changelog.md").exists()
 
 
 def test_storage_state_missing_fails_closed(tmp_path):
