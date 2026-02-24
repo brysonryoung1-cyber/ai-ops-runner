@@ -93,10 +93,11 @@ def _capture_journal(artifact_dir: Path) -> Path:
 
 
 def ensure_novnc_ready(artifact_dir: Path, run_id: str) -> tuple[bool, str, str | None, str | None]:
-    """Restart openclaw-novnc, poll probe up to 30s. Return (ready, url, error_class, journal_artifact).
+    """Probe noVNC; if fails: restart openclaw-novnc, retry probe 3x. Return (ready, url, error_class, journal_artifact).
 
+    Flow: run novnc_probe.sh → if fail: systemctl restart → retry probe 3x → if still fail: capture journal, fail-closed.
     If probe passes: (True, url, None, None).
-    If probe fails after 30s: (False, url, "NOVNC_BACKEND_UNAVAILABLE", rel_path_to_journal).
+    If probe fails after restart+retries: (False, url, "NOVNC_BACKEND_UNAVAILABLE", rel_path_to_journal).
     """
     url = _get_tailscale_url()
     env_dir = Path("/run/openclaw-novnc")
@@ -112,22 +113,31 @@ def ensure_novnc_ready(artifact_dir: Path, run_id: str) -> tuple[bool, str, str 
     except OSError:
         return False, url, "NOVNC_BACKEND_UNAVAILABLE", None
 
-    try:
-        subprocess.run(["systemctl", "stop", "openclaw-novnc"], capture_output=True, timeout=10)
-        subprocess.run(["systemctl", "start", "openclaw-novnc"], check=True, capture_output=True, timeout=15)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
-        return False, url, "NOVNC_BACKEND_UNAVAILABLE", None
-
-    deadline = time.monotonic() + PROBE_TIMEOUT
-    while time.monotonic() < deadline:
-        ok, _reason = _run_probe()
+    def _try_probe_with_restart() -> tuple[bool, str]:
+        ok, reason = _run_probe()
         if ok:
-            return True, url, None, None
-        time.sleep(1)
+            return True, ""
+        try:
+            subprocess.run(["systemctl", "restart", "openclaw-novnc"], capture_output=True, timeout=15)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False, reason
+        for attempt in range(3):
+            time.sleep(2)
+            ok, _ = _run_probe()
+            if ok:
+                return True, ""
+        return False, reason
 
-    # Fail-closed: capture journal and return error with artifact path (for HQ link)
+    ok, reason = _run_probe()
+    if ok:
+        return True, url, None, None
+
+    ok, _ = _try_probe_with_restart()
+    if ok:
+        return True, url, None, None
+
+    # Fail-closed: capture last 200 lines of journalctl into audit artifact
     journal_path = _capture_journal(artifact_dir)
-    # Return path suitable for artifacts?path= (relative to repo root)
     try:
         repo = Path(__file__).resolve().parents[2]
         rel = str(journal_path.relative_to(repo))
