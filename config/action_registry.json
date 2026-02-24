@@ -285,6 +285,12 @@
       "label": "MicroGPT Offline Canary",
       "timeout_sec": 120,
       "cmd_template": "cd ${ROOT_DIR} && ./ops/scripts/microgpt_canary_submit.sh"
+    },
+    {
+      "id": "openclaw_hq_audit",
+      "label": "Run HQ Audit",
+      "timeout_sec": 120,
+      "cmd_template": "cd ${ROOT_DIR} && ./ops/openclaw_hq_audit.sh"
     }
   ]
 }

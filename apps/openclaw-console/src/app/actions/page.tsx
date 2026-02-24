@@ -30,6 +30,13 @@ const DESTRUCTIVE_ACTIONS = new Set(["apply", "guard", "soma_mirror"]);
 
 const ACTIONS: ActionDef[] = [
   {
+    action: "openclaw_hq_audit",
+    label: "Run HQ Audit",
+    description:
+      "Fully agentic HQ audit (localhost-only). Checks API, hostd, docker, systemd, noVNC. Produces SUMMARY.md + self-heal loop.",
+    variant: "primary",
+  },
+  {
     action: "doctor",
     label: "Run Doctor",
     description: "Full health check of the OpenClaw stack on aiops-1",
