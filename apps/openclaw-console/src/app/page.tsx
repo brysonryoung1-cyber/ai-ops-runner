@@ -193,6 +193,13 @@ export default function OverviewPage() {
   const [diagStatus, setDiagStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [diagLink, setDiagLink] = useState<string | null>(null);
   const [diagRunId, setDiagRunId] = useState<string | null>(null);
+  const [hqAuditLast, setHqAuditLast] = useState<{
+    run_id: string | null;
+    overall_pass: boolean | null;
+    artifact_dir: string | null;
+    summary_path: string | null;
+    tailnet_url: string | null;
+  } | null>(null);
 
   // Check connectivity via server-mediated endpoint; 3s hard timeout
   const HOST_STATUS_TIMEOUT_MS = 3000;
@@ -317,6 +324,29 @@ export default function OverviewPage() {
     }
   }, [token]);
 
+  // Last HQ Audit result
+  const fetchHqAuditLast = useCallback(async () => {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) headers["X-OpenClaw-Token"] = token;
+      const res = await fetch("/api/hq-audit/last", { headers });
+      const data = await res.json();
+      if (data?.ok) {
+        setHqAuditLast({
+          run_id: data.run_id ?? null,
+          overall_pass: data.overall_pass ?? null,
+          artifact_dir: data.artifact_dir ?? null,
+          summary_path: data.summary_path ?? null,
+          tailnet_url: data.tailnet_url ?? null,
+        });
+      } else {
+        setHqAuditLast(null);
+      }
+    } catch {
+      setHqAuditLast(null);
+    }
+  }, [token]);
+
   // Last deploy result (proof bundle)
   const fetchDeployLast = useCallback(async () => {
     try {
@@ -371,6 +401,7 @@ export default function OverviewPage() {
     fetchDeployLast();
     fetchRecentRuns();
     fetchCostSummary();
+    fetchHqAuditLast();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
 
@@ -379,6 +410,12 @@ export default function OverviewPage() {
   useEffect(() => {
     if (deployResult !== undefined) fetchDeployLast();
   }, [deployResult, fetchDeployLast]);
+
+  // Refetch last HQ Audit when openclaw_hq_audit completes
+  const hqAuditResult = results["openclaw_hq_audit"];
+  useEffect(() => {
+    if (hqAuditResult !== undefined) fetchHqAuditLast();
+  }, [hqAuditResult, fetchHqAuditLast]);
 
   const doctorResult = results["doctor"];
   const portsResult = results["ports"];
@@ -514,6 +551,46 @@ export default function OverviewPage() {
                   {label}
                 </GlassButton>
               ))}
+            </div>
+          </div>
+        </GlassCard>
+      )}
+
+      {/* HQ Audit */}
+      {connected === true && (
+        <GlassCard className="mb-6">
+          <div className="px-5 py-3 border-b border-white/10 flex items-center justify-between flex-wrap gap-2">
+            <span className="text-sm font-semibold text-white/95">HQ Audit</span>
+            <Pill variant="info">Localhost-only, no tokens</Pill>
+          </div>
+          <div className="p-5">
+            <p className="text-xs text-white/60 mb-3">
+              Fully agentic audit: API, hostd, docker, systemd, noVNC. Self-heal loop (3 retries). Use HQ → Actions → Run HQ Audit.
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <GlassButton
+                variant="primary"
+                onClick={() => exec("openclaw_hq_audit")}
+                disabled={loading !== null && loading !== "openclaw_hq_audit"}
+              >
+                {loading === "openclaw_hq_audit" ? "Running…" : "Run HQ Audit"}
+              </GlassButton>
+              {hqAuditLast?.run_id && (
+                <div className="flex items-center gap-2 text-xs">
+                  <StatusDot variant={hqAuditLast.overall_pass === true ? "pass" : hqAuditLast.overall_pass === false ? "fail" : "idle"} />
+                  <span className="text-white/90 font-medium">
+                    Last: {hqAuditLast.overall_pass === true ? "PASS" : hqAuditLast.overall_pass === false ? "FAIL" : "—"}
+                  </span>
+                  {hqAuditLast.artifact_dir && (
+                    <Link
+                      href={`/artifacts/${hqAuditLast.artifact_dir.replace(/^artifacts\//, "")}`}
+                      className="text-blue-400 hover:text-blue-300"
+                    >
+                      Open Summary →
+                    </Link>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </GlassCard>

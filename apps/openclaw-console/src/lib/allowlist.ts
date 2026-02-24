@@ -45,7 +45,8 @@ export type ActionName =
   | "autopilot_disable"
   | "autopilot_run_now"
   | "autopilot_install"
-  | "llm.microgpt.canary";
+  | "llm.microgpt.canary"
+  | "openclaw_hq_audit";
 
 export interface AllowedAction {
   name: ActionName;
@@ -387,6 +388,14 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
       "Run offline canary using Karpathy microgpt (no LLM providers). Writes to artifacts/<job_id>/microgpt_canary/.",
     remoteCommand:
       "cd /opt/ai-ops-runner && ./ops/scripts/microgpt_canary_submit.sh",
+    timeoutSec: 120,
+  },
+  openclaw_hq_audit: {
+    name: "openclaw_hq_audit",
+    label: "Run HQ Audit",
+    description:
+      "Fully agentic HQ audit (localhost-only). Checks API, hostd, docker, systemd, noVNC. Produces artifacts/hq_audit/<run_id>/{SUMMARY.md,SUMMARY.json,LINKS.json}. Self-heal loop (3 retries).",
+    remoteCommand: "cd /opt/ai-ops-runner && ./ops/openclaw_hq_audit.sh",
     timeoutSec: 120,
   },
 };

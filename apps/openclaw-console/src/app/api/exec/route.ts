@@ -352,6 +352,7 @@ export async function POST(req: NextRequest) {
       actionName === "soma_kajabi_auto_finish" ||
       actionName === "soma_kajabi_session_check" ||
       actionName === "soma_zane_finish_plan" ||
+      actionName === "openclaw_hq_audit" ||
       actionName.startsWith("pred_markets.");
     if (isProjectAction && result.stdout) {
       try {

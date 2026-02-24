@@ -86,6 +86,7 @@ const ACTION_PROJECT_MAP: Record<string, string> = {
   "pred_markets.mirror.backfill": "pred_markets",
   "pred_markets.report.health": "pred_markets",
   "pred_markets.report.daily": "pred_markets",
+  openclaw_hq_audit: "infra_openclaw",
 };
 
 export function resolveProjectId(action: string): string {

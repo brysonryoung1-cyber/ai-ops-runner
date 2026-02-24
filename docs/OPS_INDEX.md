@@ -2,7 +2,7 @@
 
 Complete index of all operational scripts and commands in ai-ops-runner. This document is canonical and MUST be updated on every change.
 
-**Last Updated**: 2026-02-23
+**Last Updated**: 2026-02-24
 
 ## Quick Reference
 
@@ -23,6 +23,7 @@ Complete index of all operational scripts and commands in ai-ops-runner. This do
 | Script | Description | Run As | Frequency |
 |--------|-------------|--------|-----------|
 | `ops/openclaw_doctor.sh` | Full health check (Tailscale, Docker, API, ports, disk, keys, hostd) | any | hourly (timer) |
+| `ops/openclaw_hq_audit.sh` | **HQ Audit** — localhost-only, agentic (via HQ → Actions → Run HQ Audit) | hostd | on-demand |
 | `ops/hostd_watchdog.sh` | hostd auto-heal (probe /health, restart on fail; via timer) | root | 60s (timer) |
 | `ops/openclaw_heal.sh` | Apply + verify + evidence bundle | root | on-demand |
 | `ops/openclaw_guard.sh` | Regression guard with safe auto-remediation | root | 10min (timer) |
@@ -113,6 +114,12 @@ Complete index of all operational scripts and commands in ai-ops-runner. This do
 | `ops/vps_doctor.sh` | Remote VPS health check |
 | `ops/vps_self_update.sh` | Review-gated self-update |
 
+## Deprecated (do not use)
+
+| Script | Replacement |
+|--------|-------------|
+| `ops/hq_audit.sh` | **Use HQ → Actions → Run HQ Audit** — the old script required OPENCLAW_HQ_TOKEN and tailnet URL reachability; the agentic action runs on hostd (localhost-only, no tokens). |
+
 ## Setup & Hooks
 
 | Script | Description |
@@ -147,6 +154,7 @@ All tests run hermetically (no network, no real secrets).
 | `ops/tests/openclaw_notify_selftest.sh` | Notifications + rate limiting |
 | `ops/tests/openclaw_console_auth_selftest.sh` | Console auth + allowlist |
 | `ops/tests/openclaw_hq_selftest.sh` | HQ schema + run recorder + UI guard |
+| `ops/tests/openclaw_hq_audit_selftest.sh` | HQ Audit: 127.0.0.1-only, artifact well-formed |
 | `ops/tests/with_exit_node_selftest.sh` | Exit node wrapper (fail-closed, trap) |
 | `ops/tests/openclaw_codex_review_selftest.sh` | Automated review pipeline |
 | `ops/tests/openclaw_vps_deploy_selftest.sh` | VPS deploy (mocked SSH, fail-closed) |
