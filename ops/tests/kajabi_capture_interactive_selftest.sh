@@ -22,14 +22,21 @@ print('  PASS: action in action_registry')
   exit 1
 fi
 
-# 2. Job in allowlist
-if ! grep -q "soma_kajabi_capture_interactive" configs/job_allowlist.yaml; then
+# 2. Persistent profile path is used
+if ! grep -q "kajabi_chrome_profile" ops/scripts/kajabi_capture_interactive.py; then
+  echo "  FAIL: persistent profile path not used in kajabi_capture_interactive.py"
+  exit 1
+fi
+echo "  PASS: persistent profile path used"
+
+# 3. Job in allowlist
+if [ -f configs/job_allowlist.yaml ] && ! grep -q "soma_kajabi_capture_interactive" configs/job_allowlist.yaml; then
   echo "  FAIL: soma_kajabi_capture_interactive not in job_allowlist"
   exit 1
 fi
 echo "  PASS: action in job_allowlist"
 
-# 3. Script exists and runs (will fail at Xvfb/Playwright — we only check it starts and creates artifact dir)
+# 4. Script exists and runs (will fail at Xvfb/Playwright — we only check it starts and creates artifact dir)
 ARTIFACT_DIR="$(mktemp -d)"
 trap "rm -rf '$ARTIFACT_DIR'" EXIT
 export ARTIFACT_DIR

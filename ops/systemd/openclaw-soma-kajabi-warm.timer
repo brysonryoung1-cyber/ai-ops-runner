@@ -1,0 +1,11 @@
+[Unit]
+Description=OpenClaw Soma Kajabi Session Warm (every 6 hours, when enabled)
+Requires=openclaw-soma-kajabi-warm.service
+
+[Timer]
+# Every 6 hours (conservative; avoid looking botty)
+OnCalendar=*-*-* 00,06,12,18:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

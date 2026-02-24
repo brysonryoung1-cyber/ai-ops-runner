@@ -1,20 +1,12 @@
 #!/usr/bin/env python3
-"""Kajabi interactive capture — headed browser over Tailscale-only noVNC.
+"""Soma Kajabi Session Check — validate session can reach admin/products and see both libraries.
 
-When Playwright hits Cloudflare block, this action starts a headed Chromium session
-in Xvfb, exposes it via noVNC (bound to 0.0.0.0 or Tailscale IP; firewall restricts
-to 100.64.0.0/10), and waits for a human to complete the Cloudflare check/login.
-Then exports storage_state and reruns discover.
+Uses exit node wrapper when /etc/ai-ops-runner/config/soma_kajabi_exit_node.txt exists.
+PASS only if Products page contains BOTH "Home User Library" and "Practitioner Library".
+If Cloudflare/login encountered: output WAITING_FOR_HUMAN with noVNC URL and pause.
 
-Usage: Run on aiops-1. Requires: Xvfb, x11vnc, noVNC (or websockify).
-  python3 ops/scripts/kajabi_capture_interactive.py
-
-Artifacts: artifacts/soma_kajabi/capture_interactive/<run_id>/
-  - summary.json (final_url, title, products_found, cloudflare_detected)
-  - screenshots/*.png
-  - instructions.txt (single-line Tailscale URL)
-
-Fail-closed: KAJABI_INTERACTIVE_CAPTURE_TIMEOUT after 20 minutes.
+Artifacts: artifacts/soma_kajabi/session_check/<run_id>/{SUMMARY.md, summary.json, screenshot.png, page_title.txt}
+No secrets.
 """
 
 from __future__ import annotations
@@ -29,15 +21,14 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Use bootstrap flow: admin → sites → click Soma → products (avoids 404 on direct /admin/products)
 KAJABI_ADMIN = "https://app.kajabi.com/admin"
 KAJABI_SITES = "https://app.kajabi.com/admin/sites"
 KAJABI_PRODUCTS_URL = "https://app.kajabi.com/admin/products"
-STORAGE_STATE_PATH = Path("/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json")
-KAJABI_CHROME_PROFILE_DIR = Path("/var/lib/openclaw/kajabi_chrome_profile")
 TARGET_PRODUCTS = ["Home User Library", "Practitioner Library"]
-TIMEOUT_SEC = 20 * 60  # 20 minutes
-KAJABI_INTERACTIVE_CAPTURE_TIMEOUT = "KAJABI_INTERACTIVE_CAPTURE_TIMEOUT"
+KAJABI_CHROME_PROFILE_DIR = Path("/var/lib/openclaw/kajabi_chrome_profile")
+EXIT_NODE_CONFIG = Path("/etc/ai-ops-runner/config/soma_kajabi_exit_node.txt")
+TIMEOUT_SEC = 5 * 60  # 5 min for session check
+NOVNC_PORT = 6080
 
 
 def _now_iso() -> str:
@@ -65,14 +56,13 @@ def _artifact_dir() -> Path:
         p.mkdir(parents=True, exist_ok=True)
         return p
     root = _repo_root()
-    run_id = f"capture_interactive_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
-    out = root / "artifacts" / "soma_kajabi" / "capture_interactive" / run_id
+    run_id = f"session_check_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
+    out = root / "artifacts" / "soma_kajabi" / "session_check" / run_id
     out.mkdir(parents=True, exist_ok=True)
     return out
 
 
 def _is_cloudflare_blocked(title: str, content: str) -> bool:
-    """Detect Cloudflare block by title/content."""
     combined = ((title or "") + " " + (content or ""))[:8192].lower()
     if "cloudflare" not in combined:
         return False
@@ -82,17 +72,12 @@ def _is_cloudflare_blocked(title: str, content: str) -> bool:
 
 
 def _page_has_both_products(content: str) -> tuple[bool, list[str]]:
-    """Check if page contains both target products."""
     content_lower = (content or "").lower()
     found = [t for t in TARGET_PRODUCTS if t.lower() in content_lower]
     return len(found) == len(TARGET_PRODUCTS), found
 
 
-NOVNC_PORT = 6080
-
-
 def _get_tailscale_ip() -> str:
-    """Get Tailscale IPv4 via tailscale ip -4. Prefer for binding."""
     try:
         out = subprocess.run(
             ["tailscale", "ip", "-4"],
@@ -108,7 +93,6 @@ def _get_tailscale_ip() -> str:
 
 
 def _get_tailscale_hostname() -> str:
-    """Get Tailscale hostname (e.g. aiops-1.tailc75c62.ts.net) from tailscale status --json."""
     try:
         out = subprocess.run(
             ["tailscale", "status", "--json"],
@@ -131,7 +115,6 @@ def _get_tailscale_hostname() -> str:
 
 
 def _get_tailscale_url() -> str:
-    """Get Tailscale-only noVNC URL. Never emits 127.0.0.1."""
     hostname = _get_tailscale_hostname()
     ip = _get_tailscale_ip()
     port = NOVNC_PORT
@@ -140,17 +123,10 @@ def _get_tailscale_url() -> str:
         return f"http://{hostname}:{port}{path}"
     if ip:
         return f"http://{ip}:{port}{path}"
-    return f"http://<TAILSCALE_IP>:{port}{path} (run on aiops-1 with Tailscale)"
-
-
-def _write_instructions(artifact_dir: Path, url: str) -> None:
-    """Write instructions.txt with single clickable URL and reconnection guidance."""
-    text = f"{url}\nIf you get 'Failed to connect', refresh the page; the viewer auto-restarts."
-    (artifact_dir / "instructions.txt").write_text(text)
+    return f"http://<TAILSCALE_IP>:{port}{path}"
 
 
 def _start_novnc_systemd(artifact_dir: Path, run_id: str) -> bool:
-    """Start openclaw-novnc via systemd. Return True if reachable."""
     env_dir = Path("/run/openclaw-novnc")
     try:
         env_dir.mkdir(parents=True, exist_ok=True)
@@ -164,20 +140,10 @@ def _start_novnc_systemd(artifact_dir: Path, run_id: str) -> bool:
         f"OPENCLAW_NOVNC_DISPLAY=:99\n"
     )
     try:
-        subprocess.run(
-            ["systemctl", "stop", "openclaw-novnc"],
-            capture_output=True,
-            timeout=10,
-        )
-        subprocess.run(
-            ["systemctl", "start", "openclaw-novnc"],
-            check=True,
-            capture_output=True,
-            timeout=10,
-        )
+        subprocess.run(["systemctl", "stop", "openclaw-novnc"], capture_output=True, timeout=10)
+        subprocess.run(["systemctl", "start", "openclaw-novnc"], check=True, capture_output=True, timeout=10)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
         return False
-    # Wait for websockify port
     for _ in range(30):
         try:
             import socket
@@ -192,25 +158,15 @@ def _start_novnc_systemd(artifact_dir: Path, run_id: str) -> bool:
 
 
 def _stop_novnc_systemd() -> None:
-    """Stop openclaw-novnc service."""
     try:
-        subprocess.run(
-            ["systemctl", "stop", "openclaw-novnc"],
-            capture_output=True,
-            timeout=15,
-        )
+        subprocess.run(["systemctl", "stop", "openclaw-novnc"], capture_output=True, timeout=15)
     except Exception:
         pass
 
 
 def _ensure_xvfb_and_novnc(artifact_dir: Path) -> tuple[subprocess.Popen | None, subprocess.Popen | None, subprocess.Popen | None]:
-    """Start Xvfb, x11vnc, and noVNC/websockify. Return (xvfb_proc, x11vnc_proc, novnc_proc)."""
     display = ":99"
-    xvfb_proc = None
-    x11vnc_proc = None
-    novnc_proc = None
-
-    # Start Xvfb
+    xvfb_proc = x11vnc_proc = novnc_proc = None
     try:
         xvfb_proc = subprocess.Popen(
             ["Xvfb", display, "-screen", "0", "1280x720x24", "-ac"],
@@ -219,21 +175,10 @@ def _ensure_xvfb_and_novnc(artifact_dir: Path) -> tuple[subprocess.Popen | None,
         )
         time.sleep(2)
         if xvfb_proc.poll() is not None:
-            err = b""
-            if xvfb_proc.stderr:
-                try:
-                    err = xvfb_proc.stderr.read()
-                except Exception:
-                    pass
-            (artifact_dir / "xvfb_stderr.txt").write_text(err.decode("utf-8", errors="replace"))
             return None, None, None
     except FileNotFoundError:
-        (artifact_dir / "instructions.txt").write_text(
-            "Xvfb not installed. Run: apt install xvfb (or sudo apt install xvfb)"
-        )
         return None, None, None
 
-    # Start x11vnc (VNC server on display)
     try:
         x11vnc_proc = subprocess.Popen(
             ["x11vnc", "-display", display, "-rfbport", "5900", "-localhost", "-nopw", "-forever"],
@@ -245,13 +190,8 @@ def _ensure_xvfb_and_novnc(artifact_dir: Path) -> tuple[subprocess.Popen | None,
         if x11vnc_proc.poll() is not None:
             return xvfb_proc, None, None
     except FileNotFoundError:
-        (artifact_dir / "instructions.txt").write_text(
-            "x11vnc not installed. Run: apt install x11vnc (or sudo apt install x11vnc)"
-        )
         return xvfb_proc, None, None
 
-    # Start websockify (VNC -> WebSocket) with noVNC web client if available.
-    # Bind to 0.0.0.0 or Tailscale IP so reachable over Tailscale; firewall restricts to 100.64.0.0/10.
     bind_addr = _get_tailscale_ip() or "0.0.0.0"
     bind_spec = f"{bind_addr}:{NOVNC_PORT}"
     web_dir = "/usr/share/novnc" if (Path("/usr/share/novnc/vnc.html").exists()) else None
@@ -263,11 +203,7 @@ def _ensure_xvfb_and_novnc(artifact_dir: Path) -> tuple[subprocess.Popen | None,
         fallback_cmd = ["python3", "-m", "websockify", "--web", web_dir, bind_spec, "127.0.0.1:5900"]
     for cmd in [base_cmd, fallback_cmd]:
         try:
-            novnc_proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
+            novnc_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             time.sleep(1)
             if novnc_proc.poll() is not None:
                 novnc_proc = None
@@ -276,13 +212,6 @@ def _ensure_xvfb_and_novnc(artifact_dir: Path) -> tuple[subprocess.Popen | None,
         except FileNotFoundError:
             novnc_proc = None
             continue
-
-    if novnc_proc is None:
-        url = _get_tailscale_url()
-        (artifact_dir / "instructions.txt").write_text(
-            f"websockify not installed. Run: pip install websockify (or apt install novnc). URL would be: {url}"
-        )
-        return xvfb_proc, x11vnc_proc, None
 
     return xvfb_proc, x11vnc_proc, novnc_proc
 
@@ -294,36 +223,7 @@ def main() -> int:
 
     out_dir = _artifact_dir()
     run_id = out_dir.name
-    screenshots_dir = out_dir / "screenshots"
-    screenshots_dir.mkdir(exist_ok=True)
-
-    # Prefer systemd noVNC (supervised, auto-restart); fall back to legacy
-    use_systemd_novnc = False
-    xvfb_proc, x11vnc_proc, novnc_proc = None, None, None
-
-    if _start_novnc_systemd(out_dir, run_id):
-        use_systemd_novnc = True
-    else:
-        xvfb_proc, x11vnc_proc, novnc_proc = _ensure_xvfb_and_novnc(out_dir)
-
-    if not use_systemd_novnc and novnc_proc is None:
-        url = _get_tailscale_url()
-        (out_dir / "instructions.txt").write_text(
-            f"{url}\n(noVNC stack failed; install: apt install xvfb x11vnc novnc)"
-        )
-        summary = {
-            "ok": False,
-            "error_class": "KAJABI_INTERACTIVE_CAPTURE_NO_VNC",
-            "message": "Xvfb/x11vnc/websockify not available. Install: apt install xvfb x11vnc; pip install websockify",
-            "artifact_dir": str(out_dir),
-        }
-        (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
-        print(json.dumps(summary))
-        return 1
-
-    tailscale_url = _get_tailscale_url()
-    _write_instructions(out_dir, tailscale_url)
-    print(tailscale_url, file=sys.stderr)
+    profile_dir = str(KAJABI_CHROME_PROFILE_DIR)
 
     try:
         from playwright.sync_api import sync_playwright
@@ -347,12 +247,6 @@ def main() -> int:
     def run_playwright():
         try:
             with sync_playwright() as p:
-                profile_dir = str(KAJABI_CHROME_PROFILE_DIR)
-                try:
-                    KAJABI_CHROME_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-                    KAJABI_CHROME_PROFILE_DIR.chmod(0o700)
-                except OSError:
-                    pass
                 browser = p.chromium.launch(
                     headless=False,
                     env=env,
@@ -360,7 +254,6 @@ def main() -> int:
                 )
                 context = browser.new_context()
                 page = context.new_page()
-                # Bootstrap: admin → sites → click Soma → products (avoids 404)
                 page.goto(KAJABI_ADMIN, wait_until="domcontentloaded", timeout=60000)
                 try:
                     page.wait_for_load_state("networkidle", timeout=15000)
@@ -371,7 +264,6 @@ def main() -> int:
                     page.wait_for_load_state("networkidle", timeout=15000)
                 except Exception:
                     pass
-                # Click Soma site (matches kajabi_admin_context._try_click_soma_site)
                 try:
                     link = page.get_by_role("link", name="Soma")
                     if link.count() > 0:
@@ -395,64 +287,67 @@ def main() -> int:
                     cloudflare = _is_cloudflare_blocked(title, content)
                     has_both, found = _page_has_both_products(content)
                     try:
-                        page.screenshot(path=str(screenshots_dir / f"poll_{int(time.time())}.png"))
+                        page.screenshot(path=str(out_dir / "screenshot.png"))
                     except Exception:
                         pass
+                    (out_dir / "page_title.txt").write_text(title)
                     if cloudflare:
-                        time.sleep(10)
+                        tailscale_url = _get_tailscale_url()
+                        (out_dir / "instructions.txt").write_text(
+                            f"{tailscale_url}\nOpen in browser (Tailscale). Complete Cloudflare/login."
+                        )
+                        print("\n--- WAITING_FOR_HUMAN ---", file=sys.stderr)
+                        print(tailscale_url, file=sys.stderr)
+                        sys.stderr.flush()
+                        time.sleep(15)
                         continue
                     if has_both:
-                        STORAGE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-                        context.storage_state(path=str(STORAGE_STATE_PATH))
-                        try:
-                            STORAGE_STATE_PATH.chmod(0o600)
-                        except OSError:
-                            pass
                         result_holder.append({
                             "ok": True,
                             "final_url": page.url,
                             "title": title,
                             "products_found": found,
-                            "cloudflare_detected": False,
                         })
                         browser.close()
                         done.set()
                         return
-                    time.sleep(10)
-                # Timeout
-                try:
-                    page.screenshot(path=str(out_dir / "screenshots" / "timeout_final.png"))
-                except Exception:
-                    pass
+                    time.sleep(5)
                 result_holder.append({
                     "ok": False,
-                    "error_class": KAJABI_INTERACTIVE_CAPTURE_TIMEOUT,
+                    "error_class": "SESSION_CHECK_TIMEOUT",
                     "final_url": page.url,
-                    "title": page.title() or "",
-                    "products_found": [],
-                    "cloudflare_detected": _is_cloudflare_blocked(page.title() or "", page.content()[:8192] if hasattr(page, "content") else ""),
+                    "title": title,
                 })
                 browser.close()
         except Exception as e:
             result_holder.append({
                 "ok": False,
-                "error_class": "KAJABI_INTERACTIVE_CAPTURE_ERROR",
+                "error_class": "SESSION_CHECK_ERROR",
                 "message": str(e)[:500],
             })
         finally:
             done.set()
 
+    # Start noVNC first (needed if Cloudflare triggers — human completes via noVNC)
+    use_systemd_novnc = False
+    xvfb_proc = x11vnc_proc = novnc_proc = None
+    if _start_novnc_systemd(out_dir, run_id):
+        use_systemd_novnc = True
+    else:
+        xvfb_proc, x11vnc_proc, novnc_proc = _ensure_xvfb_and_novnc(out_dir)
+
     t = threading.Thread(target=run_playwright)
     t.start()
     done.wait(timeout=TIMEOUT_SEC + 30)
+
     if not result_holder:
         result_holder.append({
             "ok": False,
-            "error_class": KAJABI_INTERACTIVE_CAPTURE_TIMEOUT,
-            "message": "Capture thread did not complete",
+            "error_class": "SESSION_CHECK_TIMEOUT",
+            "message": "Check thread did not complete",
         })
 
-    # Cleanup: stop systemd unit or kill legacy procs (AFTER storage_state export in run_playwright)
+    # Cleanup noVNC
     if use_systemd_novnc:
         _stop_novnc_systemd()
     else:
@@ -462,27 +357,33 @@ def main() -> int:
                     proc.terminate()
                     proc.wait(timeout=5)
                 except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
+                    pass
 
-    summary = result_holder[0].copy()
+    res = result_holder[0]
+    summary = res.copy()
     summary["artifact_dir"] = str(out_dir)
-    summary["run_id"] = out_dir.name
-    summary["tailscale_url"] = tailscale_url
-    summary["profile_dir_used"] = str(KAJABI_CHROME_PROFILE_DIR)
+    summary["run_id"] = run_id
+    summary["profile_dir_used"] = profile_dir
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
 
     if summary.get("ok"):
+        summary_md = f"""# Session Check — PASS
+
+**Run ID**: {run_id}
+**Products found**: {summary.get("products_found", [])}
+"""
+        (out_dir / "SUMMARY.md").write_text(summary_md)
         print(json.dumps({
             "ok": True,
             "artifact_dir": str(out_dir),
-            "run_id": out_dir.name,
+            "run_id": run_id,
             "products_found": summary.get("products_found", []),
-            "tailscale_url": tailscale_url,
         }))
         return 0
+
+    err = summary.get("error_class", "SESSION_CHECK_FAILED")
+    msg = summary.get("message", "Session check failed")
+    (out_dir / "SUMMARY.md").write_text(f"# Session Check — FAIL\n\n**{err}**: {msg}\n")
     print(json.dumps(summary))
     return 1
 

@@ -1,0 +1,18 @@
+[Unit]
+Description=OpenClaw Soma Kajabi Session Warm (optional, enablement-gated)
+After=network.target
+
+[Service]
+Type=oneshot
+# Only runs if /etc/ai-ops-runner/config/soma_kajabi_session_warm_enabled.txt exists
+# Uses with_exit_node when configured; fail-closed skips on EXIT_NODE_OFFLINE
+Environment=OPENCLAW_REPO_ROOT=/opt/ai-ops-runner
+ExecStart=/opt/ai-ops-runner/.venv-hostd/bin/python /opt/ai-ops-runner/ops/scripts/soma_kajabi_session_warm.py
+WorkingDirectory=/opt/ai-ops-runner
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openclaw-soma-kajabi-warm
+
+[Install]
+WantedBy=multi-user.target

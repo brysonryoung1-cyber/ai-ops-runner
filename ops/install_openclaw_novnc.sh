@@ -20,4 +20,10 @@ sed "s|/opt/ai-ops-runner|$ROOT_DIR|g" "$ROOT_DIR/ops/systemd/openclaw-novnc.ser
 
 sudo systemctl daemon-reload
 mkdir -p /run/openclaw-novnc
+
+# Persistent Chromium profile for Kajabi (Cloudflare/cookies persist across runs)
+KAJABI_PROFILE="/var/lib/openclaw/kajabi_chrome_profile"
+sudo mkdir -p "$KAJABI_PROFILE"
+sudo chmod 700 "$KAJABI_PROFILE"
+
 echo "openclaw-novnc: unit installed (start on demand via systemctl start openclaw-novnc)"
