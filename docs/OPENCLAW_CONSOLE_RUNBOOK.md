@@ -203,7 +203,7 @@ Apply runs on the **ship host** (the machine where hostd runs). **No self-SSH**:
 
 3. **Where identity is set**: hostd reads `EnvironmentFile=-/etc/ai-ops-runner/secrets/openclaw_hostd.env` (installed by `ops/install_openclaw_hostd.sh`). That file must contain `OPENCLAW_VPS_SSH_IDENTITY=/etc/ai-ops-runner/secrets/openclaw_ssh/vps_deploy_ed25519` (and optionally `OPENCLAW_VPS_SSH_HOST=root@100.123.61.57`).
 
-4. **Next**: In HQ click **Actions → Apply OpenClaw (Remote)** once. Then `/api/autopilot/status` should be 200 and `/api/ui/health_public` should show a real `build_sha` (not `unknown`).
+4. **Next**: In HQ click **Actions → Deploy+Verify** (Overview) or **Apply OpenClaw (Remote)** once. Then `/api/autopilot/status` should be 200 and `/api/ui/health_public` should show a real `build_sha` (not `unknown`).
 
 **Security**: The script never prints the private key. Do not open extra ports or disable Tailscale-only assumptions.
 
@@ -228,7 +228,7 @@ sudo ./ops/openclaw_apply_remote_setup_ssh.sh root@100.123.61.57
 - Success: script prints `OK_FROM_DEPLOY_KEY` and completes.
 - If script stops at Phase 2 (no access): it prints the **public key** and a **one-liner**. Run that one-liner **on the target** (e.g. from your Mac: `ssh root@100.123.61.57 'mkdir -p /root/.ssh && chmod 700 /root/.ssh && echo "PASTE_PUB_KEY" >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys'`), then re-run the setup script on the ship host.
 
-**Phase 3 — HQ:** Left nav → Actions → **Apply OpenClaw (Remote)** → Execute. Then Runs → open newest `infra_openclaw` apply run → must be `status=success` with artifact paths.
+**Phase 3 — HQ:** Overview → **Deploy+Verify** (or Actions → **Apply OpenClaw (Remote)**) → Execute. Then Runs → open newest `infra_openclaw` run → must be `status=success` with artifact paths.
 
 **Phase 4 — Verify endpoints:** From any machine with HQ reachability (e.g. Mac):
 ```bash

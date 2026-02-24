@@ -59,6 +59,18 @@ function validateOrigin(req: NextRequest): NextResponse | null {
     return null;
   }
 
+  // Tailscale-trusted automation: when OPENCLAW_TRUST_TAILSCALE=1, allow requests from Tailscale hostname (e.g. curl from Mac/phone on tailnet)
+  if (process.env.OPENCLAW_TRUST_TAILSCALE === "1") {
+    const tsHostname = process.env.OPENCLAW_TAILSCALE_HOSTNAME;
+    if (tsHostname && host.startsWith(tsHostname.split(":")[0])) {
+      return null;
+    }
+    // Fallback: allow any *.ts.net host when trust_tailscale (Tailscale Serve HTTPS)
+    if (host.includes(".ts.net")) {
+      return null;
+    }
+  }
+
   const forbiddenPayload = {
     ok: false,
     error: "Forbidden",

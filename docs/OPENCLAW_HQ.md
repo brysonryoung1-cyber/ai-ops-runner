@@ -163,12 +163,11 @@ Tests cover:
 
 ## Deploy
 
-```bash
-# On LOCAL: build, push, deploy
-./ops/openclaw_vps_deploy.sh
+**Preferred**: Use **HQ Deploy+Verify** (Overview → Deploy+Verify button). No manual steps on aiops-1.
 
-# On aiops-1: pull and restart console
-cd /opt/ai-ops-runner && git pull --ff-only && ./ops/openclaw_console_build.sh && ./ops/openclaw_console_start.sh
+```bash
+# On LOCAL (ship host): full deploy including console
+./ops/openclaw_vps_deploy.sh
 ```
 
 ## Access
