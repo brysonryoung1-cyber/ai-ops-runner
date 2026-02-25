@@ -130,6 +130,11 @@ _run_audit() {
     LATEST_NOVNC="$(ls -1t "$ROOT_DIR/artifacts/hq_audit/novnc_guard" 2>/dev/null | head -1)"
     [ -n "$LATEST_NOVNC" ] && [ -f "$ROOT_DIR/artifacts/hq_audit/novnc_guard/$LATEST_NOVNC/status.json" ] && cp "$ROOT_DIR/artifacts/hq_audit/novnc_guard/$LATEST_NOVNC/status.json" "$report_dir/novnc_guard_status.json" 2>/dev/null || true
   fi
+  # 3c. Run openclaw_novnc_doctor (framebuffer-aware, returns PASS/FAIL + noVNC URL)
+  if [ -x "$ROOT_DIR/ops/openclaw_novnc_doctor.sh" ]; then
+    OPENCLAW_RUN_ID="${RUN_ID}_doctor" "$ROOT_DIR/ops/openclaw_novnc_doctor.sh" >"$report_dir/novnc_doctor.json" 2>/dev/null || true
+    [ -s "$report_dir/novnc_doctor.json" ] || echo '{"ok":false,"result":"FAIL"}' >"$report_dir/novnc_doctor.json"
+  fi
 
   # 4. novnc_probe + novnc_status.json
   if [ -x "$ROOT_DIR/ops/novnc_probe.sh" ]; then
@@ -202,6 +207,12 @@ _build_artifacts() {
   [ -f "$report_dir/novnc_guard_status.json" ] && NOVNC_GUARD_PASS=$(jq_safe "$report_dir/novnc_guard_status.json" '.service_active and .vnc_html_ok')
   [ "$NOVNC_GUARD_PASS" = "true" ] && NOVNC_GUARD_PASS=true || NOVNC_GUARD_PASS=false
 
+  NOVNC_DOCTOR_PASS=false
+  NOVNC_URL=""
+  [ -f "$report_dir/novnc_doctor.json" ] && NOVNC_DOCTOR_PASS=$(jq_safe "$report_dir/novnc_doctor.json" '.ok // false')
+  [ -f "$report_dir/novnc_doctor.json" ] && NOVNC_URL=$(jq_safe "$report_dir/novnc_doctor.json" '.novnc_url // ""')
+  [ "$NOVNC_DOCTOR_PASS" = "true" ] && NOVNC_DOCTOR_PASS=true || NOVNC_DOCTOR_PASS=false
+
   # SUMMARY.json
   HP_PY=$([ "$HQ_PASS" = true ] && echo True || echo False)
   HE_PY=$([ "$HE_PASS" = true ] && echo True || echo False)
@@ -212,7 +223,13 @@ _build_artifacts() {
   NG_PY=$([ "$NOVNC_GUARD_PASS" = true ] && echo True || echo False)
   OVERALL_PY=$([ "$HQ_PASS" = true ] && [ "$HE_PASS" = true ] && [ "$HOSTD_PASS" = true ] && echo True || echo False)
   python3 -c "
-import json
+import json, os
+novnc_url = ''
+try:
+    with open('$report_dir/novnc_doctor.json') as f:
+        j = json.load(f)
+        novnc_url = j.get('novnc_url', '') or ''
+except: pass
 d = {
   'run_id': '$RUN_ID',
   'timestamp_utc': '$(date -u +%Y-%m-%dT%H:%M:%SZ)',
@@ -223,7 +240,8 @@ d = {
     'autopilot': {'pass': $AP_PY, 'code': '$AP_CODE'},
     'novnc': {'pass': $NV_PY, 'probe': '$NOVNC_PROBE'},
     'serve_guard': {'pass': $SG_PY},
-    'novnc_guard': {'pass': $NG_PY}
+    'novnc_guard': {'pass': $NG_PY},
+    'novnc_doctor': {'pass': $([ "$NOVNC_DOCTOR_PASS" = true ] && echo True || echo False), 'novnc_url': novnc_url}
   },
   'build_sha': '$BUILD_SHA',
   'deploy_sha': '$DEPLOY_SHA',
@@ -253,6 +271,11 @@ with open('$ART_DIR/SUMMARY.json', 'w') as f:
 | noVNC           | $([ "$NOVNC_PASS" = true ] && echo "PASS" || echo "FAIL/skip") |
 | Serve Guard     | $([ "$SERVE_GUARD_PASS" = true ] && echo "PASS" || echo "FAIL/skip") |
 | noVNC Guard     | $([ "$NOVNC_GUARD_PASS" = true ] && echo "PASS" || echo "FAIL/skip") |
+| noVNC Doctor    | $([ "$NOVNC_DOCTOR_PASS" = true ] && echo "PASS" || echo "FAIL/skip") |
+
+## noVNC URL (when doctor PASS)
+
+${NOVNC_URL:-—}
 
 ## Endpoint Codes
 
@@ -286,12 +309,14 @@ except: pass
   fi
   TAILNET_URL=""
   [ -n "$TS_HOSTNAME" ] && TAILNET_URL="https://${TS_HOSTNAME}/artifacts/hq_audit/${RUN_ID}"
-  TAILNET_URL="$TAILNET_URL" python3 -c "
+  NOVNC_URL_SAFE="$(echo "$NOVNC_URL" | sed "s/'/\\\\'/g" 2>/dev/null || true)"
+  TAILNET_URL="$TAILNET_URL" NOVNC_URL="$NOVNC_URL_SAFE" python3 -c "
 import json, os
 d = {
   'run_id': '$RUN_ID',
   'artifact_dir': 'artifacts/hq_audit/$RUN_ID',
   'tailnet_url': os.environ.get('TAILNET_URL') or None,
+  'novnc_url': os.environ.get('NOVNC_URL') or None,
   'local_path': '$ART_DIR'
 }
 with open('$ART_DIR/LINKS.json', 'w') as f:

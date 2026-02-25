@@ -37,6 +37,13 @@ const ACTIONS: ActionDef[] = [
     variant: "primary",
   },
   {
+    action: "openclaw_novnc_doctor",
+    label: "noVNC Doctor",
+    description:
+      "Framebuffer-aware noVNC check. Runs guard, heals if needed, returns PASS/FAIL + verified noVNC URL.",
+    variant: "secondary",
+  },
+  {
     action: "doctor",
     label: "Run Doctor",
     description: "Full health check of the OpenClaw stack on aiops-1",
