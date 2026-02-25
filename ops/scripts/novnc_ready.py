@@ -1,6 +1,7 @@
 """Shared noVNC readiness logic for session_check, capture_interactive, auto_finish.
 
-Before emitting WAITING_FOR_HUMAN: restart openclaw-novnc, poll novnc_probe up to 30s.
+Before emitting WAITING_FOR_HUMAN: run openclaw_novnc_doctor (framebuffer-aware), then
+fall back to novnc_probe + restart if needed. Doctor returns verified noVNC URL when PASS.
 If probe fails: fail-closed with NOVNC_BACKEND_UNAVAILABLE and journal artifact path.
 """
 
@@ -16,6 +17,37 @@ NOVNC_PORT = 6080
 VNC_PORT = 5900
 PROBE_TIMEOUT = 30
 JOURNAL_LINES = 200
+
+
+def _run_doctor(artifact_dir: Path, run_id: str) -> tuple[bool, str]:
+    """Run openclaw_novnc_doctor. Return (ok, novnc_url)."""
+    root = Path(__file__).resolve().parents[2]
+    doctor = root / "ops" / "openclaw_novnc_doctor.sh"
+    if not doctor.exists() or not os.access(doctor, os.X_OK):
+        return False, ""
+    try:
+        result = subprocess.run(
+            [str(doctor)],
+            capture_output=True,
+            text=True,
+            timeout=90,
+            cwd=str(root),
+            env={
+                **os.environ,
+                "OPENCLAW_RUN_ID": run_id,
+                "OPENCLAW_NOVNC_PORT": str(NOVNC_PORT),
+                "OPENCLAW_NOVNC_VNC_PORT": str(VNC_PORT),
+            },
+        )
+        if result.returncode != 0:
+            return False, ""
+        line = (result.stdout or "").strip().split("\n")[-1]
+        doc = json.loads(line)
+        if doc.get("ok"):
+            return True, doc.get("novnc_url", "") or ""
+        return False, doc.get("novnc_url", "") or ""
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError):
+        return False, ""
 
 
 def _get_tailscale_url() -> str:
@@ -93,12 +125,17 @@ def _capture_journal(artifact_dir: Path) -> Path:
 
 
 def ensure_novnc_ready(artifact_dir: Path, run_id: str) -> tuple[bool, str, str | None, str | None]:
-    """Probe noVNC; if fails: restart openclaw-novnc, retry probe 3x. Return (ready, url, error_class, journal_artifact).
+    """Ensure noVNC ready; return (ready, url, error_class, journal_artifact).
 
-    Flow: run novnc_probe.sh → if fail: systemctl restart → retry probe 3x → if still fail: capture journal, fail-closed.
-    If probe passes: (True, url, None, None).
-    If probe fails after restart+retries: (False, url, "NOVNC_BACKEND_UNAVAILABLE", rel_path_to_journal).
+    Flow: run openclaw_novnc_doctor (framebuffer-aware) → if pass: use verified URL.
+    Else: novnc_probe + restart + retry 3x → if still fail: capture journal, fail-closed.
+    If ready: (True, url, None, None). If fail: (False, url, "NOVNC_BACKEND_UNAVAILABLE", rel_path_to_journal).
     """
+    # Try doctor first (framebuffer-aware, returns verified URL)
+    doctor_ok, doctor_url = _run_doctor(artifact_dir, run_id)
+    if doctor_ok and doctor_url:
+        return True, doctor_url, None, None
+
     url = _get_tailscale_url()
     env_dir = Path("/run/openclaw-novnc")
     try:

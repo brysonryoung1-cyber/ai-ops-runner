@@ -46,7 +46,8 @@ export type ActionName =
   | "autopilot_run_now"
   | "autopilot_install"
   | "llm.microgpt.canary"
-  | "openclaw_hq_audit";
+  | "openclaw_hq_audit"
+  | "openclaw_novnc_doctor";
 
 export interface AllowedAction {
   name: ActionName;
@@ -397,6 +398,14 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
       "Fully agentic HQ audit (localhost-only). Checks API, hostd, docker, systemd, noVNC. Produces artifacts/hq_audit/<run_id>/{SUMMARY.md,SUMMARY.json,LINKS.json}. Self-heal loop (3 retries).",
     remoteCommand: "cd /opt/ai-ops-runner && ./ops/openclaw_hq_audit.sh",
     timeoutSec: 120,
+  },
+  openclaw_novnc_doctor: {
+    name: "openclaw_novnc_doctor",
+    label: "noVNC Doctor",
+    description:
+      "Framebuffer-aware noVNC check. Runs guard, heals if needed, returns PASS/FAIL + verified noVNC URL.",
+    remoteCommand: "cd /opt/ai-ops-runner && ./ops/openclaw_novnc_doctor.sh",
+    timeoutSec: 90,
   },
 };
 

@@ -17,6 +17,7 @@ export const ACTION_TO_HOSTD: Record<string, string> = {
   "llm.microgpt.canary": "llm.microgpt.canary",
   "llm_doctor": "llm_doctor",
   "openclaw_hq_audit": "openclaw_hq_audit",
+  "openclaw_novnc_doctor": "openclaw_novnc_doctor",
   "openclaw_novnc_restart": "openclaw_novnc_restart",
   "orb.backtest.bulk": "orb.backtest.bulk",
   "orb.backtest.confirm_nt8": "orb.backtest.confirm_nt8",

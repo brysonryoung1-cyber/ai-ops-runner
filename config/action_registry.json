@@ -176,6 +176,12 @@
       "cmd_template": "cd ${ROOT_DIR} && bash ./ops/scripts/novnc_restart.sh"
     },
     {
+      "id": "openclaw_novnc_doctor",
+      "label": "noVNC Doctor",
+      "timeout_sec": 90,
+      "cmd_template": "cd ${ROOT_DIR} && ./ops/openclaw_novnc_doctor.sh"
+    },
+    {
       "id": "soma_connectors_status",
       "label": "Connectors Status",
       "project_id": "soma_kajabi",
