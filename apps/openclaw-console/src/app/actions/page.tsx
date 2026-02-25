@@ -90,6 +90,13 @@ const ACTIONS: ActionDef[] = [
       "Runs connectors_status → Phase0 → Finish Plan automatically. Handles Cloudflare (noVNC). Produces single summary artifact.",
     variant: "primary",
   },
+  {
+    action: "soma_auto_finish_unlock",
+    label: "Unlock Auto-Finish (Stale Lock)",
+    description:
+      "Safe unlock when no active run exists. Refuses if Auto-Finish is running. Clears stale locks (>30 min).",
+    variant: "secondary",
+  },
 ];
 
 const ORB_BACKTEST_ACTIONS: ActionDef[] = [
@@ -232,6 +239,16 @@ export default function ActionsPage() {
                   <p className="text-xs text-red-300 mt-1">
                     error_class: {toSafeReactNode((lastResult as unknown as Record<string, unknown>).error_class)}
                   </p>
+                ) : null}
+                {(lastResult as unknown as Record<string, unknown>).error_class === "ALREADY_RUNNING" &&
+                 (lastResult as unknown as Record<string, unknown>).active_run_id &&
+                 (lastResult as unknown as Record<string, unknown>).active_run_id !== "(unknown)" ? (
+                  <a
+                    href={`/runs?id=${encodeURIComponent((lastResult as unknown as Record<string, unknown>).active_run_id as string)}`}
+                    className="mt-2 inline-block text-xs text-blue-400 hover:text-blue-300 underline"
+                  >
+                    Open active run →
+                  </a>
                 ) : null}
                 {(lastResult as unknown as Record<string, unknown>).recommended_next_action != null ? (
                   <p className="text-xs text-amber-200 mt-1">

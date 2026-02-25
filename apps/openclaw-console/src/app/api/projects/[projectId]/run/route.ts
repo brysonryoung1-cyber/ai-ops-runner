@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { loadProjectRegistrySafe } from "@/lib/projects";
 import { executeAction } from "@/lib/hostd";
-import { acquireLock, releaseLock } from "@/lib/action-lock";
+import { acquireLock, releaseLock, getLockInfo } from "@/lib/action-lock";
 import { writeAuditEntry, deriveActor, hashParams } from "@/lib/audit";
 import { buildRunRecord, writeRunRecord, generateRunId } from "@/lib/run-recorder";
 import { PROJECT_ACTIONS } from "@/lib/action_registry.generated";
@@ -192,15 +192,22 @@ export async function POST(
 
   const lockResult = acquireLock(action);
   if (!lockResult.acquired) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error_class: "ALREADY_RUNNING",
-        message: `Action "${action}" is already running.`,
-        run_id: lockResult.existing?.runId,
-      },
-      { status: 409 }
-    );
+    const lockInfo = getLockInfo(action);
+    const runId = lockResult.existing?.runId ?? lockInfo?.active_run_id;
+    const payload: Record<string, unknown> = {
+      ok: false,
+      error_class: "ALREADY_RUNNING",
+      message: `Action "${action}" is already running.`,
+      active_run_id: runId ?? "(unknown)",
+      active_run_status: "running",
+    };
+    if (runId && runId !== "(unknown)") {
+      payload.run_id = runId;
+      if (lockResult.existing?.startedAt != null) payload.started_at = new Date(lockResult.existing.startedAt).toISOString();
+      else if (lockInfo?.started_at) payload.started_at = lockInfo.started_at;
+      if (lockInfo?.artifact_dir) payload.artifact_dir = lockInfo.artifact_dir;
+    }
+    return NextResponse.json(payload, { status: 409 });
   }
 
   const runId = lockResult.runId!;

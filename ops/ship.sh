@@ -43,17 +43,30 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ── Preflight: VERDICT_HMAC_KEY (auto-load from local config if missing) ──
+# ── Preflight: VERDICT_HMAC_KEY (auto-load: Keychain → fallback file) ──
 if [ -z "${VERDICT_HMAC_KEY:-}" ]; then
-  VERDICT_KEY_FILE="${HOME:-/tmp}/.config/ai-ops-runner/VERDICT_HMAC_KEY"
-  if [ -s "$VERDICT_KEY_FILE" ]; then
-    VERDICT_HMAC_KEY="$(cat "$VERDICT_KEY_FILE")"
-    export VERDICT_HMAC_KEY
+  # 1. Try macOS Keychain
+  if command -v security >/dev/null 2>&1; then
+    _key="$(security find-generic-password -a "${USER:-$(whoami)}" -s "ai-ops-runner:VERDICT_HMAC_KEY" -w 2>/dev/null)" || true
+    if [ -n "${_key:-}" ]; then
+      export VERDICT_HMAC_KEY="$_key"
+      unset _key
+    fi
+  fi
+  # 2. Fallback: file ~/.config/ai-ops-runner/verdict_hmac_key (chmod 600)
+  if [ -z "${VERDICT_HMAC_KEY:-}" ]; then
+    VERDICT_KEY_FILE="${HOME:-/tmp}/.config/ai-ops-runner/verdict_hmac_key"
+    if [ -s "$VERDICT_KEY_FILE" ]; then
+      VERDICT_HMAC_KEY="$(cat "$VERDICT_KEY_FILE")"
+      export VERDICT_HMAC_KEY
+    fi
   fi
 fi
 if [ -z "${VERDICT_HMAC_KEY:-}" ]; then
-  echo "ERROR: VERDICT_HMAC_KEY not set and not found at ~/.config/ai-ops-runner/VERDICT_HMAC_KEY. Cannot sign verdicts." >&2
-  echo "  Create the key file or set VERDICT_HMAC_KEY. Never commit secrets." >&2
+  echo "ERROR: VERDICT_HMAC_KEY not set. Cannot sign verdicts." >&2
+  echo "  One-time setup: run this command (replace <PASTE_VERDICT_HMAC_KEY> with your key):" >&2
+  echo "  security add-generic-password -a \"\$USER\" -s \"ai-ops-runner:VERDICT_HMAC_KEY\" -w \"<PASTE_VERDICT_HMAC_KEY>\" -U" >&2
+  echo "  Then reply 'key stored' and re-run ./ops/ship.sh" >&2
   exit 1
 fi
 
