@@ -21,7 +21,7 @@ while IFS= read -r line; do
   # Allow lines that only document the rule (forbid, check message, etc.)
   if echo "$rest" | grep -qE 'forbid|FORBIDDEN|without.*verify|do not use|check.*no-verify|Fail-closed check'; then continue; fi
   VIOLATIONS="${VIOLATIONS:+$VIOLATIONS$'\n'}$line"
-done < <(grep -rn -- '--no-verify' "$ROOT_DIR/ops" "$ROOT_DIR/.githooks" 2>/dev/null || true)
+done < <(grep -rn --exclude-dir=_tmp --exclude-dir=.venv --exclude-dir=node_modules -- '--no-verify' "$ROOT_DIR/ops" "$ROOT_DIR/.githooks" 2>/dev/null || true)
 if [ -n "$VIOLATIONS" ]; then
   echo "$VIOLATIONS" >&2
   echo "FAIL: --no-verify is forbidden in ops/ and .githooks/. Remove it to preserve fail-closed push gate." >&2

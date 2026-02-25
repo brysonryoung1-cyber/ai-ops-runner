@@ -154,13 +154,12 @@ def main() -> int:
                     KAJABI_CHROME_PROFILE_DIR.chmod(0o700)
                 except OSError:
                     pass
-                browser = p.chromium.launch(
+                context = p.chromium.launch_persistent_context(
+                    profile_dir,
                     headless=False,
                     env=env,
-                    args=[f"--user-data-dir={profile_dir}"],
                 )
-                context = browser.new_context()
-                page = context.new_page()
+                page = context.pages()[0] if context.pages() else context.new_page()
                 # Bootstrap: admin → sites → click Soma → products
                 page.goto(KAJABI_ADMIN, wait_until="domcontentloaded", timeout=60000)
                 try:
@@ -226,7 +225,7 @@ def main() -> int:
                             "products_found": found,
                             "cloudflare_detected": False,
                         })
-                        browser.close()
+                        context.close()
                         done.set()
                         return
                     time.sleep(POLL_INTERVAL)
@@ -241,7 +240,7 @@ def main() -> int:
                     "products_found": [],
                     "cloudflare_detected": _is_cloudflare_blocked(safe_title(page), safe_content_excerpt(page, 8192)),
                 })
-                browser.close()
+                context.close()
         except Exception as e:
             result_holder.append({
                 "ok": False,
