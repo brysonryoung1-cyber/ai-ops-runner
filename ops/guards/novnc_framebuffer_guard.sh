@@ -8,16 +8,26 @@
 #   - websockify process exists bridging websocket -> vnc port
 #   - Framebuffer is NOT all-black (xwd capture + mean/variance check)
 #
+# On PASS: always writes framebuffer.png to artifact_dir (proof artifact).
 # If FAIL: auto-heal (restart, retry, hard reset), then fail-closed with artifacts.
+# Config: /etc/ai-ops-runner/config/novnc_display.env
 # Exit: 0 if pass, nonzero if fail-closed.
 set -euo pipefail
+
+# Load canonical config
+if [ -f /etc/ai-ops-runner/config/novnc_display.env ]; then
+  set -a
+  # shellcheck source=/dev/null
+  source /etc/ai-ops-runner/config/novnc_display.env
+  set +a
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 RUN_ID="${OPENCLAW_RUN_ID:-$(date -u +%Y%m%d_%H%M%S)_fbguard}"
-NOVNC_PORT="${OPENCLAW_NOVNC_PORT:-6080}"
-VNC_PORT="${OPENCLAW_NOVNC_VNC_PORT:-5900}"
-DISPLAY_NUM="${OPENCLAW_NOVNC_DISPLAY:-:99}"
+NOVNC_PORT="${OPENCLAW_NOVNC_PORT:-${NOVNC_PORT:-6080}}"
+VNC_PORT="${OPENCLAW_NOVNC_VNC_PORT:-${VNC_PORT:-5900}}"
+DISPLAY_NUM="${OPENCLAW_NOVNC_DISPLAY:-${DISPLAY:-:99}}"
 XWD_FILE="/tmp/novnc_fb.xwd"
 ART_DIR="$ROOT_DIR/artifacts/novnc_debug/$RUN_ID"
 COLLECT_SCRIPT="$ROOT_DIR/ops/scripts/novnc_collect_diagnostics.sh"
@@ -119,6 +129,13 @@ except Exception:
     _fail_reason="framebuffer_all_black"
     return 1
   fi
+  # Always write framebuffer.png to artifacts (proof artifact for WAITING_FOR_HUMAN)
+  if [ -f "$XWD_FILE" ] && [ -s "$XWD_FILE" ]; then
+    if command -v convert >/dev/null 2>&1; then
+      convert "$XWD_FILE" "$ART_DIR/framebuffer.png" 2>/dev/null || true
+    fi
+    cp "$XWD_FILE" "$ART_DIR/novnc_fb.xwd" 2>/dev/null || true
+  fi
   return 0
 }
 
@@ -169,6 +186,9 @@ _collect_and_fail() {
 }
 
 # --- Main ---
+# Ensure artifact dir exists for framebuffer.png (written on PASS)
+mkdir -p "$ART_DIR"
+
 if _run_checks; then
   echo "{\"ok\":true,\"run_id\":\"$RUN_ID\",\"display\":\"$DISPLAY_NUM\",\"novnc_port\":$NOVNC_PORT}"
   exit 0

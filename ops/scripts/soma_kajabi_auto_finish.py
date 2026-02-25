@@ -26,6 +26,7 @@ REQUIRED_OFFER_URLS = ["/offers/q6ntyjef/checkout", "/offers/MHMmHyVZ/checkout"]
 KAJABI_CLOUDFLARE_BLOCKED = "KAJABI_CLOUDFLARE_BLOCKED"
 KAJABI_CAPTURE_INTERACTIVE_FAILED = "KAJABI_CAPTURE_INTERACTIVE_FAILED"
 KAJABI_REAUTH_TIMEOUT = "KAJABI_REAUTH_TIMEOUT"
+KAJABI_UI_NOT_PRESENT = "KAJABI_UI_NOT_PRESENT"
 EXIT_NODE_OFFLINE = "EXIT_NODE_OFFLINE"
 EXIT_NODE_ENABLE_FAILED = "EXIT_NODE_ENABLE_FAILED"
 HOSTD_UNREACHABLE = "HOSTD_UNREACHABLE"
@@ -183,6 +184,48 @@ def _fail_closed(out_dir: Path, run_id: str, error_class: str, message: str) -> 
     return 1
 
 
+def _run_kajabi_ui_ensure(root: Path, run_id: str) -> bool:
+    """Ensure Kajabi Chromium window visible on noVNC DISPLAY. Returns True if launched/focused."""
+    ensure_script = root / "ops" / "scripts" / "kajabi_ui_ensure.sh"
+    if not ensure_script.exists() or not os.access(ensure_script, os.X_OK):
+        return False
+    try:
+        r = subprocess.run(
+            [str(ensure_script)],
+            capture_output=True,
+            timeout=30,
+            cwd=str(root),
+            env={**os.environ, "OPENCLAW_RUN_ID": run_id},
+        )
+        return r.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def _run_doctor_for_framebuffer(root: Path, run_id: str) -> tuple[bool, str]:
+    """Run openclaw_novnc_doctor. Return (ok, artifact_dir)."""
+    doctor = root / "ops" / "openclaw_novnc_doctor.sh"
+    if not doctor.exists() or not os.access(doctor, os.X_OK):
+        return False, ""
+    try:
+        result = subprocess.run(
+            [str(doctor)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(root),
+            env={**os.environ, "OPENCLAW_RUN_ID": run_id},
+        )
+        line = (result.stdout or "").strip().split("\n")[-1]
+        if not line:
+            return False, ""
+        doc = json.loads(line)
+        artifact_dir = doc.get("artifact_dir", "")
+        return bool(result.returncode == 0 and doc.get("ok")), artifact_dir
+    except (subprocess.TimeoutExpired, json.JSONDecodeError):
+        return False, ""
+
+
 def _run_self_heal(root: Path, out_dir: Path, run_id: str) -> None:
     """Run safe remediations once before WAITING_FOR_HUMAN: doctor, serve_guard, novnc_guard."""
     doctor = root / "ops" / "openclaw_novnc_doctor.sh"
@@ -252,7 +295,8 @@ def _enter_waiting_for_human(
 
 
 def _emit_waiting_for_human(
-    out_dir: Path, novnc_url: str, instruction: str, run_id: str
+    out_dir: Path, novnc_url: str, instruction: str, run_id: str,
+    artifact_dir: str | None = None,
 ) -> None:
     """Emit WAITING_FOR_HUMAN with tailnet-verified noVNC URL and instruction. Write contract artifact."""
     _enter_waiting_for_human(
@@ -260,7 +304,7 @@ def _emit_waiting_for_human(
         "capture_interactive_failed",
         novnc_url,
         instruction,
-        artifact_dir=f"artifacts/novnc_debug/{run_id}",
+        artifact_dir=artifact_dir or f"artifacts/novnc_debug/{run_id}",
     )
 
 
@@ -378,10 +422,29 @@ def main() -> int:
                 append_summary_line(out_dir, f"[capture_interactive] done run_id={capture_run_id}")
                 continue
 
-            # capture_interactive failed → WAITING_FOR_HUMAN + poll session_check (no exit)
+            # capture_interactive failed → ensure Kajabi UI visible, self-heal loop, then WAITING_FOR_HUMAN
             write_stage(out_dir, "capture_interactive", "auth_needed", last_error_class=KAJABI_CAPTURE_INTERACTIVE_FAILED)
+            artifact_dir = f"artifacts/novnc_debug/{run_id}"
+            for heal_attempt in range(3):
+                _run_kajabi_ui_ensure(root, run_id)
+                doctor_ok, artifact_dir = _run_doctor_for_framebuffer(root, run_id)
+                if doctor_ok:
+                    break
+                if heal_attempt < 2:
+                    subprocess.run(
+                        ["systemctl", "restart", "openclaw-novnc"],
+                        capture_output=True,
+                        timeout=15,
+                    )
+                    time.sleep(5)
+            if not doctor_ok:
+                write_stage(out_dir, "kajabi_ui_ensure", "failed", last_error_class=KAJABI_UI_NOT_PRESENT)
+                return _fail_closed(
+                    out_dir, run_id, KAJABI_UI_NOT_PRESENT,
+                    "Kajabi UI not present on noVNC after 3 self-heal attempts. Check framebuffer.png in artifact_dir."
+                )
             instruction = INSTRUCTION_LINE
-            _emit_waiting_for_human(out_dir, url, instruction, run_id)
+            _emit_waiting_for_human(out_dir, url, instruction, run_id, artifact_dir)
 
             # Poll session_check until PASS or timeout
             write_stage(out_dir, "session_check", "polling")

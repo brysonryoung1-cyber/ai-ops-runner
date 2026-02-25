@@ -32,4 +32,11 @@ KAJABI_PROFILE="/var/lib/openclaw/kajabi_chrome_profile"
 sudo mkdir -p "$KAJABI_PROFILE"
 sudo chmod 700 "$KAJABI_PROFILE"
 
+# Canonical noVNC display config (single source of truth)
+sudo mkdir -p /etc/ai-ops-runner/config
+if [ -f "$ROOT_DIR/config/novnc_display.env" ]; then
+  sudo cp "$ROOT_DIR/config/novnc_display.env" /etc/ai-ops-runner/config/novnc_display.env
+  echo "  novnc_display.env: installed"
+fi
+
 echo "openclaw-novnc: unit installed (start on demand via systemctl start openclaw-novnc)"

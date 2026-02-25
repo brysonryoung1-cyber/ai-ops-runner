@@ -153,7 +153,8 @@ def _stop_novnc_systemd() -> None:
 
 
 def _ensure_xvfb_and_novnc(artifact_dir: Path) -> tuple[subprocess.Popen | None, subprocess.Popen | None, subprocess.Popen | None]:
-    display = ":99"
+    from novnc_ready import novnc_display
+    display = novnc_display()
     xvfb_proc = x11vnc_proc = novnc_proc = None
     try:
         xvfb_proc = subprocess.Popen(
@@ -235,7 +236,8 @@ def main() -> int:
         return 1
 
     env = os.environ.copy()
-    env["DISPLAY"] = ":99"
+    from novnc_ready import novnc_display
+    env["DISPLAY"] = novnc_display()
 
     done = threading.Event()
     result_holder: list[dict] = []
