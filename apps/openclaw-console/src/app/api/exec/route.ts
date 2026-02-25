@@ -10,6 +10,8 @@ import {
 } from "@/lib/audit";
 import { buildRunRecord, writeRunRecord } from "@/lib/run-recorder";
 
+export const runtime = "nodejs";
+
 /**
  * Compute allowed origins dynamically based on configured port.
  * Supports OPENCLAW_CONSOLE_PORT env var (default 8787).

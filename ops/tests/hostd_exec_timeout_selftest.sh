@@ -25,9 +25,13 @@ for action in soma_kajabi_reauth_and_resume soma_kajabi_auto_finish soma_kajabi_
 done
 echo "  PASS: long-running actions in hostd.ts"
 
-# 2. bodyTimeout: 0 and OPENCLAW_HOSTD_EXEC_TIMEOUT_MS used
+# 2. bodyTimeout: 0, headersTimeout: 0 (undici defaults 300s each), and OPENCLAW_HOSTD_EXEC_TIMEOUT_MS used
 if ! grep -q "bodyTimeout: 0" apps/openclaw-console/src/lib/hostd.ts; then
   echo "  FAIL: bodyTimeout: 0 not set in hostd.ts (undici fix)"
+  exit 1
+fi
+if ! grep -q "headersTimeout: 0" apps/openclaw-console/src/lib/hostd.ts; then
+  echo "  FAIL: headersTimeout: 0 not set in hostd.ts (undici fix — default 300s kills long requests)"
   exit 1
 fi
 if ! grep -q "OPENCLAW_HOSTD_EXEC_TIMEOUT_MS" apps/openclaw-console/src/lib/hostd.ts; then

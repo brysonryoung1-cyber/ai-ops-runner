@@ -6,6 +6,8 @@ import { writeAuditEntry, deriveActor, hashParams } from "@/lib/audit";
 import { buildRunRecord, writeRunRecord, generateRunId } from "@/lib/run-recorder";
 import { PROJECT_ACTIONS } from "@/lib/action_registry.generated";
 
+export const runtime = "nodejs";
+
 function validateOrigin(req: NextRequest): NextResponse | null {
   const origin = req.headers.get("origin");
   const secFetchSite = req.headers.get("sec-fetch-site");

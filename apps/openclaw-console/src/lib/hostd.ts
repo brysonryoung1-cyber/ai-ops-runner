@@ -155,7 +155,7 @@ export async function executeAction(actionName: string): Promise<HostdResult> {
       ? 3_600_000 // 60 min for reauth, auto_finish, capture_interactive, etc.
       : 60_000;   // 60 s for normal actions
 
-  const agent = new Agent({ bodyTimeout: 0 }); // Disable undici default 300s body timeout
+  const agent = new Agent({ bodyTimeout: 0, headersTimeout: 0 }); // Disable undici defaults (300s each)
   const signal = execTimeoutMs > 0 ? AbortSignal.timeout(execTimeoutMs) : undefined;
 
   try {
