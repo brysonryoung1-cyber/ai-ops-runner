@@ -16,14 +16,14 @@ mkdir -p "$ART_DIR"
 # systemctl status
 systemctl status openclaw-novnc.service --no-pager 2>/dev/null >"$ART_DIR/systemctl_status.txt" || echo "service not found" >"$ART_DIR/systemctl_status.txt"
 
-# journalctl
-journalctl -u openclaw-novnc.service -n 400 --no-pager 2>/dev/null >"$ART_DIR/journalctl.txt" || echo "journalctl unavailable" >"$ART_DIR/journalctl.txt"
+# journalctl (600 lines for failure window)
+journalctl -u openclaw-novnc.service -n 600 --no-pager 2>/dev/null >"$ART_DIR/journalctl.txt" || echo "journalctl unavailable" >"$ART_DIR/journalctl.txt"
 
 # ps (sanitize: show only cmdline patterns, no full argv with secrets)
 ps aux 2>/dev/null | grep -E 'Xvfb|x11vnc|websockify|novnc' | grep -v grep | sed 's/[0-9]\{1,\}\.[0-9]\{1,\}%//g' >"$ART_DIR/ps_novnc.txt" 2>/dev/null || echo "no matching processes" >"$ART_DIR/ps_novnc.txt"
 
-# ss -lntp for relevant ports
-ss -lntp 2>/dev/null | grep -E ':6080|:5900|:5901|:8787|:8877' >"$ART_DIR/ss_ports.txt" 2>/dev/null || echo "no matching ports" >"$ART_DIR/ss_ports.txt"
+# ss -lntp for 6080 and 59xx (VNC/websockify)
+ss -lntp 2>/dev/null | grep -E ":$NOVNC_PORT|:59" >"$ART_DIR/ss_ports.txt" 2>/dev/null || echo "no matching ports" >"$ART_DIR/ss_ports.txt"
 
 # curl vnc.html (first 5 lines only)
 curl -fsS "http://127.0.0.1:$NOVNC_PORT/vnc.html" 2>/dev/null | head -n 5 >"$ART_DIR/vnc_html_head.txt" || echo "curl failed" >"$ART_DIR/vnc_html_head.txt"

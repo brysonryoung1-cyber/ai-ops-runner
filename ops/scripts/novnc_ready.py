@@ -19,18 +19,18 @@ PROBE_TIMEOUT = 30
 JOURNAL_LINES = 200
 
 
-def _run_doctor(artifact_dir: Path, run_id: str) -> tuple[bool, str]:
-    """Run openclaw_novnc_doctor. Return (ok, novnc_url)."""
+def _run_doctor(artifact_dir: Path, run_id: str) -> tuple[bool, str, str | None]:
+    """Run openclaw_novnc_doctor. Return (ok, novnc_url, error_class)."""
     root = Path(__file__).resolve().parents[2]
     doctor = root / "ops" / "openclaw_novnc_doctor.sh"
     if not doctor.exists() or not os.access(doctor, os.X_OK):
-        return False, ""
+        return False, "", "NOVNC_DOCTOR_MISSING"
     try:
         result = subprocess.run(
             [str(doctor)],
             capture_output=True,
             text=True,
-            timeout=90,
+            timeout=120,
             cwd=str(root),
             env={
                 **os.environ,
@@ -39,15 +39,17 @@ def _run_doctor(artifact_dir: Path, run_id: str) -> tuple[bool, str]:
                 "OPENCLAW_NOVNC_VNC_PORT": str(VNC_PORT),
             },
         )
-        if result.returncode != 0:
-            return False, ""
         line = (result.stdout or "").strip().split("\n")[-1]
+        if not line:
+            return False, "", "NOVNC_DOCTOR_NO_OUTPUT"
         doc = json.loads(line)
-        if doc.get("ok"):
-            return True, doc.get("novnc_url", "") or ""
-        return False, doc.get("novnc_url", "") or ""
+        url = doc.get("novnc_url", "") or ""
+        if result.returncode == 0 and doc.get("ok"):
+            return True, url, None
+        err_class = doc.get("error_class") or "NOVNC_BACKEND_UNAVAILABLE"
+        return False, url, err_class
     except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError):
-        return False, ""
+        return False, "", "NOVNC_BACKEND_UNAVAILABLE"
 
 
 def _get_tailscale_url() -> str:
@@ -127,57 +129,24 @@ def _capture_journal(artifact_dir: Path) -> Path:
 def ensure_novnc_ready(artifact_dir: Path, run_id: str) -> tuple[bool, str, str | None, str | None]:
     """Ensure noVNC ready; return (ready, url, error_class, journal_artifact).
 
-    Flow: run openclaw_novnc_doctor (framebuffer-aware) → if pass: use verified URL.
+    Flow: run openclaw_novnc_doctor (framebuffer + local + tailnet WS) → if pass: use verified URL.
+    Doctor PASS requires ws_stability_local AND ws_stability_tailnet verified.
     Else: novnc_probe + restart + retry 3x → if still fail: capture journal, fail-closed.
-    If ready: (True, url, None, None). If fail: (False, url, "NOVNC_BACKEND_UNAVAILABLE", rel_path_to_journal).
+    If ready: (True, url, None, None). If fail: (False, url, error_class, rel_path_to_journal).
     """
-    # Try doctor first (framebuffer-aware, returns verified URL)
-    doctor_ok, doctor_url = _run_doctor(artifact_dir, run_id)
+    # Try doctor first (framebuffer + local + tailnet WS; returns tailnet-verified URL only on PASS)
+    doctor_ok, doctor_url, doctor_err = _run_doctor(artifact_dir, run_id)
     if doctor_ok and doctor_url:
         return True, doctor_url, None, None
 
-    url = _get_tailscale_url()
-    env_dir = Path("/run/openclaw-novnc")
-    try:
-        env_dir.mkdir(parents=True, exist_ok=True)
-        (env_dir / "next.env").write_text(
-            f"OPENCLAW_NOVNC_RUN_ID={run_id}\n"
-            f"OPENCLAW_NOVNC_ARTIFACT_DIR={artifact_dir}\n"
-            f"OPENCLAW_NOVNC_PORT={NOVNC_PORT}\n"
-            f"OPENCLAW_NOVNC_DISPLAY=:99\n"
-            f"OPENCLAW_NOVNC_VNC_PORT={VNC_PORT}\n"
-        )
-    except OSError:
-        return False, url, "NOVNC_BACKEND_UNAVAILABLE", None
-
-    def _try_probe_with_restart() -> tuple[bool, str]:
-        ok, reason = _run_probe()
-        if ok:
-            return True, ""
-        try:
-            subprocess.run(["systemctl", "restart", "openclaw-novnc"], capture_output=True, timeout=15)
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return False, reason
-        for attempt in range(3):
-            time.sleep(2)
-            ok, _ = _run_probe()
-            if ok:
-                return True, ""
-        return False, reason
-
-    ok, reason = _run_probe()
-    if ok:
-        return True, url, None, None
-
-    ok, _ = _try_probe_with_restart()
-    if ok:
-        return True, url, None, None
-
-    # Fail-closed: capture last 200 lines of journalctl into audit artifact
+    # Doctor FAIL: do NOT fall through to probe — probe only checks localhost; user needs tailnet.
+    # Doctor already retried 3x with restart. Fail-closed with artifact.
+    url = doctor_url or _get_tailscale_url()
+    fail_err_class = doctor_err or "NOVNC_BACKEND_UNAVAILABLE"
     journal_path = _capture_journal(artifact_dir)
     try:
         repo = Path(__file__).resolve().parents[2]
         rel = str(journal_path.relative_to(repo))
     except ValueError:
         rel = str(journal_path)
-    return False, url, "NOVNC_BACKEND_UNAVAILABLE", rel
+    return False, url, fail_err_class, rel

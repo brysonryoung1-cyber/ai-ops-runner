@@ -335,6 +335,8 @@ def test_waiting_for_human_contract_includes_novnc_url_and_instruction(tmp_path)
     assert "instruction" in wfh or "instruction_line" in wfh
     instr = wfh.get("instruction") or wfh.get("instruction_line", "")
     assert len(instr) > 10
+    assert "artifact_dir" in wfh, "WAITING_FOR_HUMAN must include artifact_dir for doctor run"
+    assert wfh["artifact_dir"].startswith("artifacts/novnc_debug/")
 
 
 def test_is_auth_needed_error_expands_to_kajabi_not_logged_in(tmp_path):
