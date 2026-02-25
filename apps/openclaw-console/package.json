@@ -10,11 +10,12 @@
     "lint": "next lint",
     "test:e2e": "playwright test"
   },
-  "dependencies": {
-    "next": "^14.2.21",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
-  },
+"dependencies": {
+        "next": "^14.2.21",
+        "react": "^18.3.1",
+        "react-dom": "^18.3.1",
+        "undici": "^6.21.0"
+      },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
