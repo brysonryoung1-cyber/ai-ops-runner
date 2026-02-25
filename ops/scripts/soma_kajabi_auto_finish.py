@@ -2,10 +2,11 @@
 """Soma Kajabi Auto-Finish — connectors_status → Phase0 → Finish Plan with auto-validation.
 
 Runs Phase0→FinishPlan automatically. Handles Cloudflare (spawns capture_interactive,
-emits WAITING_FOR_HUMAN with noVNC URL, waits for completion, retries Phase0).
+emits WAITING_FOR_HUMAN with noVNC URL, polls session_check, auto-resumes on PASS).
 Uses exit node wrapper when /etc/ai-ops-runner/config/soma_kajabi_exit_node.txt exists.
 Produces one canonical summary artifact at artifacts/soma_kajabi/auto_finish/<run_id>/.
 Writes acceptance artifacts under artifacts/soma_kajabi/acceptance/<run_id>/.
+State machine: stage.json + SUMMARY.md per stage. Auth-needed failures → WAITING_FOR_HUMAN + poll.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +24,8 @@ from pathlib import Path
 REQUIRED_OFFER_URLS = ["/offers/q6ntyjef/checkout", "/offers/MHMmHyVZ/checkout"]
 
 KAJABI_CLOUDFLARE_BLOCKED = "KAJABI_CLOUDFLARE_BLOCKED"
+KAJABI_CAPTURE_INTERACTIVE_FAILED = "KAJABI_CAPTURE_INTERACTIVE_FAILED"
+KAJABI_REAUTH_TIMEOUT = "KAJABI_REAUTH_TIMEOUT"
 EXIT_NODE_OFFLINE = "EXIT_NODE_OFFLINE"
 EXIT_NODE_ENABLE_FAILED = "EXIT_NODE_ENABLE_FAILED"
 HOSTD_UNREACHABLE = "HOSTD_UNREACHABLE"
@@ -30,7 +34,12 @@ EXIT_NODE_CONFIG = Path("/etc/ai-ops-runner/config/soma_kajabi_exit_node.txt")
 CAPTURE_TIMEOUT = 1320  # 22 min
 PHASE0_TIMEOUT = 320
 FINISH_PLAN_TIMEOUT = 70
-CAPTURE_POLL_TIMEOUT = 30 * 60  # 30 min for human to complete
+SESSION_CHECK_POLL_INTERVAL = 12  # seconds
+
+
+def _reauth_poll_timeout() -> int:
+    """25 min default; override via SOMA_KAJABI_REAUTH_POLL_TIMEOUT for tests."""
+    return int(os.environ.get("SOMA_KAJABI_REAUTH_POLL_TIMEOUT", str(25 * 60)))
 
 
 def _repo_root() -> Path:
@@ -159,10 +168,86 @@ def _fail_closed(out_dir: Path, run_id: str, error_class: str, message: str) -> 
     return 1
 
 
+def _run_self_heal(root: Path, out_dir: Path, run_id: str) -> None:
+    """Run safe remediations once before WAITING_FOR_HUMAN: doctor, serve_guard, novnc_guard."""
+    doctor = root / "ops" / "openclaw_novnc_doctor.sh"
+    if doctor.exists() and os.access(doctor, os.X_OK):
+        subprocess.run(
+            [str(doctor)],
+            capture_output=True,
+            timeout=90,
+            cwd=str(root),
+            env={**os.environ, "OPENCLAW_RUN_ID": f"{run_id}_doctor"},
+        )
+    for guard in ["serve_guard.sh", "novnc_guard.sh"]:
+        guard_path = root / "ops" / "guards" / guard
+        if guard_path.exists() and os.access(guard_path, os.X_OK):
+            subprocess.run(
+                [str(guard_path)],
+                capture_output=True,
+                timeout=60,
+                cwd=str(root),
+                env={**os.environ, "OPENCLAW_RUN_ID": f"{run_id}_{guard.replace('.sh', '')}"},
+            )
+
+
+def _run_session_check(root: Path, venv_python: Path, use_exit_node: bool) -> tuple[int, str]:
+    """Run session_check script. Returns (rc, stdout)."""
+    session_script = root / "ops" / "scripts" / "soma_kajabi_session_check.py"
+    cmd = [str(venv_python), str(session_script)]
+    timeout = 6 * 60
+    if use_exit_node:
+        return _run_with_exit_node(cmd, timeout)
+    return _run(cmd, timeout=timeout)
+
+
+INSTRUCTION_LINE = (
+    "Open the URL, complete Cloudflare/Kajabi login + 2FA, then go to Products → Courses "
+    "and ensure Home User Library + Practitioner Library are visible; then stop touching the session."
+)
+
+
+def _enter_waiting_for_human(
+    out_dir: Path,
+    reason: str,
+    novnc_url: str,
+    instruction: str | None = None,
+) -> None:
+    """Enter WAITING_FOR_HUMAN mode. Write contract artifact. Print only novnc_url + instruction."""
+    payload = {
+        "reason": reason,
+        "novnc_url": novnc_url,
+        "instruction_line": instruction or INSTRUCTION_LINE,
+        "instruction": instruction or INSTRUCTION_LINE,
+        "resume_condition": "session_check PASS (Products shows Home User Library + Practitioner Library)",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "status": "WAITING_FOR_HUMAN",
+    }
+    (out_dir / "WAITING_FOR_HUMAN.json").write_text(json.dumps(payload, indent=2))
+    print("\n--- WAITING_FOR_HUMAN ---")
+    print("noVNC READY")
+    print(novnc_url)
+    print(instruction or INSTRUCTION_LINE)
+    print("Resume: session_check PASS. Polling every", SESSION_CHECK_POLL_INTERVAL, "s for up to", _reauth_poll_timeout() // 60, "min.")
+    sys.stdout.flush()
+
+
+def _emit_waiting_for_human(out_dir: Path, novnc_url: str, instruction: str) -> None:
+    """Emit WAITING_FOR_HUMAN with verified noVNC URL and instruction. Write contract artifact."""
+    _enter_waiting_for_human(out_dir, "capture_interactive_failed", novnc_url, instruction)
+
+
 def main() -> int:
     root = _repo_root()
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
+
+    sys.path.insert(0, str(root / "ops" / "scripts"))
+    from soma_kajabi_auto_finish_state import (
+        append_summary_line,
+        is_auth_needed_error,
+        write_stage,
+    )
 
     run_id = f"auto_finish_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
     out_dir = root / "artifacts" / "soma_kajabi" / "auto_finish" / run_id
@@ -172,8 +257,18 @@ def main() -> int:
     if not venv_python.exists():
         venv_python = Path(sys.executable)
 
-    # ── A) Preflight ──
+    # ── A) Precheck (serve_guard + novnc_doctor + hostd reachable) ──
+    write_stage(out_dir, "precheck", "running")
+    append_summary_line(out_dir, "[precheck] started")
+    _run_self_heal(root, out_dir, run_id)
+    write_stage(out_dir, "precheck", "done")
+    append_summary_line(out_dir, "[precheck] done")
+
+    # ── B) Connectors status ──
+    write_stage(out_dir, "connectors_status", "running")
+    append_summary_line(out_dir, f"[connectors_status] started")
     if not STORAGE_STATE_PATH.exists() or STORAGE_STATE_PATH.stat().st_size == 0:
+        write_stage(out_dir, "connectors_status", "failed", last_error_class="KAJABI_STORAGE_STATE_MISSING")
         return _fail_closed(
             out_dir, run_id, "KAJABI_STORAGE_STATE_MISSING",
             "Kajabi connector not configured. Run Kajabi Bootstrap first."
@@ -181,7 +276,7 @@ def main() -> int:
 
     use_exit_node = EXIT_NODE_CONFIG.exists() and EXIT_NODE_CONFIG.read_text().strip() != ""
 
-    # ── B) connectors_status ──
+    # ── connectors_status ──
     rc, conn_out = _run(
         [str(venv_python), "-m", "services.soma_kajabi.connectors_status"],
         timeout=20,
@@ -192,6 +287,8 @@ def main() -> int:
             connectors_result = json.loads(conn_out)
         except json.JSONDecodeError:
             connectors_result = {"raw": conn_out[:500]}
+    write_stage(out_dir, "connectors_status", "done")
+    append_summary_line(out_dir, f"[connectors_status] done rc={rc}")
 
     # ── C) Phase0 (with optional exit node, Cloudflare handling) ──
     phase0_cmd = [str(venv_python), "-m", "services.soma_kajabi.phase0_runner"]
@@ -200,6 +297,8 @@ def main() -> int:
     max_capture_attempts = 1
 
     for capture_attempt in range(max_capture_attempts + 1):
+        write_stage(out_dir, "phase0", "running", retries=capture_attempt)
+        append_summary_line(out_dir, f"[phase0] attempt {capture_attempt + 1}")
         if use_exit_node:
             rc, phase0_out = _run_with_exit_node(phase0_cmd, timeout=PHASE0_TIMEOUT)
         else:
@@ -210,54 +309,96 @@ def main() -> int:
         error_class = doc.get("error_class")
 
         if rc == 0 and doc.get("ok"):
+            write_stage(out_dir, "phase0", "done")
+            append_summary_line(out_dir, f"[phase0] done run_id={phase0_run_id}")
             break
 
-        if error_class == KAJABI_CLOUDFLARE_BLOCKED and capture_attempt < max_capture_attempts:
+        if is_auth_needed_error(error_class) and capture_attempt < max_capture_attempts:
             cap_script = root / "ops" / "scripts" / "kajabi_capture_interactive.py"
             if not cap_script.exists():
+                write_stage(out_dir, "capture_interactive", "failed", last_error_class="KAJABI_CAPTURE_SCRIPT_MISSING")
                 return _fail_closed(
                     out_dir, run_id, "KAJABI_CAPTURE_SCRIPT_MISSING",
                     "kajabi_capture_interactive.py not found"
                 )
 
             # Ensure noVNC ready before WAITING_FOR_HUMAN (restart + poll probe)
-            sys.path.insert(0, str(root / "ops" / "scripts"))
             from novnc_ready import ensure_novnc_ready
             ready, url, err_class, journal_artifact = ensure_novnc_ready(out_dir, run_id)
             if not ready and err_class:
+                write_stage(out_dir, "capture_interactive", "failed", last_error_class=err_class or "NOVNC_BACKEND_UNAVAILABLE")
                 return _fail_closed(
                     out_dir, run_id, err_class,
                     f"noVNC backend unavailable. Journal: {journal_artifact or 'N/A'}"
                 )
 
-            print("\n--- WAITING_FOR_HUMAN ---")
-            print("noVNC READY")
-            print(url)
-            print("1. Open the URL in your browser (Tailscale network).")
-            print("2. Complete the Cloudflare challenge and log in.")
-            print("The run will auto-resume after completion.")
-            sys.stdout.flush()
+            # Self-heal: doctor, serve_guard, novnc_guard (doctor already run by ensure_novnc_ready)
+            _run_self_heal(root, out_dir, run_id)
+
+            # Try capture_interactive first
+            write_stage(out_dir, "capture_interactive", "running")
+            append_summary_line(out_dir, "[capture_interactive] started")
             cap_rc, cap_out = _run(
                 [str(venv_python), str(cap_script)],
                 timeout=CAPTURE_TIMEOUT,
                 stream_stderr=True,
             )
             cap_doc = _parse_last_json_line(cap_out)
-            capture_run_id = cap_doc.get("run_id") or cap_doc.get("artifact_dir", "").split("/")[-1]
+            capture_run_id = cap_doc.get("run_id") or (cap_doc.get("artifact_dir") or "").split("/")[-1]
 
-            if cap_rc != 0:
+            if cap_rc == 0:
+                write_stage(out_dir, "capture_interactive", "done")
+                append_summary_line(out_dir, f"[capture_interactive] done run_id={capture_run_id}")
+                continue
+
+            # capture_interactive failed → WAITING_FOR_HUMAN + poll session_check (no exit)
+            write_stage(out_dir, "capture_interactive", "auth_needed", last_error_class=KAJABI_CAPTURE_INTERACTIVE_FAILED)
+            instruction = INSTRUCTION_LINE
+            _emit_waiting_for_human(out_dir, url, instruction)
+
+            # Poll session_check until PASS or timeout
+            write_stage(out_dir, "session_check", "polling")
+            append_summary_line(out_dir, "[session_check] polling for reauth")
+            start = time.monotonic()
+            session_passed = False
+            while time.monotonic() - start < _reauth_poll_timeout():
+                sc_rc, sc_out = _run_session_check(root, venv_python, use_exit_node)
+                sc_doc = _parse_last_json_line(sc_out)
+                if sc_rc == 0 and sc_doc.get("ok"):
+                    session_passed = True
+                    write_stage(out_dir, "session_check", "done")
+                    append_summary_line(out_dir, "[session_check] PASS - resuming pipeline")
+                    break
+                time.sleep(SESSION_CHECK_POLL_INTERVAL)
+
+            if not session_passed:
+                # Timeout: fail-closed with KAJABI_REAUTH_TIMEOUT + artifact bundle
+                write_stage(out_dir, "session_check", "failed", last_error_class=KAJABI_REAUTH_TIMEOUT)
+                bundle = {
+                    "run_id": run_id,
+                    "error_class": KAJABI_REAUTH_TIMEOUT,
+                    "message": "Human reauth timed out. session_check did not PASS within 25 minutes.",
+                    "artifact_dir": str(out_dir),
+                    "waiting_for_human_artifact": str(out_dir / "WAITING_FOR_HUMAN.json"),
+                    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                }
+                (out_dir / "reauth_timeout_bundle.json").write_text(json.dumps(bundle, indent=2))
                 return _fail_closed(
-                    out_dir, run_id, "KAJABI_CAPTURE_INTERACTIVE_FAILED",
-                    cap_doc.get("message", cap_out[:300]) or "Capture failed"
+                    out_dir, run_id, KAJABI_REAUTH_TIMEOUT,
+                    "Human reauth timed out. session_check did not PASS within 25 minutes."
                 )
+            # session_check PASS → retry phase0 (continue loop)
             continue
 
+        write_stage(out_dir, "phase0", "failed", last_error_class=error_class or "PHASE0_FAILED")
         return _fail_closed(
             out_dir, run_id, error_class or "PHASE0_FAILED",
             doc.get("recommended_next_action", phase0_out[:500]) or "Phase0 failed"
         )
 
     # ── D) Zane Finish Plan ──
+    write_stage(out_dir, "finish_plan", "running")
+    append_summary_line(out_dir, "[finish_plan] started")
     rc, finish_out = _run(
         [str(venv_python), "-m", "services.soma_kajabi.zane_finish_plan"],
         timeout=FINISH_PLAN_TIMEOUT,
@@ -265,10 +406,13 @@ def main() -> int:
     finish_doc = _parse_last_json_line(finish_out)
     finish_run_id = finish_doc.get("run_id")
     if rc != 0:
+        write_stage(out_dir, "finish_plan", "failed", last_error_class="FINISH_PLAN_FAILED")
         return _fail_closed(
             out_dir, run_id, "FINISH_PLAN_FAILED",
             finish_doc.get("error", finish_out[:300]) or "Zane Finish Plan failed"
         )
+    write_stage(out_dir, "finish_plan", "done")
+    append_summary_line(out_dir, f"[finish_plan] done run_id={finish_run_id}")
 
     # ── E) Validation gates ──
     phase0_root = root / "artifacts" / "soma_kajabi" / "phase0"
@@ -299,25 +443,46 @@ def main() -> int:
             return _fail_closed(out_dir, run_id, "FINISH_PLAN_ARTIFACTS_MISSING", f"Missing {name}")
 
     # ── E2) Write acceptance artifacts (Phase 2) ──
+    write_stage(out_dir, "acceptance_gate", "running")
+    append_summary_line(out_dir, "[acceptance_gate] started")
     try:
         from services.soma_kajabi.acceptance_artifacts import write_acceptance_artifacts
         accept_dir, accept_summary = write_acceptance_artifacts(root, run_id, phase0_dir)
         accept_rel = str(accept_dir.relative_to(root))
     except Exception as e:
+        write_stage(out_dir, "acceptance_gate", "failed", last_error_class="ACCEPTANCE_ARTIFACTS_FAILED")
         return _fail_closed(out_dir, run_id, "ACCEPTANCE_ARTIFACTS_FAILED", str(e)[:200])
 
-    # ── E3) Fail-closed gates ──
+    # ── E3) Fail-closed gates (mirror_exceptions empty required) ──
     if not accept_summary.get("pass", True):
+        mirror_path = accept_dir / "mirror_report.json"
+        diff_summary = ""
+        if mirror_path.exists():
+            try:
+                mr = json.loads(mirror_path.read_text())
+                excs = mr.get("exceptions", [])
+                diff_summary = "; ".join(
+                    f"{e.get('module','')}/{e.get('title','')}:{e.get('reason','')}" for e in excs[:5]
+                ) + (f" (+{len(excs)-5} more)" if len(excs) > 5 else "")
+            except Exception:
+                diff_summary = f"{accept_summary.get('exceptions_count', 0)} exceptions"
+        write_stage(out_dir, "acceptance_gate", "failed", last_error_class="MIRROR_EXCEPTIONS_NON_EMPTY")
         return _fail_closed(
             out_dir, run_id, "MIRROR_EXCEPTIONS_NON_EMPTY",
-            f"Practitioner not superset of Home above-paywall; {accept_summary.get('exceptions_count', 0)} exceptions"
+            f"Practitioner not superset of Home above-paywall; {accept_summary.get('exceptions_count', 0)} exceptions. {diff_summary}"
         )
     offer_status, offer_pass = _check_offer_urls(root)
     if not offer_pass:
+        write_stage(out_dir, "acceptance_gate", "failed", last_error_class="OFFER_URLS_MISMATCH")
         return _fail_closed(out_dir, run_id, "OFFER_URLS_MISMATCH", offer_status)
     for name in ["final_library_snapshot.json", "video_manifest.csv", "mirror_report.json", "changelog.md"]:
         if not (accept_dir / name).exists():
+            write_stage(out_dir, "acceptance_gate", "failed", last_error_class="REQUIRED_ARTIFACTS_MISSING")
             return _fail_closed(out_dir, run_id, "REQUIRED_ARTIFACTS_MISSING", f"Missing {name}")
+
+    write_stage(out_dir, "acceptance_gate", "done")
+    write_stage(out_dir, "done", "done")
+    append_summary_line(out_dir, "[acceptance_gate] PASS mirror_exceptions=0")
 
     # ── F) Produce canonical summary artifact ──
     base_url = os.environ.get("OPENCLAW_HQ_BASE_URL", "https://hq.example.com")
