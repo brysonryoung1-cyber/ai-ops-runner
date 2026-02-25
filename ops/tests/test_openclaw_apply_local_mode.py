@@ -35,3 +35,11 @@ def test_tailscale_ip_used_for_detection():
     assert "tailscale ip -4" in content
     assert "LOCAL_TAILSCALE_IP" in content
     assert "TARGET_IP" in content
+
+
+def test_hostname_or_repo_path_for_local_detection():
+    """Script must use hostname=aiops-1 or ROOT_DIR=/opt/ai-ops-runner for deterministic local mode."""
+    content = _read_apply_script()
+    assert "aiops-1" in content
+    assert "/opt/ai-ops-runner" in content
+    assert "HOSTNAME_SHORT" in content or "hostname" in content

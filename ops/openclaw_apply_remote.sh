@@ -32,21 +32,44 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 VPS_HOST="${OPENCLAW_VPS_SSH_HOST:-${1:-root@100.123.61.57}}"
 VPS_DIR="/opt/ai-ops-runner"
 
-# Extract target IP from VPS_HOST (user@ip or user@hostname or just ip)
-TARGET_IP=""
+# Extract target host part from VPS_HOST (user@ip or user@hostname or just ip)
+TARGET_HOST=""
 case "$VPS_HOST" in
-  *@*) TARGET_IP="${VPS_HOST#*@}" ;;
-  *)   TARGET_IP="$VPS_HOST" ;;
+  *@*) TARGET_HOST="${VPS_HOST#*@}" ;;
+  *)   TARGET_HOST="$VPS_HOST" ;;
 esac
 
-# Detect local mode: target IP matches this host's Tailscale IPv4
+# Resolve TARGET_HOST to IP when it's a hostname (aiops-1, aiops-1.tailc75c62.ts.net, etc.)
+TARGET_IP="$TARGET_HOST"
+if [[ ! "$TARGET_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  _resolved="$(getent hosts "$TARGET_HOST" 2>/dev/null | awk '{print $1; exit}' || true)"
+  [ -n "$_resolved" ] && TARGET_IP="$_resolved"
+fi
+
+# Deterministic local-mode detection (no SSH when target is this host)
+# FORCE local if ANY of: hostname=aiops-1, repo path=/opt/ai-ops-runner, or target IP = this host's Tailscale IP
+# Selftest override: OPENCLAW_TEST_HOSTNAME, OPENCLAW_TEST_ROOT_DIR (used only when set)
 LOCAL_TAILSCALE_IP=""
 if command -v tailscale >/dev/null 2>&1; then
   LOCAL_TAILSCALE_IP="$(tailscale ip -4 2>/dev/null || true)"
 fi
+HOSTNAME_SHORT="${OPENCLAW_TEST_HOSTNAME:-$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo "")}"
+ROOT_DIR_FOR_DETECT="${OPENCLAW_TEST_ROOT_DIR:-$ROOT_DIR}"
 APPLY_MODE="ssh_target"
-if [ -n "$LOCAL_TAILSCALE_IP" ] && [ "$TARGET_IP" = "$LOCAL_TAILSCALE_IP" ]; then
+if [ "$HOSTNAME_SHORT" = "aiops-1" ]; then
   APPLY_MODE="local"
+elif [ "$ROOT_DIR_FOR_DETECT" = "/opt/ai-ops-runner" ]; then
+  APPLY_MODE="local"
+elif [ -n "$LOCAL_TAILSCALE_IP" ] && [ "$TARGET_IP" = "$LOCAL_TAILSCALE_IP" ]; then
+  APPLY_MODE="local"
+fi
+
+# Selftest mode: print mode and exit (no SSH, no deploy) — must run before SSH key check
+if [ "${1:-}" = "--selftest-mode" ]; then
+  echo "APPLY_MODE=$APPLY_MODE"
+  echo "TARGET_IP=$TARGET_IP"
+  echo "HOSTNAME_SHORT=$HOSTNAME_SHORT"
+  exit 0
 fi
 
 # ssh_target mode: require SSH key (fail-closed)
@@ -62,9 +85,12 @@ if [ "$APPLY_MODE" = "ssh_target" ]; then
   SSH_OPTS="$SSH_OPTS -o IdentitiesOnly=yes -i ${OPENCLAW_VPS_SSH_IDENTITY}"
 fi
 
+# Header: when local mode, show aiops-1 for clarity
+DISPLAY_HOST="$VPS_HOST"
+[ "$APPLY_MODE" = "local" ] && DISPLAY_HOST="aiops-1"
 echo "=== openclaw_apply_remote.sh ==="
 echo "  Time:   $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-echo "  Host:   $VPS_HOST"
+echo "  Host:   $DISPLAY_HOST"
 echo "  Mode:   $APPLY_MODE"
 echo "  Remote: $VPS_DIR"
 echo ""

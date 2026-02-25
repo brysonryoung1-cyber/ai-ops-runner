@@ -199,10 +199,38 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test 14: Drift detection triggers deploy when console build_sha != origin/main
+# Test 14: Local vs remote mode simulation (deterministic detection)
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- Test 14: Apply convergence (drift → deploy) ---"
+echo "--- Test 14: Local/remote mode simulation ---"
+SELFTEST_OUT=""
+# 14a: hostname=aiops-1 => local
+SELFTEST_OUT="$(OPENCLAW_TEST_HOSTNAME=aiops-1 OPENCLAW_VPS_SSH_HOST=root@100.123.61.57 "$APPLY_SCRIPT" --selftest-mode 2>/dev/null || true)"
+if echo "$SELFTEST_OUT" | grep -q 'APPLY_MODE=local'; then
+  pass "hostname=aiops-1 => local mode"
+else
+  fail "hostname=aiops-1 must select local mode (got: $SELFTEST_OUT)"
+fi
+# 14b: repo path=/opt/ai-ops-runner => local
+SELFTEST_OUT="$(OPENCLAW_TEST_ROOT_DIR=/opt/ai-ops-runner OPENCLAW_VPS_SSH_HOST=root@100.123.61.57 "$APPLY_SCRIPT" --selftest-mode 2>/dev/null || true)"
+if echo "$SELFTEST_OUT" | grep -q 'APPLY_MODE=local'; then
+  pass "ROOT_DIR=/opt/ai-ops-runner => local mode"
+else
+  fail "ROOT_DIR=/opt/ai-ops-runner must select local mode (got: $SELFTEST_OUT)"
+fi
+# 14c: target=remote host => ssh_target
+SELFTEST_OUT="$(OPENCLAW_TEST_HOSTNAME=other OPENCLAW_TEST_ROOT_DIR=/home/other/repo OPENCLAW_VPS_SSH_HOST=root@100.99.99.99 "$APPLY_SCRIPT" --selftest-mode 2>/dev/null || true)"
+if echo "$SELFTEST_OUT" | grep -q 'APPLY_MODE=ssh_target'; then
+  pass "target=remote host => ssh_target mode"
+else
+  fail "Remote target must select ssh_target mode (got: $SELFTEST_OUT)"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 15: Drift detection triggers deploy when console build_sha != origin/main
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 15: Apply convergence (drift → deploy) ---"
 if grep -q 'build_sha' "$APPLY_SCRIPT" && grep -q 'health_public' "$APPLY_SCRIPT"; then
   pass "Apply checks build_sha via health_public"
 else
@@ -217,6 +245,11 @@ if grep -q 'Drift detected' "$APPLY_SCRIPT" || grep -q 'APPLY_DRIFT' "$APPLY_SCR
   pass "Apply has drift detection logic"
 else
   fail "Apply must detect drift (build_sha != git_head)"
+fi
+if grep -q 'aiops-1\|/opt/ai-ops-runner' "$APPLY_SCRIPT"; then
+  pass "Apply uses hostname or repo path for local detection"
+else
+  fail "Apply must use hostname or repo path for deterministic local detection"
 fi
 
 # ---------------------------------------------------------------------------
