@@ -32,6 +32,8 @@ interface LockFileShape {
   started_at: string;
   last_heartbeat_at: string;
   state?: string;
+  /** Set by soma_kajabi_auto_finish so HQ can find run artifacts even if process dies. */
+  artifact_dir?: string;
 }
 
 const locks = new Map<string, LockEntry>();
@@ -249,6 +251,7 @@ export function getLockInfo(actionName: string): {
     started_at: new Date(startedAt).toISOString(),
   };
   if (fileLockForInfo?.last_heartbeat_at) info.last_heartbeat_at = fileLockForInfo.last_heartbeat_at;
+  if (fileLockForInfo?.artifact_dir) info.artifact_dir = fileLockForInfo.artifact_dir;
   return info;
 }
 
