@@ -199,6 +199,27 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Test 14: Drift detection triggers deploy when console build_sha != origin/main
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 14: Apply convergence (drift → deploy) ---"
+if grep -q 'build_sha' "$APPLY_SCRIPT" && grep -q 'health_public' "$APPLY_SCRIPT"; then
+  pass "Apply checks build_sha via health_public"
+else
+  fail "Apply must check build_sha for drift detection"
+fi
+if grep -q 'deploy_pipeline\|deploy_until_green' "$APPLY_SCRIPT"; then
+  pass "Apply triggers deploy_pipeline/deploy_until_green when drift"
+else
+  fail "Apply must run deploy when drift detected"
+fi
+if grep -q 'Drift detected' "$APPLY_SCRIPT" || grep -q 'APPLY_DRIFT' "$APPLY_SCRIPT"; then
+  pass "Apply has drift detection logic"
+else
+  fail "Apply must detect drift (build_sha != git_head)"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""

@@ -729,6 +729,28 @@ else
   pass "Hostname routing check N/A (no tailnet hostname)"
 fi
 
+# --- 10zz. Console build_sha drift (PASS only if matches origin/main) ---
+echo "--- Console build_sha drift ---"
+ORIGIN_MAIN=""
+if [ -d "$ROOT_DIR/.git" ]; then
+  ORIGIN_MAIN="$(cd "$ROOT_DIR" && git fetch origin main 2>/dev/null; git rev-parse --short origin/main 2>/dev/null || echo "")"
+fi
+BUILD_SHA_DRIFT=""
+if [ -n "$TS_HOSTNAME" ] && [ -n "$ORIGIN_MAIN" ]; then
+  HEALTH_DRIFT="$(curl -kfsS --connect-timeout 5 --max-time 10 "https://${TS_HOSTNAME}/api/ui/health_public" 2>/dev/null)" || true
+  BUILD_SHA_DRIFT="$(echo "$HEALTH_DRIFT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('build_sha',''))" 2>/dev/null || echo "")"
+fi
+if [ -n "$ORIGIN_MAIN" ] && [ -n "$BUILD_SHA_DRIFT" ]; then
+  if [ "$BUILD_SHA_DRIFT" = "$ORIGIN_MAIN" ]; then
+    pass "Console build_sha matches origin/main ($ORIGIN_MAIN)"
+  else
+    echo "  WARN: build_sha=$BUILD_SHA_DRIFT != origin/main=$ORIGIN_MAIN — Deploy+Verify required."
+    pass "Console build_sha drift (WARN: run Deploy+Verify to converge)"
+  fi
+else
+  pass "Console drift check N/A (no tailnet or git)"
+fi
+
 # --- 11. Guard Timer Health ---
 echo "--- Guard Timer Health ---"
 if command -v systemctl >/dev/null 2>&1; then
