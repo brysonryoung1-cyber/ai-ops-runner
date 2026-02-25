@@ -27,11 +27,12 @@ apt_install_if_missing() {
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
 }
 
-# apt: Xvfb, x11vnc; Chromium runtime deps (Playwright headed mode): libnss3, fonts
+# apt: Xvfb, x11vnc, x11-apps (xwd for framebuffer guard); Chromium runtime deps (Playwright headed mode): libnss3, fonts
 apt-get update -qq
 apt_install_if_missing \
   xvfb \
   x11vnc \
+  x11-apps \
   python3-websockify \
   novnc \
   libnss3 \
@@ -77,6 +78,7 @@ fi
 
 echo "  Xvfb:       $(command -v Xvfb 2>/dev/null || echo 'MISSING')"
 echo "  x11vnc:     $(command -v x11vnc 2>/dev/null || echo 'MISSING')"
+echo "  xwd:        $(command -v xwd 2>/dev/null || echo 'MISSING')"
 echo "  websockify: $(command -v websockify 2>/dev/null || echo 'python3 -m websockify')"
 
 if ! command -v Xvfb >/dev/null 2>&1; then
@@ -90,6 +92,9 @@ fi
 if ! command -v websockify >/dev/null 2>&1 && ! python3 -c "import websockify" 2>/dev/null; then
   echo "ERROR: websockify not installed" >&2
   exit 1
+fi
+if ! command -v xwd >/dev/null 2>&1; then
+  echo "WARN: xwd (x11-apps) not installed — framebuffer guard will skip black-screen check" >&2
 fi
 
 echo "  install_kajabi_interactive_deps: PASS"

@@ -63,8 +63,16 @@ _check_websockify() {
   return 0
 }
 
-# --- 5) Framebuffer not-all-black ---
+# --- 5) Framebuffer not-all-black (skip if xwd not installed) ---
 _check_framebuffer() {
+  if ! command -v xwd >/dev/null 2>&1; then
+    # Fallback: HTTP check only (no framebuffer validation)
+    if curl -fsS --connect-timeout 2 --max-time 4 "http://127.0.0.1:$NOVNC_PORT/vnc.html" >/dev/null 2>/dev/null; then
+      return 0
+    fi
+    _fail_reason="xwd_missing_and_http_fail"
+    return 1
+  fi
   rm -f "$XWD_FILE"
   if ! DISPLAY="$DISPLAY_NUM" xwd -root -silent -out "$XWD_FILE" 2>/dev/null; then
     _fail_reason="xwd_capture_failed"
