@@ -35,6 +35,21 @@ CAPTURE_TIMEOUT = 1320  # 22 min
 PHASE0_TIMEOUT = 320
 FINISH_PLAN_TIMEOUT = 70
 SESSION_CHECK_POLL_INTERVAL = 12  # seconds
+LOCK_ACTION = "soma_kajabi_auto_finish"
+
+
+def _touch_lock_heartbeat(root: Path) -> None:
+    """Update last_heartbeat_at in artifacts/.locks/<action>.json. Best-effort; no-op if file missing."""
+    lock_path = root / "artifacts" / ".locks" / f"{LOCK_ACTION}.json"
+    if not lock_path.exists():
+        return
+    try:
+        data = json.loads(lock_path.read_text())
+        if isinstance(data, dict):
+            data["last_heartbeat_at"] = datetime.now(timezone.utc).isoformat()
+            lock_path.write_text(json.dumps(data, indent=2))
+    except (OSError, json.JSONDecodeError):
+        pass
 
 
 def _reauth_poll_timeout() -> int:
@@ -374,6 +389,7 @@ def main() -> int:
             start = time.monotonic()
             session_passed = False
             while time.monotonic() - start < _reauth_poll_timeout():
+                _touch_lock_heartbeat(root)
                 sc_rc, sc_out = _run_session_check(root, venv_python, use_exit_node)
                 sc_doc = _parse_last_json_line(sc_out)
                 if sc_rc == 0 and sc_doc.get("ok"):

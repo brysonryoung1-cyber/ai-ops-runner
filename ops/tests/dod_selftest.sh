@@ -79,6 +79,16 @@ if [ -f "$EXEC_ROUTE" ]; then
   else
     fail "/api/exec must return 409 with active_run_id for join semantics"
   fi
+  if grep -q "active_run_status" "$EXEC_ROUTE"; then
+    pass "/api/exec 409 includes active_run_status for actionable response"
+  else
+    fail "/api/exec 409 must include active_run_status"
+  fi
+  if grep -q "soma_auto_finish_unlock" "$EXEC_ROUTE" && grep -q "ACTIVE_RUN_EXISTS\|forceClearLock" "$EXEC_ROUTE"; then
+    pass "/api/exec has soma_auto_finish_unlock with safe refuse/clear"
+  else
+    fail "/api/exec must have soma_auto_finish_unlock action"
+  fi
   if grep -q "MAINTENANCE_MODE\|maintenance_mode" "$EXEC_ROUTE"; then
     pass "/api/exec checks maintenance mode for doctor"
   else

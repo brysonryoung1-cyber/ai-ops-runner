@@ -475,20 +475,34 @@ export default function ProjectDetailsPage() {
               disabled={execLoading !== null && execLoading !== "soma_kajabi_auto_finish"}
               onClick={() => handleExec("soma_kajabi_auto_finish")}
             />
-            {project.last_auto_finish_run_id && (
-              <div className="mt-2 flex items-center gap-2 text-xs">
-                <Link
-                  href={`/artifacts/soma_kajabi/auto_finish/${encodeURIComponent(project.last_auto_finish_run_id)}/SUMMARY.md`}
-                  className="text-blue-400 hover:text-blue-300"
-                >
-                  Open Summary
-                </Link>
-                <Link
-                  href={`/artifacts/soma_kajabi/acceptance/${encodeURIComponent(project.last_auto_finish_run_id)}`}
-                  className="text-blue-400 hover:text-blue-300"
-                >
-                  Open Acceptance
-                </Link>
+            {(project.last_auto_finish_run_id || (results["soma_kajabi_auto_finish"] as { error_class?: string; active_run_id?: string } | undefined)?.error_class === "ALREADY_RUNNING") && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                {(results["soma_kajabi_auto_finish"] as { error_class?: string; active_run_id?: string } | undefined)?.error_class === "ALREADY_RUNNING" &&
+                 (results["soma_kajabi_auto_finish"] as { active_run_id?: string }).active_run_id &&
+                 (results["soma_kajabi_auto_finish"] as { active_run_id?: string }).active_run_id !== "(unknown)" ? (
+                  <Link
+                    href={`/runs?id=${encodeURIComponent((results["soma_kajabi_auto_finish"] as unknown as { active_run_id: string }).active_run_id)}`}
+                    className="text-blue-400 hover:text-blue-300 font-medium"
+                  >
+                    Open active run →
+                  </Link>
+                ) : null}
+                {project.last_auto_finish_run_id && (
+                  <>
+                    <Link
+                      href={`/artifacts/soma_kajabi/auto_finish/${encodeURIComponent(project.last_auto_finish_run_id)}/SUMMARY.md`}
+                      className="text-blue-400 hover:text-blue-300"
+                    >
+                      Open Summary
+                    </Link>
+                    <Link
+                      href={`/artifacts/soma_kajabi/acceptance/${encodeURIComponent(project.last_auto_finish_run_id)}`}
+                      className="text-blue-400 hover:text-blue-300"
+                    >
+                      Open Acceptance
+                    </Link>
+                  </>
+                )}
               </div>
             )}
             <ActionButton

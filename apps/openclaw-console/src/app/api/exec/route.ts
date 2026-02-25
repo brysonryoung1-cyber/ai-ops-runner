@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { executeAction, checkConnectivity, getHostdUrl } from "@/lib/hostd";
-import { acquireLock, releaseLock, getLockInfo } from "@/lib/action-lock";
+import { acquireLock, releaseLock, getLockInfo, forceClearLock } from "@/lib/action-lock";
 import {
   writeAuditEntry,
   deriveActor,
@@ -213,6 +213,38 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Unlock action: safe clear of soma_kajabi_auto_finish lock when no active run
+  const AUTO_FINISH_ACTION = "soma_kajabi_auto_finish";
+  if (actionName === "soma_auto_finish_unlock") {
+    const lockInfo = getLockInfo(AUTO_FINISH_ACTION);
+    if (!lockInfo) {
+      return NextResponse.json(
+        { ok: true, unlocked: true, message: "No lock held. Auto-Finish is not running." },
+        { status: 200 }
+      );
+    }
+    // Lock exists: refuse if not stale (active run in progress)
+    const startedAt = new Date(lockInfo.started_at).getTime();
+    const STALE_MS = 30 * 60 * 1000;
+    if (Date.now() - startedAt < STALE_MS) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error_class: "ACTIVE_RUN_EXISTS",
+          message: "Cannot unlock: Auto-Finish run is active. Join via /api/runs or wait for completion.",
+          active_run_id: lockInfo.active_run_id,
+          started_at: lockInfo.started_at,
+        },
+        { status: 409 }
+      );
+    }
+    forceClearLock(AUTO_FINISH_ACTION);
+    return NextResponse.json(
+      { ok: true, unlocked: true, message: "Stale lock cleared. Auto-Finish can be started." },
+      { status: 200 }
+    );
+  }
+
   // Maintenance mode: block non-DoD doctor triggers during deploy
   if (actionName === "doctor") {
     const maintenance = getMaintenanceMode();
@@ -227,7 +259,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Action lock — single-flight + join: 409 includes active_run_id for poll /api/runs?id=<run_id>
+  // Action lock — single-flight + join: 409 ALWAYS includes active_run_id for poll /api/runs?id=<run_id>
   const lockResult = acquireLock(actionName);
   if (!lockResult.acquired) {
     const existing = lockResult.existing;
@@ -238,12 +270,14 @@ export async function POST(req: NextRequest) {
       ok: false,
       error_class: "ALREADY_RUNNING",
       action: actionName,
+      active_run_id: runId ?? "(unknown)",
+      active_run_status: "running",
     };
-    if (runId) {
-      payload.active_run_id = runId;
+    if (runId && runId !== "(unknown)") {
       if (startedAt != null) payload.started_at = new Date(startedAt).toISOString();
+      if (lockInfo?.artifact_dir) payload.artifact_dir = lockInfo.artifact_dir;
     } else {
-      payload.error = `Action "${actionName}" is already running. Wait for it to complete.`;
+      payload.error = `Action "${actionName}" is already running. Join via /api/runs?id=<active_run_id>.`;
     }
     return NextResponse.json(payload, { status: 409 });
   }
