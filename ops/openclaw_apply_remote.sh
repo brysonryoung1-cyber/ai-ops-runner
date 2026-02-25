@@ -169,6 +169,22 @@ fi
 echo ""
 
 # ---------------------------------------------------------------------------
+# Step 2b: Install guard units (idempotent; picks up TimeoutStartSec etc.)
+# ---------------------------------------------------------------------------
+echo "==> Step 2b: Install guard units"
+if [ -f "$ROOT_DIR/ops/openclaw_install_guard.sh" ]; then
+  if [ "$APPLY_MODE" = "local" ]; then
+    (cd "$VPS_DIR" && sudo ./ops/openclaw_install_guard.sh 2>&1 | tail -8) || true
+  else
+    ssh $SSH_OPTS "$VPS_HOST" "cd '${VPS_DIR}' && sudo ./ops/openclaw_install_guard.sh" 2>&1 | tail -8 || true
+  fi
+  echo "  Guard units: installed"
+else
+  echo "  SKIP: openclaw_install_guard.sh not found"
+fi
+echo ""
+
+# ---------------------------------------------------------------------------
 # Step 3: Apply SSH Tailscale-only fix (best-effort; continue on failure)
 # ---------------------------------------------------------------------------
 echo "==> Step 3: Apply SSH Tailscale-only fix"
