@@ -74,6 +74,7 @@ _check_websockify() {
 }
 
 # --- 5) Framebuffer not-all-black (skip if xwd not installed) ---
+# Retry up to 3x with 4s sleep: xsetroot needs a few seconds after Xvfb socket ready
 _check_framebuffer() {
   if ! command -v xwd >/dev/null 2>&1; then
     # Fallback: HTTP check only (no framebuffer validation)
@@ -83,27 +84,32 @@ _check_framebuffer() {
     _fail_reason="xwd_missing_and_http_fail"
     return 1
   fi
-  rm -f "$XWD_FILE"
-  if ! DISPLAY="$DISPLAY_NUM" xwd -root -silent -out "$XWD_FILE" 2>/dev/null; then
-    _fail_reason="xwd_capture_failed"
-    return 1
-  fi
-  if [ ! -s "$XWD_FILE" ]; then
-    _fail_reason="xwd_empty"
-    return 1
-  fi
 
-  local mean=""
-  local is_black=1
-
-  if command -v convert >/dev/null 2>&1; then
-    mean="$(convert "$XWD_FILE" -format "%[fx:mean]" info: 2>/dev/null || echo "0")"
-    if [ -n "$mean" ] && python3 -c "exit(0 if float('$mean') > 0.001 else 1)" 2>/dev/null; then
-      is_black=0
+  local attempt
+  for attempt in 1 2 3; do
+    rm -f "$XWD_FILE"
+    if ! DISPLAY="$DISPLAY_NUM" xwd -root -silent -out "$XWD_FILE" 2>/dev/null; then
+      _fail_reason="xwd_capture_failed"
+      [ "$attempt" -lt 3 ] && sleep 4
+      continue
     fi
-  else
-    # Python fallback: sample pixel bytes, check variance
-    if python3 -c "
+    if [ ! -s "$XWD_FILE" ]; then
+      _fail_reason="xwd_empty"
+      [ "$attempt" -lt 3 ] && sleep 4
+      continue
+    fi
+
+    local mean=""
+    local is_black=1
+
+    if command -v convert >/dev/null 2>&1; then
+      mean="$(convert "$XWD_FILE" -format "%[fx:mean]" info: 2>/dev/null || echo "0")"
+      if [ -n "$mean" ] && python3 -c "exit(0 if float('$mean') > 0.001 else 1)" 2>/dev/null; then
+        is_black=0
+      fi
+    else
+      # Python fallback: sample pixel bytes, check variance
+      if python3 -c "
 import sys
 try:
     with open('$XWD_FILE', 'rb') as f:
@@ -121,9 +127,16 @@ try:
 except Exception:
     sys.exit(1)
 " 2>/dev/null; then
-      is_black=0
+        is_black=0
+      fi
     fi
-  fi
+
+    if [ "$is_black" -eq 0 ]; then
+      break
+    fi
+    _fail_reason="framebuffer_all_black"
+    [ "$attempt" -lt 3 ] && sleep 4
+  done
 
   if [ "$is_black" -ne 0 ]; then
     _fail_reason="framebuffer_all_black"
