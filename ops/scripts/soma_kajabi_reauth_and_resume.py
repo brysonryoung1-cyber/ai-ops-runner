@@ -154,6 +154,14 @@ def main() -> int:
                     KAJABI_CHROME_PROFILE_DIR.chmod(0o700)
                 except OSError:
                     pass
+                # Clear stale Chromium profile lock (ProcessSingleton) from prior crashed runs
+                for lock_name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+                    lock_path = KAJABI_CHROME_PROFILE_DIR / lock_name
+                    try:
+                        if lock_path.exists():
+                            lock_path.unlink()
+                    except OSError:
+                        pass
                 context = p.chromium.launch_persistent_context(
                     profile_dir,
                     headless=False,
