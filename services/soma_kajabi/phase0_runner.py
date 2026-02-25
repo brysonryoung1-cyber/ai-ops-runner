@@ -37,6 +37,12 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _write_phase0_stage(out_dir: Path, stage: str, status: str = "running") -> None:
+    """Write stage.json for phase0 sub-stage (terminal-proofing for auto_finish forensics)."""
+    data = {"stage": stage, "status": status, "timestamp_utc": _now_iso()}
+    (out_dir / "stage.json").write_text(json.dumps(data, indent=2))
+
+
 def _generate_run_id() -> str:
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     short = uuid.uuid4().hex[:8]
@@ -725,14 +731,21 @@ def main() -> int:
     # Phase gate: only Phase 0 actions allowed (this is Phase 0)
     # Future: if action were phase1+, block with PHASE_GATE_BLOCKED
 
+    # Sub-stage logging for auto_finish forensics (terminal-proofing)
+    _write_phase0_stage(out_dir, "starting_phase0", "running")
+
     # Snapshot
+    _write_phase0_stage(out_dir, "phase0_snapshot", "running")
     kajabi_ok, kajabi_next, kajabi_error_class = _run_kajabi_snapshot(root, out_dir, run_id, cfg)
+    _write_phase0_stage(out_dir, "phase0_snapshot", "done" if kajabi_ok else "failed")
 
     # Harvest: run Gmail when ready; otherwise skip (Kajabi-only mode)
     gmail_status_val: str | None = None
     gmail_reason_val: str | None = None
+    _write_phase0_stage(out_dir, "phase0_harvest", "running")
     if gmail_ready:
         emails, harvest_ok, harvest_next = _run_gmail_harvest(root, out_dir, cfg)
+        _write_phase0_stage(out_dir, "phase0_harvest", "done" if harvest_ok else "failed")
     else:
         from .connector_config import GMAIL_OAUTH_PATH
         oauth_path = cfg.get("gmail", {}).get("auth_secret_ref") or str(GMAIL_OAUTH_PATH)
@@ -742,10 +755,13 @@ def main() -> int:
         harvest_next = None
         gmail_status_val = "skipped"
         gmail_reason_val = f"oauth token not found at {oauth_path}"
+        _write_phase0_stage(out_dir, "phase0_harvest", "skipped")
 
     # Manifest
+    _write_phase0_stage(out_dir, "phase0_manifest", "running")
     manifest_rows = _derive_manifest_from_emails(emails)
     _write_video_manifest(out_dir, manifest_rows)
+    _write_phase0_stage(out_dir, "phase0_manifest", "done")
 
     ok = kajabi_ok and harvest_ok
     rec = kajabi_next or harvest_next

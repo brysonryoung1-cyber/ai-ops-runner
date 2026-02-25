@@ -7,6 +7,10 @@ Uses exit node wrapper when /etc/ai-ops-runner/config/soma_kajabi_exit_node.txt 
 Produces one canonical summary artifact at artifacts/soma_kajabi/auto_finish/<run_id>/.
 Writes acceptance artifacts under artifacts/soma_kajabi/acceptance/<run_id>/.
 State machine: stage.json + SUMMARY.md per stage. Auth-needed failures → WAITING_FOR_HUMAN + poll.
+
+TERMINAL-PROOFING: Always writes RESULT.json (SUCCESS|WAITING_FOR_HUMAN|FAILURE|TIMEOUT).
+On exception: writes CRASH.json, traceback.txt, env_summary.json.
+Run dir created immediately at start; stage.json written on every transition.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ import os
 import subprocess
 import sys
 import time
+import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,8 +44,9 @@ SESSION_CHECK_POLL_INTERVAL = 12  # seconds
 LOCK_ACTION = "soma_kajabi_auto_finish"
 
 
-def _touch_lock_heartbeat(root: Path) -> None:
-    """Update last_heartbeat_at in artifacts/.locks/<action>.json. Best-effort; no-op if file missing."""
+def _touch_lock_heartbeat(root: Path, artifact_dir: str | None = None) -> None:
+    """Update last_heartbeat_at (and optionally artifact_dir) in artifacts/.locks/<action>.json.
+    Best-effort; no-op if file missing."""
     lock_path = root / "artifacts" / ".locks" / f"{LOCK_ACTION}.json"
     if not lock_path.exists():
         return
@@ -48,9 +54,54 @@ def _touch_lock_heartbeat(root: Path) -> None:
         data = json.loads(lock_path.read_text())
         if isinstance(data, dict):
             data["last_heartbeat_at"] = datetime.now(timezone.utc).isoformat()
+            if artifact_dir is not None:
+                data["artifact_dir"] = artifact_dir
             lock_path.write_text(json.dumps(data, indent=2))
     except (OSError, json.JSONDecodeError):
         pass
+
+
+def _update_lock_artifact_dir(root: Path, artifact_dir: str) -> None:
+    """Write artifact_dir to lock file so HQ can find run artifacts even if process dies."""
+    _touch_lock_heartbeat(root, artifact_dir=artifact_dir)
+
+
+def _write_crash_bundle(out_dir: Path, run_id: str, exc: BaseException, stage: str) -> None:
+    """Write CRASH.json, traceback.txt, env_summary.json on exception."""
+    tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+    tb_text = "".join(tb_lines)
+    (out_dir / "traceback.txt").write_text(tb_text)
+    crash = {
+        "error_class": type(exc).__name__,
+        "message": str(exc)[:500],
+        "stage": stage,
+        "run_id": run_id,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    (out_dir / "CRASH.json").write_text(json.dumps(crash, indent=2))
+    root = _repo_root()
+    env_summary = {
+        "DISPLAY": os.environ.get("DISPLAY", ""),
+        "OPENCLAW_REPO_ROOT": os.environ.get("OPENCLAW_REPO_ROOT", ""),
+        "build_sha": _get_build_sha(root),
+        "python_version": sys.version.split()[0],
+    }
+    (out_dir / "env_summary.json").write_text(json.dumps(env_summary, indent=2))
+
+
+def _get_build_sha(root: Path) -> str:
+    """Return git HEAD sha or empty string. Non-secret."""
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=str(root),
+        )
+        return (r.stdout or "").strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
 
 
 def _reauth_poll_timeout() -> int:
@@ -330,12 +381,72 @@ def main() -> int:
     from soma_kajabi_auto_finish_state import (
         append_summary_line,
         is_auth_needed_error,
+        write_result_json,
         write_stage,
     )
 
+    # Create run dir immediately at start (terminal-proofing: HQ can find active_run even if we crash)
     run_id = f"auto_finish_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
     out_dir = root / "artifacts" / "soma_kajabi" / "auto_finish" / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    artifact_dir = f"artifacts/soma_kajabi/auto_finish/{run_id}"
+    _update_lock_artifact_dir(root, artifact_dir)
+
+    write_stage(out_dir, "starting", "running")
+    append_summary_line(out_dir, "[starting] run_dir created")
+
+    result_state: dict[str, object] = {"status": "FAILURE", "extra": None}
+
+    try:
+        return _run_main(root, out_dir, run_id, result_state)
+    except BaseException as exc:
+        stage = "unknown"
+        try:
+            stage_path = out_dir / "stage.json"
+            if stage_path.exists():
+                stage = json.loads(stage_path.read_text()).get("stage", "unknown")
+        except Exception:
+            pass
+        _write_crash_bundle(out_dir, run_id, exc, stage)
+        write_result_json(
+            out_dir,
+            "FAILURE",
+            run_id=run_id,
+            stage=stage,
+            error_class=type(exc).__name__,
+            message=str(exc)[:500],
+        )
+        _update_project_state_fail(root, run_id)
+        raise
+    finally:
+        # Always write RESULT.json so HQ has terminal status even on crash/exit
+        if not (out_dir / "RESULT.json").exists():
+            extra = result_state.get("extra")
+            write_result_json(
+                out_dir,
+                str(result_state.get("status", "FAILURE")),
+                run_id=run_id,
+                stage=extra.get("stage") if isinstance(extra, dict) else None,
+                error_class=extra.get("error_class") if isinstance(extra, dict) else None,
+                message=extra.get("message") if isinstance(extra, dict) else None,
+                novnc_url=extra.get("novnc_url") if isinstance(extra, dict) else None,
+                instruction_line=extra.get("instruction_line") if isinstance(extra, dict) else None,
+            )
+
+
+def _run_main(root: Path, out_dir: Path, run_id: str, result_state: dict[str, object]) -> int:
+    """Inner main logic. result_state is mutated for finally block."""
+    from soma_kajabi_auto_finish_state import (
+        append_summary_line,
+        is_auth_needed_error,
+        write_result_json,
+        write_stage,
+    )
+
+    def set_result(status: str, **kwargs: object) -> None:
+        result_state["status"] = status
+        result_state["extra"] = kwargs if kwargs else None
 
     venv_python = root / ".venv-hostd" / "bin" / "python"
     if not venv_python.exists():
@@ -353,6 +464,7 @@ def main() -> int:
     append_summary_line(out_dir, f"[connectors_status] started")
     if not STORAGE_STATE_PATH.exists() or STORAGE_STATE_PATH.stat().st_size == 0:
         write_stage(out_dir, "connectors_status", "failed", last_error_class="KAJABI_STORAGE_STATE_MISSING")
+        set_result("FAILURE", stage="connectors_status", error_class="KAJABI_STORAGE_STATE_MISSING", message="Kajabi connector not configured. Run Kajabi Bootstrap first.")
         return _fail_closed(
             out_dir, run_id, "KAJABI_STORAGE_STATE_MISSING",
             "Kajabi connector not configured. Run Kajabi Bootstrap first."
@@ -401,6 +513,7 @@ def main() -> int:
             cap_script = root / "ops" / "scripts" / "kajabi_capture_interactive.py"
             if not cap_script.exists():
                 write_stage(out_dir, "capture_interactive", "failed", last_error_class="KAJABI_CAPTURE_SCRIPT_MISSING")
+                set_result("FAILURE", stage="capture_interactive", error_class="KAJABI_CAPTURE_SCRIPT_MISSING", message="kajabi_capture_interactive.py not found")
                 return _fail_closed(
                     out_dir, run_id, "KAJABI_CAPTURE_SCRIPT_MISSING",
                     "kajabi_capture_interactive.py not found"
@@ -411,6 +524,7 @@ def main() -> int:
             ready, url, err_class, journal_artifact = ensure_novnc_ready_with_recovery(out_dir, run_id)
             if not ready and err_class:
                 write_stage(out_dir, "capture_interactive", "failed", last_error_class=err_class or "NOVNC_BACKEND_UNAVAILABLE")
+                set_result("FAILURE", stage="capture_interactive", error_class=err_class, message=f"noVNC backend unavailable. Journal: {journal_artifact or 'N/A'}")
                 return _fail_closed(
                     out_dir, run_id, err_class,
                     f"noVNC backend unavailable. Journal: {journal_artifact or 'N/A'}"
@@ -452,11 +566,18 @@ def main() -> int:
                     time.sleep(5)
             if not doctor_ok:
                 write_stage(out_dir, "kajabi_ui_ensure", "failed", last_error_class=KAJABI_UI_NOT_PRESENT)
+                set_result("FAILURE", stage="kajabi_ui_ensure", error_class=KAJABI_UI_NOT_PRESENT, message="Kajabi UI not present on noVNC after 3 self-heal attempts. Check framebuffer.png in artifact_dir.")
                 return _fail_closed(
                     out_dir, run_id, KAJABI_UI_NOT_PRESENT,
                     "Kajabi UI not present on noVNC after 3 self-heal attempts. Check framebuffer.png in artifact_dir."
                 )
             instruction = INSTRUCTION_LINE
+            set_result("WAITING_FOR_HUMAN", novnc_url=url, instruction_line=instruction)
+            # Write RESULT.json immediately so if process dies during polling, HQ has terminal status
+            write_result_json(
+                out_dir, "WAITING_FOR_HUMAN", run_id=run_id,
+                novnc_url=url, instruction_line=instruction,
+            )
             _emit_waiting_for_human(out_dir, url, instruction, run_id, artifact_dir)
 
             # Poll session_check until PASS or timeout
@@ -464,8 +585,9 @@ def main() -> int:
             append_summary_line(out_dir, "[session_check] polling for reauth")
             start = time.monotonic()
             session_passed = False
+            artifact_dir_val = f"artifacts/soma_kajabi/auto_finish/{run_id}"
             while time.monotonic() - start < _reauth_poll_timeout():
-                _touch_lock_heartbeat(root)
+                _touch_lock_heartbeat(root, artifact_dir=artifact_dir_val)
                 sc_rc, sc_out = _run_session_check(root, venv_python, use_exit_node)
                 sc_doc = _parse_last_json_line(sc_out)
                 if sc_rc == 0 and sc_doc.get("ok"):
@@ -487,6 +609,7 @@ def main() -> int:
                     "timestamp_utc": datetime.now(timezone.utc).isoformat(),
                 }
                 (out_dir / "reauth_timeout_bundle.json").write_text(json.dumps(bundle, indent=2))
+                set_result("TIMEOUT", stage="session_check", error_class=KAJABI_REAUTH_TIMEOUT, message="Human reauth timed out. session_check did not PASS within 25 minutes.")
                 return _fail_closed(
                     out_dir, run_id, KAJABI_REAUTH_TIMEOUT,
                     "Human reauth timed out. session_check did not PASS within 25 minutes."
@@ -495,6 +618,7 @@ def main() -> int:
             continue
 
         write_stage(out_dir, "phase0", "failed", last_error_class=error_class or "PHASE0_FAILED")
+        set_result("FAILURE", stage="phase0", error_class=error_class or "PHASE0_FAILED", message=doc.get("recommended_next_action", phase0_out[:500]) or "Phase0 failed")
         return _fail_closed(
             out_dir, run_id, error_class or "PHASE0_FAILED",
             doc.get("recommended_next_action", phase0_out[:500]) or "Phase0 failed"
@@ -511,6 +635,7 @@ def main() -> int:
     finish_run_id = finish_doc.get("run_id")
     if rc != 0:
         write_stage(out_dir, "finish_plan", "failed", last_error_class="FINISH_PLAN_FAILED")
+        set_result("FAILURE", stage="finish_plan", error_class="FINISH_PLAN_FAILED", message=finish_doc.get("error", finish_out[:300]) or "Zane Finish Plan failed")
         return _fail_closed(
             out_dir, run_id, "FINISH_PLAN_FAILED",
             finish_doc.get("error", finish_out[:300]) or "Zane Finish Plan failed"
@@ -528,6 +653,7 @@ def main() -> int:
         phase0_dir = dirs[0] if dirs else None
 
     if not phase0_dir or not (phase0_dir / "kajabi_library_snapshot.json").exists():
+        set_result("FAILURE", stage="acceptance_gate", error_class="PHASE0_ARTIFACTS_MISSING", message="Phase0 artifacts not found")
         return _fail_closed(out_dir, run_id, "PHASE0_ARTIFACTS_MISSING", "Phase0 artifacts not found")
 
     snap_path = phase0_dir / "kajabi_library_snapshot.json"
@@ -544,6 +670,7 @@ def main() -> int:
 
     for name in ["PUNCHLIST.md", "PUNCHLIST.csv", "SUMMARY.json"]:
         if not finish_dir or not (finish_dir / name).exists():
+            set_result("FAILURE", stage="acceptance_gate", error_class="FINISH_PLAN_ARTIFACTS_MISSING", message=f"Missing {name}")
             return _fail_closed(out_dir, run_id, "FINISH_PLAN_ARTIFACTS_MISSING", f"Missing {name}")
 
     # ── E2) Write acceptance artifacts (Phase 2) ──
@@ -555,6 +682,7 @@ def main() -> int:
         accept_rel = str(accept_dir.relative_to(root))
     except Exception as e:
         write_stage(out_dir, "acceptance_gate", "failed", last_error_class="ACCEPTANCE_ARTIFACTS_FAILED")
+        set_result("FAILURE", stage="acceptance_gate", error_class="ACCEPTANCE_ARTIFACTS_FAILED", message=str(e)[:200])
         return _fail_closed(out_dir, run_id, "ACCEPTANCE_ARTIFACTS_FAILED", str(e)[:200])
 
     # ── E3) Fail-closed gates (mirror_exceptions empty required) ──
@@ -571,6 +699,7 @@ def main() -> int:
             except Exception:
                 diff_summary = f"{accept_summary.get('exceptions_count', 0)} exceptions"
         write_stage(out_dir, "acceptance_gate", "failed", last_error_class="MIRROR_EXCEPTIONS_NON_EMPTY")
+        set_result("FAILURE", stage="acceptance_gate", error_class="MIRROR_EXCEPTIONS_NON_EMPTY", message=f"Practitioner not superset of Home above-paywall; {accept_summary.get('exceptions_count', 0)} exceptions. {diff_summary}")
         return _fail_closed(
             out_dir, run_id, "MIRROR_EXCEPTIONS_NON_EMPTY",
             f"Practitioner not superset of Home above-paywall; {accept_summary.get('exceptions_count', 0)} exceptions. {diff_summary}"
@@ -578,10 +707,12 @@ def main() -> int:
     offer_status, offer_pass = _check_offer_urls(root)
     if not offer_pass:
         write_stage(out_dir, "acceptance_gate", "failed", last_error_class="OFFER_URLS_MISMATCH")
+        set_result("FAILURE", stage="acceptance_gate", error_class="OFFER_URLS_MISMATCH", message=offer_status)
         return _fail_closed(out_dir, run_id, "OFFER_URLS_MISMATCH", offer_status)
     for name in ["final_library_snapshot.json", "video_manifest.csv", "mirror_report.json", "changelog.md"]:
         if not (accept_dir / name).exists():
             write_stage(out_dir, "acceptance_gate", "failed", last_error_class="REQUIRED_ARTIFACTS_MISSING")
+            set_result("FAILURE", stage="acceptance_gate", error_class="REQUIRED_ARTIFACTS_MISSING", message=f"Missing {name}")
             return _fail_closed(out_dir, run_id, "REQUIRED_ARTIFACTS_MISSING", f"Missing {name}")
 
     write_stage(out_dir, "acceptance_gate", "done")
@@ -701,6 +832,7 @@ def main() -> int:
         except (OSError, json.JSONDecodeError):
             pass
 
+    set_result("SUCCESS")
     print(json.dumps(summary_json))
     return 0
 

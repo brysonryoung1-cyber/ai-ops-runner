@@ -123,6 +123,41 @@ def append_summary_line(out_dir: Path, line: str) -> None:
     summary_path.write_text(content)
 
 
+def write_result_json(
+    out_dir: Path,
+    status: str,
+    *,
+    run_id: str,
+    stage: str | None = None,
+    error_class: str | None = None,
+    message: str | None = None,
+    novnc_url: str | None = None,
+    instruction_line: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Write RESULT.json with terminal status. Always called in finally block.
+    status: SUCCESS | WAITING_FOR_HUMAN | FAILURE | TIMEOUT
+    """
+    data: dict[str, Any] = {
+        "status": status,
+        "run_id": run_id,
+        "timestamp_utc": _now_iso(),
+    }
+    if stage:
+        data["stage"] = stage
+    if error_class:
+        data["error_class"] = error_class
+    if message:
+        data["message"] = message
+    if novnc_url:
+        data["novnc_url"] = novnc_url
+    if instruction_line:
+        data["instruction_line"] = instruction_line
+    if extra:
+        data.update(extra)
+    (out_dir / "RESULT.json").write_text(json.dumps(data, indent=2))
+
+
 def is_auth_needed_error(error_class: str | None) -> bool:
     """True if error indicates login/Cloudflare/challenge — must NOT hard-fail."""
     if not error_class:

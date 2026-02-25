@@ -114,6 +114,10 @@ def test_phase0_success_path_produces_summary(tmp_path):
     assert (accept_dir / "video_manifest.csv").exists()
     assert (accept_dir / "mirror_report.json").exists()
     assert (accept_dir / "changelog.md").exists()
+    # Contract: RESULT.json always written on success
+    assert (out_dir / "RESULT.json").exists()
+    result = json.loads((out_dir / "RESULT.json").read_text())
+    assert result["status"] == "SUCCESS"
 
 
 def test_storage_state_missing_fails_closed(tmp_path):
@@ -140,9 +144,68 @@ def test_storage_state_missing_fails_closed(tmp_path):
 
     auto_dirs = list((root / "artifacts" / "soma_kajabi" / "auto_finish").iterdir())
     assert len(auto_dirs) == 1
-    summary = json.loads((auto_dirs[0] / "SUMMARY.json").read_text())
+    out_dir = auto_dirs[0]
+    summary = json.loads((out_dir / "SUMMARY.json").read_text())
     assert summary["ok"] is False
     assert "KAJABI_STORAGE_STATE_MISSING" in summary.get("error_class", "")
+    # Contract: RESULT.json always written (terminal-proofing)
+    assert (out_dir / "RESULT.json").exists()
+    result = json.loads((out_dir / "RESULT.json").read_text())
+    assert result["status"] == "FAILURE"
+    assert result.get("error_class") == "KAJABI_STORAGE_STATE_MISSING"
+
+
+def test_phase0_exception_produces_crash_bundle(tmp_path):
+    """Injected exception during phase0 produces CRASH.json + RESULT.json with FAILURE."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "config").mkdir()
+    _setup_ops_scripts(root)
+    (root / "artifacts" / "soma_kajabi" / "auto_finish").mkdir(parents=True)
+    storage = tmp_path / "storage.json"
+    storage.write_text('{"cookies":[]}')
+
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    spec = importlib.util.spec_from_file_location(
+        "soma_kajabi_auto_finish",
+        REPO_ROOT / "ops" / "scripts" / "soma_kajabi_auto_finish.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["soma_kajabi_auto_finish"] = mod
+    spec.loader.exec_module(mod)
+
+    mod.STORAGE_STATE_PATH = storage
+    mod.EXIT_NODE_CONFIG = tmp_path / "nonexistent.txt"
+    mod._repo_root = lambda: root
+
+    def mock_run_raise(cmd, timeout=600, stream_stderr=False):
+        cmd_str = " ".join(str(x) for x in cmd)
+        if "connectors_status" in cmd_str:
+            return 0, json.dumps({"kajabi": "connected"})
+        if "phase0_runner" in cmd_str:
+            raise RuntimeError("Injected phase0 crash for test")
+        return 1, "{}"
+
+    mod._run = mock_run_raise
+    mod._run_with_exit_node = lambda cmd, timeout: mock_run_raise(cmd, timeout)
+
+    with pytest.raises(RuntimeError, match="Injected phase0 crash"):
+        mod.main()
+
+    auto_dirs = list((root / "artifacts" / "soma_kajabi" / "auto_finish").iterdir())
+    assert len(auto_dirs) == 1
+    out_dir = auto_dirs[0]
+    assert (out_dir / "CRASH.json").exists()
+    crash = json.loads((out_dir / "CRASH.json").read_text())
+    assert crash["error_class"] == "RuntimeError"
+    assert "Injected phase0 crash" in crash.get("message", "")
+    assert crash.get("stage") == "phase0"
+    assert (out_dir / "traceback.txt").exists()
+    assert (out_dir / "env_summary.json").exists()
+    assert (out_dir / "RESULT.json").exists()
+    result = json.loads((out_dir / "RESULT.json").read_text())
+    assert result["status"] == "FAILURE"
 
 
 def _setup_ops_scripts(root: Path):

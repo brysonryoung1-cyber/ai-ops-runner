@@ -13,6 +13,7 @@ from ops.soma.auto_finish_state_machine import (
     STAGES,
     append_summary_line,
     is_auth_needed_error,
+    write_result_json,
     write_stage,
 )
 
