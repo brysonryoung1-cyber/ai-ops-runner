@@ -212,8 +212,10 @@ def _enter_waiting_for_human(
     reason: str,
     novnc_url: str,
     instruction: str | None = None,
+    artifact_dir: str | None = None,
 ) -> None:
-    """Enter WAITING_FOR_HUMAN mode. Write contract artifact. Print only novnc_url + instruction."""
+    """Enter WAITING_FOR_HUMAN mode. Write contract artifact. Print only novnc_url + instruction.
+    novnc_url must be tailnet-verified (doctor PASS). artifact_dir is doctor run artifacts."""
     payload = {
         "reason": reason,
         "novnc_url": novnc_url,
@@ -223,6 +225,8 @@ def _enter_waiting_for_human(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "status": "WAITING_FOR_HUMAN",
     }
+    if artifact_dir:
+        payload["artifact_dir"] = artifact_dir
     (out_dir / "WAITING_FOR_HUMAN.json").write_text(json.dumps(payload, indent=2))
     print("\n--- WAITING_FOR_HUMAN ---")
     print("noVNC READY")
@@ -232,9 +236,17 @@ def _enter_waiting_for_human(
     sys.stdout.flush()
 
 
-def _emit_waiting_for_human(out_dir: Path, novnc_url: str, instruction: str) -> None:
-    """Emit WAITING_FOR_HUMAN with verified noVNC URL and instruction. Write contract artifact."""
-    _enter_waiting_for_human(out_dir, "capture_interactive_failed", novnc_url, instruction)
+def _emit_waiting_for_human(
+    out_dir: Path, novnc_url: str, instruction: str, run_id: str
+) -> None:
+    """Emit WAITING_FOR_HUMAN with tailnet-verified noVNC URL and instruction. Write contract artifact."""
+    _enter_waiting_for_human(
+        out_dir,
+        "capture_interactive_failed",
+        novnc_url,
+        instruction,
+        artifact_dir=f"artifacts/novnc_debug/{run_id}",
+    )
 
 
 def main() -> int:
@@ -354,7 +366,7 @@ def main() -> int:
             # capture_interactive failed → WAITING_FOR_HUMAN + poll session_check (no exit)
             write_stage(out_dir, "capture_interactive", "auth_needed", last_error_class=KAJABI_CAPTURE_INTERACTIVE_FAILED)
             instruction = INSTRUCTION_LINE
-            _emit_waiting_for_human(out_dir, url, instruction)
+            _emit_waiting_for_human(out_dir, url, instruction, run_id)
 
             # Poll session_check until PASS or timeout
             write_stage(out_dir, "session_check", "polling")

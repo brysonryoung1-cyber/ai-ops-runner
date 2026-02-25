@@ -63,6 +63,7 @@ cleanup() {
 trap cleanup TERM INT
 
 # ── 1) Start Xvfb :99 ──
+# Remove stale X lock only for this DISPLAY (avoid touching other displays)
 XVFB_PID=""
 LOCK_FILE="/tmp/.X${DISPLAY_NUM#:}-lock"
 X11_SOCKET="/tmp/.X11-unix/X${DISPLAY_NUM#:}"
@@ -73,6 +74,7 @@ if [ -f "$LOCK_FILE" ]; then
     echo "Xvfb already running on $DISPLAY_NUM (pid $OLD_PID)" >&2
     XVFB_PID="$OLD_PID"
   else
+    echo "Removing stale X lock for $DISPLAY_NUM (pid $OLD_PID not running)" >&2
     rm -f "$LOCK_FILE"
   fi
 fi
