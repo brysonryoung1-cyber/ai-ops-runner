@@ -171,6 +171,13 @@ def main() -> int:
     screenshots_dir = out_dir / "screenshots"
     screenshots_dir.mkdir(exist_ok=True)
 
+    # Opt-in: interactive/noVNC tests disabled by default (ship runs on Mac without noVNC backend).
+    if os.environ.get("OPENCLAW_RUN_INTERACTIVE_TESTS") != "1":
+        skip_msg = "SKIP: interactive/noVNC tests disabled (set OPENCLAW_RUN_INTERACTIVE_TESTS=1 to run)"
+        (out_dir / "instructions.txt").write_text(skip_msg)
+        print(skip_msg, file=sys.stderr)
+        return 0
+
     # Restart noVNC + poll probe. Fail-closed if unavailable.
     script_dir = Path(__file__).resolve().parent
     root = Path(__file__).resolve().parents[2]
