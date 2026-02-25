@@ -159,7 +159,7 @@ def main() -> int:
                     headless=False,
                     env=env,
                 )
-                page = context.pages()[0] if context.pages() else context.new_page()
+                page = context.pages[0] if context.pages else context.new_page()
                 # Bootstrap: admin → sites → click Soma → products
                 page.goto(KAJABI_ADMIN, wait_until="domcontentloaded", timeout=60000)
                 try:
