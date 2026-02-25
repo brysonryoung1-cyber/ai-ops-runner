@@ -40,10 +40,9 @@ if [ ! -d '${VPS_DIR}/.git' ]; then
 fi
 cd '${VPS_DIR}'
 git fetch origin
-git checkout main
 # Intentionally destructive: converge VPS to exact origin/main state.
-# Do NOT use on hosts with manual hotfixes — those would be lost.
-git reset --hard origin/main
+# checkout -f -B discards local changes and forces main to origin/main.
+git checkout -f -B main origin/main
 echo "  HEAD: \$(git rev-parse --short HEAD)"
 REMOTE_STEP1
 echo ""
@@ -112,11 +111,11 @@ if ! tailscale serve status &>/dev/null; then
   exit 0
 fi
 tailscale serve reset 2>/dev/null || true
-tailscale serve --bg --https=443 http://127.0.0.1:8000 || {
+tailscale serve --bg --https=443 http://127.0.0.1:8787 || {
   echo "  tailscale serve command failed (Serve may not be enabled on tailnet)"
   exit 0
 }
-echo '  Tailscale Serve configured: https://<tailnet-hostname>:443 -> 127.0.0.1:8000'
+echo '  Tailscale Serve configured: https://<tailnet-hostname>:443 -> 127.0.0.1:8787'
 tailscale serve status 2>/dev/null || true
 REMOTE_STEP4
 echo ""

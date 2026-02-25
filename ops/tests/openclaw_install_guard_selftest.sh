@@ -70,13 +70,20 @@ if [ -f "$SYSTEMD_DIR/openclaw-guard.timer" ]; then
 else
   fail "openclaw-guard.timer NOT found in $SYSTEMD_DIR"
 fi
+for g in openclaw-serve-guard openclaw-novnc-guard; do
+  if [ -f "$SYSTEMD_DIR/${g}.service" ] && [ -f "$SYSTEMD_DIR/${g}.timer" ]; then
+    pass "${g} units copied"
+  else
+    fail "${g} units NOT found in $SYSTEMD_DIR"
+  fi
+done
 
 # ---------------------------------------------------------------------------
 # Test 2: Unit files have correct permissions (644)
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- Test 2: File permissions ---"
-for unit in openclaw-guard.service openclaw-guard.timer; do
+for unit in openclaw-guard.service openclaw-guard.timer openclaw-serve-guard.service openclaw-serve-guard.timer openclaw-novnc-guard.service openclaw-novnc-guard.timer; do
   PERMS="$(stat -f '%A' "$SYSTEMD_DIR/$unit" 2>/dev/null || stat -c '%a' "$SYSTEMD_DIR/$unit" 2>/dev/null)"
   if [ "$PERMS" = "644" ]; then
     pass "$unit has mode 644"
@@ -105,6 +112,16 @@ if grep -q 'enable --now openclaw-guard.timer' "$SYSTEMCTL_LOG" 2>/dev/null; the
   pass "systemctl enable --now openclaw-guard.timer called"
 else
   fail "Timer not enabled with --now"
+fi
+if grep -q 'enable --now openclaw-serve-guard.timer' "$SYSTEMCTL_LOG" 2>/dev/null; then
+  pass "systemctl enable --now openclaw-serve-guard.timer called"
+else
+  fail "Serve guard timer not enabled"
+fi
+if grep -q 'enable --now openclaw-novnc-guard.timer' "$SYSTEMCTL_LOG" 2>/dev/null; then
+  pass "systemctl enable --now openclaw-novnc-guard.timer called"
+else
+  fail "noVNC guard timer not enabled"
 fi
 
 # ---------------------------------------------------------------------------

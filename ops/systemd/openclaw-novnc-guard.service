@@ -1,0 +1,10 @@
+[Unit]
+Description=OpenClaw noVNC guard — ensure noVNC service and vnc.html reachable
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai-ops-runner
+ExecStart=/bin/bash /opt/ai-ops-runner/ops/guards/novnc_guard.sh
+TimeoutStartSec=60

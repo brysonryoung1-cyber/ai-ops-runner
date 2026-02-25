@@ -31,7 +31,8 @@ if [ -z "$INSTALL_ROOT" ] && [ "$(id -u)" -ne 0 ]; then
 fi
 
 # --- Verify source units exist ---
-for unit in openclaw-guard.service openclaw-guard.timer; do
+ALL_UNITS="openclaw-guard.service openclaw-guard.timer openclaw-serve-guard.service openclaw-serve-guard.timer openclaw-novnc-guard.service openclaw-novnc-guard.timer"
+for unit in $ALL_UNITS; do
   if [ ! -f "$UNIT_SRC/$unit" ]; then
     echo "ERROR: Missing source unit file: $UNIT_SRC/$unit" >&2
     exit 1
@@ -43,31 +44,37 @@ mkdir -p "$SYSTEMD_DIR"
 
 # --- Copy unit files ---
 echo "--- Copying unit files ---"
-for unit in openclaw-guard.service openclaw-guard.timer; do
+for unit in $ALL_UNITS; do
   cp "$UNIT_SRC/$unit" "$SYSTEMD_DIR/$unit"
   chmod 644 "$SYSTEMD_DIR/$unit"
   echo "  Installed: $SYSTEMD_DIR/$unit"
 done
 
-# --- Reload systemd + enable timer ---
+# --- Reload systemd + enable timers ---
 echo ""
-echo "--- Enabling timer ---"
+echo "--- Enabling timers ---"
 systemctl daemon-reload
 systemctl enable --now openclaw-guard.timer
+systemctl enable --now openclaw-serve-guard.timer
+systemctl enable --now openclaw-novnc-guard.timer
 echo "  openclaw-guard.timer: enabled + started"
+echo "  openclaw-serve-guard.timer: enabled + started"
+echo "  openclaw-novnc-guard.timer: enabled + started"
 
 # --- Verify ---
 echo ""
 echo "--- Verification ---"
-if systemctl is-active --quiet openclaw-guard.timer 2>/dev/null; then
-  echo "  openclaw-guard.timer: ACTIVE"
-else
-  # In test mode with stub systemctl, is-active may not work
-  echo "  openclaw-guard.timer: enabled (is-active check skipped or unavailable)"
-fi
+for t in openclaw-guard openclaw-serve-guard openclaw-novnc-guard; do
+  if systemctl is-active --quiet "${t}.timer" 2>/dev/null; then
+    echo "  ${t}.timer: ACTIVE"
+  else
+    echo "  ${t}.timer: enabled (is-active check skipped or unavailable)"
+  fi
+done
 
 echo ""
 echo "  Guard will run every 10 minutes."
+echo "  Serve guard + noVNC guard: every 2 minutes."
 echo "  Check logs: journalctl -u openclaw-guard.service"
 echo "  Guard log:  /var/log/openclaw_guard.log"
 echo ""

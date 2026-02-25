@@ -115,9 +115,21 @@ _run_audit() {
   docker compose -f "$ROOT_DIR/docker-compose.console.yml" ps --format json 2>/dev/null >"$report_dir/docker_ps.json" || echo "[]" >"$report_dir/docker_ps.json"
 
   # 3. Systemd status
-  for unit in openclaw-hostd openclaw-novnc openclaw-guard.timer openclaw-autopilot.timer; do
+  for unit in openclaw-hostd openclaw-novnc openclaw-guard.timer openclaw-serve-guard.timer openclaw-novnc-guard.timer openclaw-autopilot.timer; do
     systemctl status "$unit" --no-pager 2>/dev/null >"$report_dir/systemd_${unit}.txt" || echo "not found" >"$report_dir/systemd_${unit}.txt"
   done
+
+  # 3b. Run serve_guard + novnc_guard, capture latest status
+  if [ -x "$ROOT_DIR/ops/guards/serve_guard.sh" ]; then
+    OPENCLAW_RUN_ID="${RUN_ID}_serve" "$ROOT_DIR/ops/guards/serve_guard.sh" 2>/dev/null || true
+    LATEST_SERVE="$(ls -1t "$ROOT_DIR/artifacts/hq_audit/serve_guard" 2>/dev/null | head -1)"
+    [ -n "$LATEST_SERVE" ] && [ -f "$ROOT_DIR/artifacts/hq_audit/serve_guard/$LATEST_SERVE/status.json" ] && cp "$ROOT_DIR/artifacts/hq_audit/serve_guard/$LATEST_SERVE/status.json" "$report_dir/serve_guard_status.json" 2>/dev/null || true
+  fi
+  if [ -x "$ROOT_DIR/ops/guards/novnc_guard.sh" ]; then
+    OPENCLAW_RUN_ID="${RUN_ID}_novnc" "$ROOT_DIR/ops/guards/novnc_guard.sh" 2>/dev/null || true
+    LATEST_NOVNC="$(ls -1t "$ROOT_DIR/artifacts/hq_audit/novnc_guard" 2>/dev/null | head -1)"
+    [ -n "$LATEST_NOVNC" ] && [ -f "$ROOT_DIR/artifacts/hq_audit/novnc_guard/$LATEST_NOVNC/status.json" ] && cp "$ROOT_DIR/artifacts/hq_audit/novnc_guard/$LATEST_NOVNC/status.json" "$report_dir/novnc_guard_status.json" 2>/dev/null || true
+  fi
 
   # 4. novnc_probe + novnc_status.json
   if [ -x "$ROOT_DIR/ops/novnc_probe.sh" ]; then
@@ -182,12 +194,22 @@ _build_artifacts() {
   NOVNC_PASS=false
   [ "$NOVNC_PROBE" = "ok" ] && NOVNC_PASS=true
 
+  SERVE_GUARD_PASS=false
+  [ -f "$report_dir/serve_guard_status.json" ] && SERVE_GUARD_PASS=$(jq_safe "$report_dir/serve_guard_status.json" '.local_ok and .tailnet_ok')
+  [ "$SERVE_GUARD_PASS" = "true" ] && SERVE_GUARD_PASS=true || SERVE_GUARD_PASS=false
+
+  NOVNC_GUARD_PASS=false
+  [ -f "$report_dir/novnc_guard_status.json" ] && NOVNC_GUARD_PASS=$(jq_safe "$report_dir/novnc_guard_status.json" '.service_active and .vnc_html_ok')
+  [ "$NOVNC_GUARD_PASS" = "true" ] && NOVNC_GUARD_PASS=true || NOVNC_GUARD_PASS=false
+
   # SUMMARY.json
   HP_PY=$([ "$HQ_PASS" = true ] && echo True || echo False)
   HE_PY=$([ "$HE_PASS" = true ] && echo True || echo False)
   HD_PY=$([ "$HOSTD_PASS" = true ] && echo True || echo False)
   AP_PY=$([ "$AP_PASS" = true ] && echo True || echo False)
   NV_PY=$([ "$NOVNC_PASS" = true ] && echo True || echo False)
+  SG_PY=$([ "$SERVE_GUARD_PASS" = true ] && echo True || echo False)
+  NG_PY=$([ "$NOVNC_GUARD_PASS" = true ] && echo True || echo False)
   OVERALL_PY=$([ "$HQ_PASS" = true ] && [ "$HE_PASS" = true ] && [ "$HOSTD_PASS" = true ] && echo True || echo False)
   python3 -c "
 import json
@@ -199,7 +221,9 @@ d = {
     'host_executor': {'pass': $HE_PY, 'code': '$HE_CODE', 'hostd_status': '$HE_HOSTD'},
     'hostd': {'pass': $HD_PY, 'code': '$HOSTD_CODE'},
     'autopilot': {'pass': $AP_PY, 'code': '$AP_CODE'},
-    'novnc': {'pass': $NV_PY, 'probe': '$NOVNC_PROBE'}
+    'novnc': {'pass': $NV_PY, 'probe': '$NOVNC_PROBE'},
+    'serve_guard': {'pass': $SG_PY},
+    'novnc_guard': {'pass': $NG_PY}
   },
   'build_sha': '$BUILD_SHA',
   'deploy_sha': '$DEPLOY_SHA',
@@ -227,6 +251,8 @@ with open('$ART_DIR/SUMMARY.json', 'w') as f:
 | hostd           | $([ "$HOSTD_PASS" = true ] && echo "PASS" || echo "FAIL") |
 | Autopilot       | $([ "$AP_PASS" = true ] && echo "PASS" || echo "OK (404=not present)") |
 | noVNC           | $([ "$NOVNC_PASS" = true ] && echo "PASS" || echo "FAIL/skip") |
+| Serve Guard     | $([ "$SERVE_GUARD_PASS" = true ] && echo "PASS" || echo "FAIL/skip") |
+| noVNC Guard     | $([ "$NOVNC_GUARD_PASS" = true ] && echo "PASS" || echo "FAIL/skip") |
 
 ## Endpoint Codes
 
