@@ -226,8 +226,10 @@ def _run_doctor_for_framebuffer(root: Path, run_id: str) -> tuple[bool, str]:
         return False, ""
 
 
-def _run_self_heal(root: Path, out_dir: Path, run_id: str) -> None:
-    """Run safe remediations once before WAITING_FOR_HUMAN: doctor, serve_guard, novnc_guard."""
+def _run_self_heal(root: Path, out_dir: Path, run_id: str, phase: str = "precheck") -> None:
+    """Run safe remediations: doctor, serve_guard, novnc_guard.
+    phase: 'precheck' (FAST novnc ≤25s) | 'waiting_for_human' (DEEP novnc ≤180s).
+    """
     doctor = root / "ops" / "openclaw_novnc_doctor.sh"
     if doctor.exists() and os.access(doctor, os.X_OK):
         subprocess.run(
@@ -237,16 +239,27 @@ def _run_self_heal(root: Path, out_dir: Path, run_id: str) -> None:
             cwd=str(root),
             env={**os.environ, "OPENCLAW_RUN_ID": f"{run_id}_doctor"},
         )
-    for guard in ["serve_guard.sh", "novnc_guard.sh"]:
-        guard_path = root / "ops" / "guards" / guard
-        if guard_path.exists() and os.access(guard_path, os.X_OK):
-            subprocess.run(
-                [str(guard_path)],
-                capture_output=True,
-                timeout=60,
-                cwd=str(root),
-                env={**os.environ, "OPENCLAW_RUN_ID": f"{run_id}_{guard.replace('.sh', '')}"},
-            )
+    serve_guard = root / "ops" / "guards" / "serve_guard.sh"
+    if serve_guard.exists() and os.access(serve_guard, os.X_OK):
+        subprocess.run(
+            [str(serve_guard)],
+            capture_output=True,
+            timeout=30,
+            cwd=str(root),
+            env={**os.environ, "OPENCLAW_RUN_ID": f"{run_id}_serve_guard"},
+        )
+    novnc_guard = root / "ops" / "guards" / "novnc_guard.sh"
+    if novnc_guard.exists() and os.access(novnc_guard, os.X_OK):
+        is_fast = phase == "precheck"
+        timeout = 25 if is_fast else 180
+        args = [str(novnc_guard), "--fast"] if is_fast else [str(novnc_guard)]
+        subprocess.run(
+            args,
+            capture_output=True,
+            timeout=timeout,
+            cwd=str(root),
+            env={**os.environ, "OPENCLAW_RUN_ID": f"{run_id}_novnc_guard"},
+        )
 
 
 def _run_session_check(root: Path, venv_python: Path, use_exit_node: bool) -> tuple[int, str]:
@@ -403,8 +416,8 @@ def main() -> int:
                     f"noVNC backend unavailable. Journal: {journal_artifact or 'N/A'}"
                 )
 
-            # Self-heal: doctor, serve_guard, novnc_guard (doctor already run by ensure_novnc_ready)
-            _run_self_heal(root, out_dir, run_id)
+            # Self-heal: doctor, serve_guard, novnc_guard (DEEP mode for WAITING_FOR_HUMAN)
+            _run_self_heal(root, out_dir, run_id, phase="waiting_for_human")
 
             # Try capture_interactive first
             write_stage(out_dir, "capture_interactive", "running")

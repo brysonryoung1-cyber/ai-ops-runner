@@ -201,8 +201,24 @@ _collect_and_fail() {
 # --- Main ---
 # Ensure artifact dir exists for framebuffer.png (written on PASS)
 mkdir -p "$ART_DIR"
+TIMINGS_FILE="$ART_DIR/timings.json"
+
+_timestamp() { date +%s.%N; }
+T_START=$(_timestamp)
 
 if _run_checks; then
+  T_END=$(_timestamp)
+  python3 -c "
+import json
+from datetime import datetime, timezone
+t_start, t_end = float('$T_START'), float('$T_END')
+d = {
+  'run_id': '$RUN_ID',
+  'timestamp_utc': datetime.now(timezone.utc).isoformat(),
+  'total_sec': round(t_end - t_start, 2),
+}
+with open('$TIMINGS_FILE', 'w') as f: json.dump(d, f, indent=2)
+" 2>/dev/null || true
   echo "{\"ok\":true,\"run_id\":\"$RUN_ID\",\"display\":\"$DISPLAY_NUM\",\"novnc_port\":$NOVNC_PORT}"
   exit 0
 fi

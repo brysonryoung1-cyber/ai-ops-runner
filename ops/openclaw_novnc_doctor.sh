@@ -77,6 +77,7 @@ d = json.load(sys.stdin)
 ok = d.get('ok') and d.get('ws_stability_local') == 'verified' and d.get('ws_stability_tailnet') == 'verified'
 sys.exit(0 if ok else 1)
 " 2>/dev/null; then
+    cp "$ART_DIR/ws_stability.json" "$ART_DIR/ws_check.json" 2>/dev/null || true
     echo "{\"ok\":true,\"result\":\"PASS\",\"ws_stability_local\":\"verified\",\"ws_stability_tailnet\":\"verified\",\"novnc_url\":\"$NOVNC_URL\",\"artifact_dir\":\"artifacts/novnc_debug/$RUN_ID\"}"
     exit 0
   fi
