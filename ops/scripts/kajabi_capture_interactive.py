@@ -178,10 +178,10 @@ def main() -> int:
         sys.path.insert(0, str(root))
     if str(script_dir) not in sys.path:
         sys.path.insert(0, str(script_dir))
-    from novnc_ready import ensure_novnc_ready
+    from novnc_ready import ensure_novnc_ready_with_recovery
     from src.playwright_safe import safe_content_excerpt, safe_screenshot, safe_title, safe_url
 
-    ready, tailscale_url, err_class, journal_artifact = ensure_novnc_ready(out_dir, run_id)
+    ready, tailscale_url, err_class, journal_artifact = ensure_novnc_ready_with_recovery(out_dir, run_id)
     if not ready and err_class:
         summary = {
             "ok": False,

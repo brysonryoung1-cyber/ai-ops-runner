@@ -99,11 +99,11 @@ def main() -> int:
 
     script_dir = Path(__file__).resolve().parent
     sys.path.insert(0, str(root / "ops" / "scripts"))
-    from novnc_ready import ensure_novnc_ready
+    from novnc_ready import ensure_novnc_ready_with_recovery
     from src.playwright_safe import safe_content_excerpt, safe_screenshot, safe_title, safe_url
 
-    # 1) ensure_novnc_ready — hard fail-closed with journal link
-    ready, tailscale_url, err_class, journal_artifact = ensure_novnc_ready(out_dir, run_id)
+    # 1) ensure_novnc_ready_with_recovery — hard fail-closed with journal link
+    ready, tailscale_url, err_class, journal_artifact = ensure_novnc_ready_with_recovery(out_dir, run_id)
     if not ready and err_class:
         summary = {
             "ok": False,

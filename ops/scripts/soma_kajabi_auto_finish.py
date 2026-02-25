@@ -393,9 +393,9 @@ def main() -> int:
                     "kajabi_capture_interactive.py not found"
                 )
 
-            # Ensure noVNC ready before WAITING_FOR_HUMAN (restart + poll probe)
-            from novnc_ready import ensure_novnc_ready
-            ready, url, err_class, journal_artifact = ensure_novnc_ready(out_dir, run_id)
+            # Ensure noVNC ready before WAITING_FOR_HUMAN (restart + retry with mid-run recovery)
+            from novnc_ready import ensure_novnc_ready_with_recovery
+            ready, url, err_class, journal_artifact = ensure_novnc_ready_with_recovery(out_dir, run_id)
             if not ready and err_class:
                 write_stage(out_dir, "capture_interactive", "failed", last_error_class=err_class or "NOVNC_BACKEND_UNAVAILABLE")
                 return _fail_closed(

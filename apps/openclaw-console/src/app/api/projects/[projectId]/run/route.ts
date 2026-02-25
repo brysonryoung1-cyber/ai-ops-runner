@@ -396,7 +396,7 @@ export async function POST(
       artifact_dir: result.artifact_dir,
     };
     if (requirementsEndpoint) errorPayload.requirements_endpoint = requirementsEndpoint;
-    if (errorClass === "NOVNC_BACKEND_UNAVAILABLE" && parsedJournalArtifact) {
+    if ((errorClass === "NOVNC_BACKEND_UNAVAILABLE" || errorClass === "NOVNC_NOT_READY") && parsedJournalArtifact) {
       errorPayload.journal_artifact = parsedJournalArtifact;
     }
     if (expectedSecretPathRedacted) errorPayload.expected_secret_path_redacted = expectedSecretPathRedacted;

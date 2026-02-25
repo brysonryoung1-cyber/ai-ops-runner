@@ -162,6 +162,9 @@ def _setup_novnc_mock(root: Path):
     (scripts / "novnc_ready.py").write_text('''
 def ensure_novnc_ready(artifact_dir, run_id):
     return True, "http://test-novnc.example:6080/vnc.html?autoconnect=1", None, None
+
+def ensure_novnc_ready_with_recovery(artifact_dir, run_id):
+    return True, "http://test-novnc.example:6080/vnc.html?autoconnect=1", None, None
 ''')
     (scripts / "kajabi_capture_interactive.py").write_text("# stub for test\n")
 

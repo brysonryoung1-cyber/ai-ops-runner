@@ -13,6 +13,68 @@ SCRIPTS = REPO_ROOT / "ops" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 
+def test_ensure_novnc_ready_retries_on_doctor_fail(tmp_path):
+    """When doctor FAIL occurs, ensure_novnc_ready retries restart and only returns on PASS."""
+    import novnc_ready as nr
+
+    call_count = 0
+
+    def mock_doctor(_artifact_dir, run_id):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            return False, "http://test.ts.net:6080/vnc.html", "NOVNC_WS_TAILNET_FAILED"
+        return True, "http://test.ts.net:6080/vnc.html?autoconnect=1", None
+
+    restart_calls = []
+
+    def mock_restart(root):
+        restart_calls.append(root)
+        return True
+
+    with patch.object(nr, "_run_doctor", side_effect=mock_doctor), patch.object(
+        nr, "_run_novnc_restart", side_effect=mock_restart
+    ), patch.object(nr, "_capture_journal", return_value=tmp_path / "journal.txt"):
+        ready, url, err_class, journal = nr.ensure_novnc_ready(tmp_path, "run_123")
+
+    assert ready is True
+    assert url == "http://test.ts.net:6080/vnc.html?autoconnect=1"
+    assert err_class is None
+    assert call_count == 3
+    assert len(restart_calls) == 2  # Restart after attempt 1 and 2
+
+
+def test_ensure_novnc_ready_with_recovery_triggers_restart_on_novnc_not_ready(tmp_path):
+    """NOVNC_NOT_READY triggers restart+retry in ensure_novnc_ready_with_recovery."""
+    import novnc_ready as nr
+
+    call_count = 0
+
+    def mock_doctor(_artifact_dir, run_id):
+        nonlocal call_count
+        call_count += 1
+        # First ensure_novnc_ready exhausts 5 retries (5 calls), then recovery runs (1+ calls)
+        if call_count <= 5:
+            return False, "http://test.ts.net:6080/vnc.html", "NOVNC_NOT_READY"
+        return True, "http://recovered.ts.net:6080/vnc.html?autoconnect=1", None
+
+    restart_calls = []
+
+    def mock_restart(root):
+        restart_calls.append(root)
+        return True
+
+    with patch.object(nr, "_run_doctor", side_effect=mock_doctor), patch.object(
+        nr, "_run_novnc_restart", side_effect=mock_restart
+    ), patch.object(nr, "_capture_journal", return_value=tmp_path / "journal.txt"):
+        ready, url, err_class, journal = nr.ensure_novnc_ready_with_recovery(tmp_path, "run_456")
+
+    assert ready is True
+    assert "6080" in url
+    assert err_class is None
+    assert len(restart_calls) >= 1  # Recovery triggers one restart before retry
+
+
 def test_novnc_url_must_not_be_localhost() -> None:
     """WAITING_FOR_HUMAN and doctor must never emit 127.0.0.1 or localhost in noVNC URL."""
     doctor = REPO_ROOT / "ops" / "openclaw_novnc_doctor.sh"

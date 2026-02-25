@@ -178,7 +178,8 @@ export default function ProjectDetailsPage() {
             `${data.error_class ?? "Error"}: ${data.message ?? "Action failed"}`,
             data.run_id ? `Run: ${data.run_id}` : "",
             data.artifact_dir ? data.artifact_dir : "",
-            data.error_class === "NOVNC_BACKEND_UNAVAILABLE" && data.journal_artifact
+            (data.error_class === "NOVNC_BACKEND_UNAVAILABLE" || data.error_class === "NOVNC_NOT_READY") &&
+              data.journal_artifact
               ? `Journal: ${data.journal_artifact}`
               : "",
           ].filter(Boolean);
