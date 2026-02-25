@@ -1,18 +1,27 @@
 #!/usr/bin/env bash
 # novnc_supervisor.sh — Supervised noVNC stack: Xvfb + x11vnc + websockify.
 #
-# Invariant: Start Xvfb → wait for X11 socket → start x11vnc → start websockify.
+# Invariant: Start Xvfb → wait for X11 socket → WM + xsetroot + cursor → start x11vnc → start websockify.
 # If any dies, restart the stack. Writes status to /run/openclaw/novnc_status.json.
 # Run via systemd (openclaw-novnc.service). Does NOT exit just because there is no browser tab.
 #
-# Env: OPENCLAW_NOVNC_RUN_ID, OPENCLAW_NOVNC_ARTIFACT_DIR, OPENCLAW_NOVNC_PORT, OPENCLAW_NOVNC_DISPLAY, OPENCLAW_NOVNC_VNC_PORT
+# Config: /etc/ai-ops-runner/config/novnc_display.env (DISPLAY, VNC_PORT, NOVNC_PORT)
+# Env overrides: OPENCLAW_NOVNC_RUN_ID, OPENCLAW_NOVNC_ARTIFACT_DIR, OPENCLAW_NOVNC_PORT, OPENCLAW_NOVNC_DISPLAY, OPENCLAW_NOVNC_VNC_PORT
 set -euo pipefail
+
+# Load canonical config if present
+if [ -f /etc/ai-ops-runner/config/novnc_display.env ]; then
+  set -a
+  # shellcheck source=/dev/null
+  source /etc/ai-ops-runner/config/novnc_display.env
+  set +a
+fi
 
 RUN_ID="${OPENCLAW_NOVNC_RUN_ID:-novnc}"
 ARTIFACT_DIR="${OPENCLAW_NOVNC_ARTIFACT_DIR:-/run/openclaw-novnc}"
-NOVNC_PORT="${OPENCLAW_NOVNC_PORT:-6080}"
-DISPLAY_NUM="${OPENCLAW_NOVNC_DISPLAY:-:99}"
-VNC_PORT="${OPENCLAW_NOVNC_VNC_PORT:-5900}"
+NOVNC_PORT="${OPENCLAW_NOVNC_PORT:-${NOVNC_PORT:-6080}}"
+DISPLAY_NUM="${OPENCLAW_NOVNC_DISPLAY:-${DISPLAY:-:99}}"
+VNC_PORT="${OPENCLAW_NOVNC_VNC_PORT:-${VNC_PORT:-5900}}"
 
 # Canonical status path per spec
 STATUS_DIR="/run/openclaw"
@@ -105,6 +114,21 @@ if [ ! -S "$X11_SOCKET" ]; then
 fi
 
 export DISPLAY="$DISPLAY_NUM"
+
+# ── 2b) Guarantee visible desktop: WM + non-black background + cursor ──
+# Prevents "black noVNC screen" when root window is blank
+if command -v xsetroot >/dev/null 2>&1; then
+  xsetroot -solid "#2b2b2b" 2>/dev/null || true
+  xsetroot -cursor_name left_ptr 2>/dev/null || true
+fi
+# Minimal WM (openbox preferred; fluxbox fallback) — ensures window management for Chromium
+if command -v openbox >/dev/null 2>&1; then
+  openbox --sm-disable 2>/dev/null &
+  sleep 1
+elif command -v fluxbox >/dev/null 2>&1; then
+  fluxbox 2>/dev/null &
+  sleep 1
+fi
 
 # ── 3) Build websockify cmd ──
 BIND_ADDR="0.0.0.0"

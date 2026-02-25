@@ -15,6 +15,17 @@ from pathlib import Path
 
 NOVNC_PORT = 6080
 VNC_PORT = 5900
+
+
+def novnc_display() -> str:
+    """Canonical DISPLAY from /etc/ai-ops-runner/config/novnc_display.env."""
+    cfg = Path("/etc/ai-ops-runner/config/novnc_display.env")
+    if cfg.exists():
+        for line in cfg.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("DISPLAY=") and "=" in line:
+                return line.split("=", 1)[1].strip().strip("'\"") or ":99"
+    return ":99"
 PROBE_TIMEOUT = 30
 JOURNAL_LINES = 200
 

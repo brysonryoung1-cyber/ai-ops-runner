@@ -27,12 +27,15 @@ apt_install_if_missing() {
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
 }
 
-# apt: Xvfb, x11vnc, x11-apps (xwd for framebuffer guard); Chromium runtime deps (Playwright headed mode): libnss3, fonts
+# apt: Xvfb, x11vnc, x11-apps (xwd for framebuffer guard), openbox (minimal WM), imagemagick (framebuffer.png);
+# Chromium runtime deps (Playwright headed mode): libnss3, fonts
 apt-get update -qq
 apt_install_if_missing \
   xvfb \
   x11vnc \
   x11-apps \
+  openbox \
+  imagemagick \
   python3-websockify \
   novnc \
   libnss3 \

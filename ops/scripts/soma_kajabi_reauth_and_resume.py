@@ -140,7 +140,8 @@ def main() -> int:
         return 1
 
     env = os.environ.copy()
-    env["DISPLAY"] = ":99"
+    from novnc_ready import novnc_display
+    env["DISPLAY"] = novnc_display()
 
     done = threading.Event()
     result_holder: list[dict] = []
