@@ -103,19 +103,68 @@ fi
 echo ""
 
 # ---------------------------------------------------------------------------
-# Step 2: Docker compose up
+# Step 1b: Drift check — if console build_sha != origin/main, run deploy_pipeline
 # ---------------------------------------------------------------------------
-echo "==> Step 2: docker compose up -d --build"
+# Convergence: apply must never leave console stale. If drift detected, run full deploy.
 if [ "$APPLY_MODE" = "local" ]; then
-  (cd "$VPS_DIR" && docker compose up -d --build 2>&1 | tail -5)
-  echo "  Docker compose: done"
+  GIT_HEAD="$(cd "$VPS_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "")"
+  BUILD_SHA=""
+  if [ -n "$GIT_HEAD" ]; then
+    BUILD_SHA="$(curl -sf --connect-timeout 5 --max-time 10 "http://127.0.0.1:8787/api/ui/health_public" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('build_sha',''))" 2>/dev/null || echo "")"
+  fi
+  DRIFT=0
+  if [ -z "$BUILD_SHA" ] || [ "$BUILD_SHA" != "$GIT_HEAD" ]; then
+    DRIFT=1
+    echo "  Drift detected: build_sha=${BUILD_SHA:-unknown} != git_head=$GIT_HEAD"
+  fi
 else
-  ssh $SSH_OPTS "$VPS_HOST" bash <<REMOTE_DOCKER
+  DRIFT_OUT="$(ssh $SSH_OPTS "$VPS_HOST" bash <<'REMOTE_DRIFT'
+cd /opt/ai-ops-runner
+GIT_HEAD=$(git rev-parse --short HEAD 2>/dev/null || echo "")
+BUILD_SHA=""
+[ -n "$GIT_HEAD" ] && BUILD_SHA=$(curl -sf --connect-timeout 5 --max-time 10 "http://127.0.0.1:8787/api/ui/health_public" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('build_sha',''))" 2>/dev/null || echo "")
+if [ -z "$BUILD_SHA" ] || [ "$BUILD_SHA" != "$GIT_HEAD" ]; then
+  echo "  Drift detected: build_sha=${BUILD_SHA:-unknown} != git_head=$GIT_HEAD"
+  echo "1"
+else
+  echo "0"
+fi
+REMOTE_DRIFT
+)"
+  echo "$DRIFT_OUT" | grep "^  Drift" || true
+  DRIFT="$(echo "$DRIFT_OUT" | tail -1)"
+  [ "$DRIFT" != "1" ] && DRIFT=0
+fi
+
+if [ "${DRIFT:-0}" = "1" ]; then
+  echo "==> Step 2: Deploy+Verify (drift — console build_sha != origin/main)"
+  if [ -f "$ROOT_DIR/ops/deploy_until_green.sh" ]; then
+    DEPLOY_CMD="./ops/deploy_until_green.sh"
+  else
+    DEPLOY_CMD="./ops/deploy_pipeline.sh"
+  fi
+  if [ "$APPLY_MODE" = "local" ]; then
+    (cd "$VPS_DIR" && $DEPLOY_CMD 2>&1) || { echo "  WARNING: Deploy failed; continuing with doctor." >&2; }
+  else
+    ssh $SSH_OPTS "$VPS_HOST" "cd '${VPS_DIR}' && $DEPLOY_CMD" 2>&1 || { echo "  WARNING: Deploy failed; continuing with doctor." >&2; }
+  fi
+  echo "  Deploy+Verify: done (or failed non-fatal)"
+else
+  # ---------------------------------------------------------------------------
+  # Step 2: Docker compose up (fast path — no drift)
+  # ---------------------------------------------------------------------------
+  echo "==> Step 2: docker compose up -d --build"
+  if [ "$APPLY_MODE" = "local" ]; then
+    (cd "$VPS_DIR" && docker compose up -d --build 2>&1 | tail -5)
+    echo "  Docker compose: done"
+  else
+    ssh $SSH_OPTS "$VPS_HOST" bash <<REMOTE_DOCKER
 set -euo pipefail
 cd '${VPS_DIR}'
 docker compose up -d --build 2>&1 | tail -5
 echo "  Docker compose: done"
 REMOTE_DOCKER
+  fi
 fi
 echo ""
 

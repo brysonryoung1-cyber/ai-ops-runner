@@ -482,6 +482,22 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Doctor drift check (build_sha vs origin/main)
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Doctor drift check ---"
+if grep -q 'build_sha' "$DOCTOR" && grep -q 'origin/main' "$DOCTOR"; then
+  pass "Doctor has build_sha drift check vs origin/main"
+else
+  fail "Doctor must check build_sha matches origin/main"
+fi
+if grep -qF 'Deploy+Verify required' "$DOCTOR"; then
+  pass "Doctor suggests Deploy+Verify on drift"
+else
+  fail "Doctor must suggest Deploy+Verify when build_sha != origin/main"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""
