@@ -3,9 +3,24 @@
  * Calls OPENCLAW_HOSTD_URL for health and exec. Auth via X-OpenClaw-Admin-Token.
  * Fail-closed: no URL or no token for admin actions => clear errors.
  * ACTION_TO_HOSTD from config/action_registry.json (single source of truth).
+ *
+ * Long-running actions (reauth, auto_finish, capture_interactive) use extended
+ * timeouts to avoid undici bodyTimeout (default 300s) causing "fetch failed".
+ * OPENCLAW_HOSTD_EXEC_TIMEOUT_MS overrides; 0 = no AbortSignal limit.
  */
 
+import { Agent, fetch as undiciFetch } from "undici";
 import { ACTION_TO_HOSTD } from "./action_registry.generated";
+
+/** Actions that may run >5 min; use extended exec timeout to avoid undici bodyTimeout. */
+const LONG_RUNNING_ACTIONS = new Set([
+  "soma_kajabi_reauth_and_resume",
+  "soma_kajabi_auto_finish",
+  "soma_kajabi_capture_interactive",
+  "soma_kajabi_session_check",
+  "soma_kajabi_unblock_and_run",
+  "deploy_and_verify",
+]);
 
 export interface HostdResult {
   ok: boolean;
@@ -131,12 +146,25 @@ export async function executeAction(actionName: string): Promise<HostdResult> {
     headers["X-OpenClaw-Admin-Token"] = adminToken;
   }
 
+  // Resolve exec timeout: env override, or 60m for long-running, 60s for normal.
+  // Undici bodyTimeout (default 300s) kills long requests; use Agent with bodyTimeout: 0.
+  const envMs = process.env.OPENCLAW_HOSTD_EXEC_TIMEOUT_MS;
+  const execTimeoutMs = envMs
+    ? Math.max(0, parseInt(envMs, 10) || 60_000)
+    : LONG_RUNNING_ACTIONS.has(actionName)
+      ? 3_600_000 // 60 min for reauth, auto_finish, capture_interactive, etc.
+      : 60_000;   // 60 s for normal actions
+
+  const agent = new Agent({ bodyTimeout: 0 }); // Disable undici default 300s body timeout
+  const signal = execTimeoutMs > 0 ? AbortSignal.timeout(execTimeoutMs) : undefined;
+
   try {
-    const res = await fetch(`${baseUrl}/exec`, {
+    const res = await undiciFetch(`${baseUrl}/exec`, {
       method: "POST",
       headers,
       body: JSON.stringify({ action: hostdAction }),
-      signal: AbortSignal.timeout(1_900_000), // cover reauth (1800s) + buffer
+      signal,
+      dispatcher: agent,
     });
     const durationMs = Date.now() - start;
     const text = await res.text();
