@@ -287,8 +287,8 @@ def main() -> int:
                     login_or_404 = _is_login_page(content, safe_url(page)) or _is_404_page(title, content)
                     has_both, found = _page_has_both_products(content)
                     if cloudflare or login_or_404:
-                        from novnc_ready import ensure_novnc_ready
-                        ready, tailscale_url, err_class, journal_artifact = ensure_novnc_ready(out_dir, run_id)
+                        from novnc_ready import ensure_novnc_ready_with_recovery
+                        ready, tailscale_url, err_class, journal_artifact = ensure_novnc_ready_with_recovery(out_dir, run_id)
                         if not ready and err_class:
                             result_holder.append({
                                 "ok": False,
@@ -349,8 +349,8 @@ def main() -> int:
     use_systemd_novnc = False
     xvfb_proc = x11vnc_proc = novnc_proc = None
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from novnc_ready import ensure_novnc_ready
-    ready, _url, err_class, journal_artifact = ensure_novnc_ready(out_dir, run_id)
+    from novnc_ready import ensure_novnc_ready_with_recovery
+    ready, _url, err_class, journal_artifact = ensure_novnc_ready_with_recovery(out_dir, run_id)
     if not ready and err_class:
         summary = {
             "ok": False,
@@ -430,7 +430,8 @@ def main() -> int:
     msg = summary.get("message", "Session check failed")
     (out_dir / "SUMMARY.md").write_text(f"# Session Check — FAIL\n\n**{err}**: {msg}\n")
     if err == "SESSION_CHECK_BROWSER_CLOSED":
-        ready, tailscale_url, _err_class, _journal = ensure_novnc_ready(out_dir, run_id)
+        from novnc_ready import ensure_novnc_ready_with_recovery
+        ready, tailscale_url, _err_class, _journal = ensure_novnc_ready_with_recovery(out_dir, run_id)
         if ready:
             (out_dir / "instructions.txt").write_text(
                 f"{tailscale_url}\nOpen in browser (Tailscale). Log in + 2FA, confirm Products shows both libraries."

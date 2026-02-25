@@ -1,8 +1,10 @@
 """Shared noVNC readiness logic for session_check, capture_interactive, auto_finish.
 
-Before emitting WAITING_FOR_HUMAN: run openclaw_novnc_doctor (framebuffer-aware), then
-fall back to novnc_probe + restart if needed. Doctor returns verified noVNC URL when PASS.
-If probe fails: fail-closed with NOVNC_BACKEND_UNAVAILABLE and journal artifact path.
+Before emitting WAITING_FOR_HUMAN: run openclaw_novnc_doctor (framebuffer-aware).
+Doctor PASS requires: service active + VNC port reachable + ws_stability_local/tailnet
+verified + framebuffer.png exists. Doctor FAIL: do NOT fall through to probe (probe is
+localhost-only; user needs tailnet). On doctor FAIL: restart openclaw-novnc, sleep 2,
+retry up to 5 times. Only return novnc_url on PASS. Otherwise fail-closed with NOVNC_NOT_READY.
 """
 
 from __future__ import annotations
@@ -15,6 +17,8 @@ from pathlib import Path
 
 NOVNC_PORT = 6080
 VNC_PORT = 5900
+ENSURE_MAX_RETRIES = 5
+ENSURE_RESTART_SLEEP = 2
 
 
 def novnc_display() -> str:
@@ -28,6 +32,20 @@ def novnc_display() -> str:
     return ":99"
 PROBE_TIMEOUT = 30
 JOURNAL_LINES = 200
+
+
+def _run_novnc_restart(root: Path) -> bool:
+    """Run openclaw_novnc_restart (systemctl restart openclaw-novnc). Return True if restart succeeded."""
+    try:
+        r = subprocess.run(
+            ["systemctl", "restart", "openclaw-novnc"],
+            capture_output=True,
+            timeout=15,
+            cwd=str(root),
+        )
+        return r.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
 
 
 def _run_doctor(artifact_dir: Path, run_id: str) -> tuple[bool, str, str | None]:
@@ -140,24 +158,46 @@ def _capture_journal(artifact_dir: Path) -> Path:
 def ensure_novnc_ready(artifact_dir: Path, run_id: str) -> tuple[bool, str, str | None, str | None]:
     """Ensure noVNC ready; return (ready, url, error_class, journal_artifact).
 
-    Flow: run openclaw_novnc_doctor (framebuffer + local + tailnet WS) → if pass: use verified URL.
-    Doctor PASS requires ws_stability_local AND ws_stability_tailnet verified.
-    Else: novnc_probe + restart + retry 3x → if still fail: capture journal, fail-closed.
-    If ready: (True, url, None, None). If fail: (False, url, error_class, rel_path_to_journal).
+    Hard contract: run openclaw_novnc_doctor; require service active + VNC port reachable +
+    ws_stability_local/tailnet verified + framebuffer.png exists. On doctor FAIL: run
+    openclaw_novnc_restart, sleep 2, retry. Up to 5 attempts with artifacts each time.
+    Only return novnc_url on PASS. Otherwise fail-closed with NOVNC_NOT_READY.
     """
-    # Try doctor first (framebuffer + local + tailnet WS; returns tailnet-verified URL only on PASS)
-    doctor_ok, doctor_url, doctor_err = _run_doctor(artifact_dir, run_id)
-    if doctor_ok and doctor_url:
-        return True, doctor_url, None, None
+    root = Path(__file__).resolve().parents[2]
+    last_url = ""
+    last_err: str | None = None
 
-    # Doctor FAIL: do NOT fall through to probe — probe only checks localhost; user needs tailnet.
-    # Doctor already retried 3x with restart. Fail-closed with artifact.
-    url = doctor_url or _get_tailscale_url()
-    fail_err_class = doctor_err or "NOVNC_BACKEND_UNAVAILABLE"
+    for attempt in range(1, ENSURE_MAX_RETRIES + 1):
+        attempt_run_id = f"{run_id}_attempt{attempt}" if attempt > 1 else run_id
+        doctor_ok, doctor_url, doctor_err = _run_doctor(artifact_dir, attempt_run_id)
+        last_url = doctor_url or _get_tailscale_url()
+        last_err = doctor_err
+
+        if doctor_ok and doctor_url:
+            return True, doctor_url, None, None
+
+        if attempt < ENSURE_MAX_RETRIES:
+            _run_novnc_restart(root)
+            time.sleep(ENSURE_RESTART_SLEEP)
+
+    # Exhausted retries: fail-closed with NOVNC_NOT_READY
     journal_path = _capture_journal(artifact_dir)
     try:
-        repo = Path(__file__).resolve().parents[2]
-        rel = str(journal_path.relative_to(repo))
+        rel = str(journal_path.relative_to(root))
     except ValueError:
         rel = str(journal_path)
-    return False, url, fail_err_class, rel
+    return False, last_url, "NOVNC_NOT_READY", rel
+
+
+def ensure_novnc_ready_with_recovery(artifact_dir: Path, run_id: str) -> tuple[bool, str, str | None, str | None]:
+    """Ensure noVNC ready with one mid-run recovery. On NOVNC_NOT_READY/NOVNC_BACKEND_UNAVAILABLE:
+    restart openclaw-novnc, retry ensure_novnc_ready once. If retry still fails, return failure."""
+    ready, url, err_class, journal = ensure_novnc_ready(artifact_dir, run_id)
+    if ready:
+        return True, url, None, None
+    if err_class in ("NOVNC_BACKEND_UNAVAILABLE", "NOVNC_NOT_READY"):
+        root = Path(__file__).resolve().parents[2]
+        _run_novnc_restart(root)
+        time.sleep(ENSURE_RESTART_SLEEP)
+        return ensure_novnc_ready(artifact_dir, f"{run_id}_recovery")
+    return False, url, err_class, journal

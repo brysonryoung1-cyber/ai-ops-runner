@@ -402,9 +402,10 @@ export async function POST(req: NextRequest) {
             recommended_next_action: parsed.recommended_next_action,
             artifact_paths: parsed.artifact_paths,
             artifact_dir: parsed.artifact_dir ?? result.artifact_dir,
-            ...(parsed.error_class === "NOVNC_BACKEND_UNAVAILABLE" && parsed.journal_artifact && {
-              journal_artifact: parsed.journal_artifact,
-            }),
+            ...((parsed.error_class === "NOVNC_BACKEND_UNAVAILABLE" || parsed.error_class === "NOVNC_NOT_READY") &&
+              parsed.journal_artifact && {
+                journal_artifact: parsed.journal_artifact,
+              }),
           };
         }
       } catch {
