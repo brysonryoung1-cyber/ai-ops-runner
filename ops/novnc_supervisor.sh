@@ -116,8 +116,12 @@ else
   WS_BASE=(python3 -m websockify)
 fi
 WS_ARGS=("${WS_BASE[@]}")
+# Harden: heartbeat keeps WS alive; idle-timeout=0 prevents server exit when idle
 if "${WS_BASE[@]}" --help 2>&1 | grep -qE "\-\-heartbeat"; then
   WS_ARGS+=(--heartbeat 30)
+fi
+if "${WS_BASE[@]}" --help 2>&1 | grep -qE "\-\-idle-timeout"; then
+  WS_ARGS+=(--idle-timeout 0)
 fi
 [ -n "$WEB_DIR" ] && WS_ARGS+=(--web "$WEB_DIR") || true
 WS_ARGS+=("$BIND_ADDR:$NOVNC_PORT" "127.0.0.1:$VNC_PORT")
