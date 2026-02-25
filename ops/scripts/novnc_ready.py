@@ -18,7 +18,7 @@ from pathlib import Path
 NOVNC_PORT = 6080
 VNC_PORT = 5900
 ENSURE_MAX_RETRIES = 5
-ENSURE_RESTART_SLEEP = 2
+ENSURE_RESTART_SLEEP = 8  # noVNC stack needs ~10s to settle (x11vnc + websockify + ws_stability)
 
 
 def novnc_display() -> str:
