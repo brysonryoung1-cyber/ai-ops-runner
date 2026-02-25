@@ -201,22 +201,40 @@ def _run_session_check(root: Path, venv_python: Path, use_exit_node: bool) -> tu
     return _run(cmd, timeout=timeout)
 
 
-def _emit_waiting_for_human(out_dir: Path, novnc_url: str, instruction: str) -> None:
-    """Emit WAITING_FOR_HUMAN with verified noVNC URL and instruction. Write contract artifact."""
+INSTRUCTION_LINE = (
+    "Open the URL, complete Cloudflare/Kajabi login + 2FA, then go to Products → Courses "
+    "and ensure Home User Library + Practitioner Library are visible; then stop touching the session."
+)
+
+
+def _enter_waiting_for_human(
+    out_dir: Path,
+    reason: str,
+    novnc_url: str,
+    instruction: str | None = None,
+) -> None:
+    """Enter WAITING_FOR_HUMAN mode. Write contract artifact. Print only novnc_url + instruction."""
     payload = {
-        "status": "WAITING_FOR_HUMAN",
+        "reason": reason,
         "novnc_url": novnc_url,
-        "instruction": instruction,
+        "instruction_line": instruction or INSTRUCTION_LINE,
+        "instruction": instruction or INSTRUCTION_LINE,
         "resume_condition": "session_check PASS (Products shows Home User Library + Practitioner Library)",
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "status": "WAITING_FOR_HUMAN",
     }
     (out_dir / "WAITING_FOR_HUMAN.json").write_text(json.dumps(payload, indent=2))
     print("\n--- WAITING_FOR_HUMAN ---")
     print("noVNC READY")
     print(novnc_url)
-    print(instruction)
+    print(instruction or INSTRUCTION_LINE)
     print("Resume: session_check PASS. Polling every", SESSION_CHECK_POLL_INTERVAL, "s for up to", _reauth_poll_timeout() // 60, "min.")
     sys.stdout.flush()
+
+
+def _emit_waiting_for_human(out_dir: Path, novnc_url: str, instruction: str) -> None:
+    """Emit WAITING_FOR_HUMAN with verified noVNC URL and instruction. Write contract artifact."""
+    _enter_waiting_for_human(out_dir, "capture_interactive_failed", novnc_url, instruction)
 
 
 def main() -> int:
@@ -225,7 +243,11 @@ def main() -> int:
         sys.path.insert(0, str(root))
 
     sys.path.insert(0, str(root / "ops" / "scripts"))
-    from soma_kajabi_auto_finish_state import write_stage, append_summary_line
+    from soma_kajabi_auto_finish_state import (
+        append_summary_line,
+        is_auth_needed_error,
+        write_stage,
+    )
 
     run_id = f"auto_finish_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
     out_dir = root / "artifacts" / "soma_kajabi" / "auto_finish" / run_id
@@ -235,7 +257,14 @@ def main() -> int:
     if not venv_python.exists():
         venv_python = Path(sys.executable)
 
-    # ── A) Preflight ──
+    # ── A) Precheck (serve_guard + novnc_doctor + hostd reachable) ──
+    write_stage(out_dir, "precheck", "running")
+    append_summary_line(out_dir, "[precheck] started")
+    _run_self_heal(root, out_dir, run_id)
+    write_stage(out_dir, "precheck", "done")
+    append_summary_line(out_dir, "[precheck] done")
+
+    # ── B) Connectors status ──
     write_stage(out_dir, "connectors_status", "running")
     append_summary_line(out_dir, f"[connectors_status] started")
     if not STORAGE_STATE_PATH.exists() or STORAGE_STATE_PATH.stat().st_size == 0:
@@ -247,7 +276,7 @@ def main() -> int:
 
     use_exit_node = EXIT_NODE_CONFIG.exists() and EXIT_NODE_CONFIG.read_text().strip() != ""
 
-    # ── B) connectors_status ──
+    # ── connectors_status ──
     rc, conn_out = _run(
         [str(venv_python), "-m", "services.soma_kajabi.connectors_status"],
         timeout=20,
@@ -284,7 +313,7 @@ def main() -> int:
             append_summary_line(out_dir, f"[phase0] done run_id={phase0_run_id}")
             break
 
-        if error_class == KAJABI_CLOUDFLARE_BLOCKED and capture_attempt < max_capture_attempts:
+        if is_auth_needed_error(error_class) and capture_attempt < max_capture_attempts:
             cap_script = root / "ops" / "scripts" / "kajabi_capture_interactive.py"
             if not cap_script.exists():
                 write_stage(out_dir, "capture_interactive", "failed", last_error_class="KAJABI_CAPTURE_SCRIPT_MISSING")
@@ -324,7 +353,7 @@ def main() -> int:
 
             # capture_interactive failed → WAITING_FOR_HUMAN + poll session_check (no exit)
             write_stage(out_dir, "capture_interactive", "auth_needed", last_error_class=KAJABI_CAPTURE_INTERACTIVE_FAILED)
-            instruction = "Open the URL in your browser (Tailscale). Complete Cloudflare challenge and log in. Products must show Home User Library + Practitioner Library."
+            instruction = INSTRUCTION_LINE
             _emit_waiting_for_human(out_dir, url, instruction)
 
             # Poll session_check until PASS or timeout

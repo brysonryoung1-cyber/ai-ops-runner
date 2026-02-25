@@ -152,6 +152,7 @@ def _setup_ops_scripts(root: Path):
     state_src = REPO_ROOT / "ops" / "scripts" / "soma_kajabi_auto_finish_state.py"
     if state_src.exists():
         (scripts / "soma_kajabi_auto_finish_state.py").write_text(state_src.read_text())
+    # Ensure ops.soma.auto_finish_state_machine is importable (uses REPO_ROOT from sys.path)
 
 
 def _setup_novnc_mock(root: Path):
@@ -327,9 +328,91 @@ def test_waiting_for_human_contract_includes_novnc_url_and_instruction(tmp_path)
     out_dir = next((root / "artifacts" / "soma_kajabi" / "auto_finish").iterdir())
     wfh = json.loads((out_dir / "WAITING_FOR_HUMAN.json").read_text())
     assert "novnc_url" in wfh
+    url = wfh["novnc_url"]
+    assert isinstance(url, str)
+    assert url.startswith("http://") or url.startswith("https://")
+    assert ":6080" in url and "vnc.html" in url
+    assert "instruction" in wfh or "instruction_line" in wfh
+    instr = wfh.get("instruction") or wfh.get("instruction_line", "")
+    assert len(instr) > 10
+
+
+def test_is_auth_needed_error_expands_to_kajabi_not_logged_in(tmp_path):
+    """KAJABI_NOT_LOGGED_IN (and other auth signals) trigger WAITING_FOR_HUMAN, not hard-fail."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "config").mkdir()
+    (root / "artifacts" / "soma_kajabi" / "phase0").mkdir(parents=True)
+    (root / "artifacts" / "soma_kajabi" / "zane_finish_plan").mkdir(parents=True)
+    (root / "artifacts" / "soma_kajabi" / "auto_finish").mkdir(parents=True)
+    _setup_novnc_mock(root)
+
+    phase0_dir = root / "artifacts" / "soma_kajabi" / "phase0" / "phase0_20250101T120000Z_abc12345"
+    phase0_dir.mkdir()
+    (phase0_dir / "kajabi_library_snapshot.json").write_text(
+        json.dumps({
+            "home": {"modules": ["M1"], "lessons": [{"module_name": "M1", "title": "L1", "above_paywall": "yes"}]},
+            "practitioner": {"modules": ["M1"], "lessons": [{"module_name": "M1", "title": "L1"}]},
+        })
+    )
+    (phase0_dir / "video_manifest.csv").write_text("email_id,subject,file_name,sha256,rough_topic,proposed_module,proposed_lesson_title,proposed_description,status\n")
+    finish_dir = root / "artifacts" / "soma_kajabi" / "zane_finish_plan" / "zane_20250101T120100Z_def67890"
+    finish_dir.mkdir()
+    (finish_dir / "PUNCHLIST.md").write_text("# Punchlist\n")
+    (finish_dir / "PUNCHLIST.csv").write_text("id,category,priority,title\n")
+    (finish_dir / "SUMMARY.json").write_text('{"ok":true,"run_id":"zane_20250101T120100Z_def67890"}')
+
+    storage = tmp_path / "storage.json"
+    storage.write_text('{"cookies":[]}')
+
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    spec = importlib.util.spec_from_file_location(
+        "soma_kajabi_auto_finish",
+        REPO_ROOT / "ops" / "scripts" / "soma_kajabi_auto_finish.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["soma_kajabi_auto_finish"] = mod
+
+    phase0_calls = 0
+
+    def mock_run(cmd, timeout=600, stream_stderr=False):
+        nonlocal phase0_calls
+        cmd_str = " ".join(str(x) for x in cmd)
+        if "connectors_status" in cmd_str:
+            return 0, json.dumps({"kajabi": "connected"})
+        if "phase0_runner" in cmd_str:
+            phase0_calls += 1
+            if phase0_calls == 1:
+                return 1, json.dumps({"ok": False, "error_class": "KAJABI_NOT_LOGGED_IN", "recommended_next_action": "Re-capture session"})
+            return 0, json.dumps({"ok": True, "run_id": phase0_dir.name})
+        if "kajabi_capture_interactive" in cmd_str:
+            return 1, json.dumps({"ok": False, "error_class": "KAJABI_CAPTURE_INTERACTIVE_FAILED"})
+        if "zane_finish_plan" in cmd_str:
+            return 0, json.dumps({"ok": True, "run_id": finish_dir.name})
+        return 1, "{}"
+
+    def mock_run_session_check(*a):
+        return 0, json.dumps({"ok": True})
+
+    spec.loader.exec_module(mod)
+    mod.STORAGE_STATE_PATH = storage
+    mod.EXIT_NODE_CONFIG = tmp_path / "nonexistent_exit_node.txt"
+    mod._repo_root = lambda: root
+    mod._run = mock_run
+    mod._run_with_exit_node = lambda c, t: mock_run(c, t)
+    mod._run_session_check = mock_run_session_check
+    mod._run_self_heal = lambda *a, **k: None
+
+    with patch.dict(os.environ, {"SOMA_KAJABI_REAUTH_POLL_TIMEOUT": "10"}):
+        rc = mod.main()
+
+    assert rc == 0
+    out_dir = next((root / "artifacts" / "soma_kajabi" / "auto_finish").iterdir())
+    assert (out_dir / "WAITING_FOR_HUMAN.json").exists()
+    wfh = json.loads((out_dir / "WAITING_FOR_HUMAN.json").read_text())
     assert wfh["novnc_url"]
-    assert "instruction" in wfh
-    assert len(wfh["instruction"]) > 10
+    assert ":6080" in wfh["novnc_url"]
 
 
 def test_reauth_timeout_emits_artifact_bundle(tmp_path):
