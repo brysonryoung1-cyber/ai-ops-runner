@@ -1,0 +1,10 @@
+[Unit]
+Description=OpenClaw Serve guard — ensure Tailscale Serve routes to HQ (8787)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai-ops-runner
+ExecStart=/bin/bash /opt/ai-ops-runner/ops/guards/serve_guard.sh
+TimeoutStartSec=60
