@@ -18,6 +18,7 @@ chmod +x "$ROOT_DIR/ops/novnc_supervisor.sh"
 [ -f "$ROOT_DIR/ops/guards/novnc_framebuffer_guard.sh" ] && chmod +x "$ROOT_DIR/ops/guards/novnc_framebuffer_guard.sh" || true
 [ -f "$ROOT_DIR/ops/scripts/novnc_collect_diagnostics.sh" ] && chmod +x "$ROOT_DIR/ops/scripts/novnc_collect_diagnostics.sh" || true
 [ -f "$ROOT_DIR/ops/openclaw_novnc_doctor.sh" ] && chmod +x "$ROOT_DIR/ops/openclaw_novnc_doctor.sh" || true
+[ -f "$ROOT_DIR/ops/scripts/novnc_ws_stability_check.py" ] && chmod +x "$ROOT_DIR/ops/scripts/novnc_ws_stability_check.py" || true
 
 # Substitute ROOT_DIR in unit (ExecStart path)
 sed "s|/opt/ai-ops-runner|$ROOT_DIR|g" "$ROOT_DIR/ops/systemd/openclaw-novnc.service" | sudo tee "$UNIT_PATH" >/dev/null
