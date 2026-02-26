@@ -126,27 +126,38 @@ def _precheck_hostd() -> bool:
     return code == 200
 
 
-def _precheck_novnc(root: Path) -> bool:
+def _precheck_novnc(root: Path, retry_after_restart: bool = True) -> bool:
     doctor = root / "ops" / "openclaw_novnc_doctor.sh"
     if not doctor.exists() or not os.access(doctor, os.X_OK):
         return True
-    try:
-        r = subprocess.run(
-            [str(doctor)],
-            capture_output=True,
-            text=True,
-            timeout=NOVNC_FAST_TIMEOUT,
-            cwd=str(root),
-        )
-        if r.returncode != 0:
+
+    def _run_doctor() -> bool:
+        try:
+            r = subprocess.run(
+                [str(doctor)],
+                capture_output=True,
+                text=True,
+                timeout=NOVNC_FAST_TIMEOUT,
+                cwd=str(root),
+            )
+            if r.returncode != 0:
+                return False
+            line = (r.stdout or "").strip().split("\n")[-1]
+            if line:
+                doc = json.loads(line)
+                return doc.get("ok", False)
             return False
-        line = (r.stdout or "").strip().split("\n")[-1]
-        if line:
-            doc = json.loads(line)
-            return doc.get("ok", False)
-        return False
-    except (subprocess.TimeoutExpired, json.JSONDecodeError):
-        return False
+        except (subprocess.TimeoutExpired, json.JSONDecodeError):
+            return False
+
+    if _run_doctor():
+        return True
+    if retry_after_restart:
+        code, _ = _curl("POST", "/api/exec", data={"action": "openclaw_novnc_restart"}, timeout=10)
+        if code in (200, 202):
+            time.sleep(15)
+            return _run_doctor()
+    return False
 
 
 def main() -> int:
