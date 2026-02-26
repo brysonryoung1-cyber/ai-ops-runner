@@ -16,6 +16,10 @@ export interface ExecResult {
   httpStatus?: number;
   artifact_dir?: string;
   journal_artifact?: string;
+  /** Async exec: run_id when 202 (long-running action started). */
+  run_id?: string;
+  /** Async exec: "running" when 202. */
+  status?: string;
 }
 
 /**

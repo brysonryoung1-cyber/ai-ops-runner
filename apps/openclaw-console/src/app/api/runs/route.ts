@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readdirSync, existsSync } from "fs";
 import { join } from "path";
 import { listRunRecords, getRunRecord } from "@/lib/run-recorder";
+import { getLockInfo } from "@/lib/action-lock";
 
 function getArtifactsRoot(): string {
   if (process.env.OPENCLAW_ARTIFACTS_ROOT) return process.env.OPENCLAW_ARTIFACTS_ROOT;
@@ -63,9 +64,22 @@ export async function GET(req: NextRequest) {
         { status: 404 }
       );
     }
-    // For apply (and other hostd actions) without artifact_dir, try to resolve from hostd dirs by timestamp
     const runWithArtifacts = { ...record };
-    if (!runWithArtifacts.artifact_dir && (record.action === "apply" || record.action === "doctor" || record.action === "guard")) {
+    // For running/queued: merge artifact_dir from lock (hostd script updates it)
+    if (
+      (record.status === "running" || record.status === "queued") &&
+      record.action
+    ) {
+      const lockInfo = getLockInfo(record.action);
+      if (lockInfo?.active_run_id === runId && lockInfo.artifact_dir) {
+        runWithArtifacts.artifact_dir = lockInfo.artifact_dir;
+      }
+    }
+    // For apply/doctor/guard without artifact_dir, try to resolve from hostd dirs by timestamp
+    if (
+      !runWithArtifacts.artifact_dir &&
+      (record.action === "apply" || record.action === "doctor" || record.action === "guard")
+    ) {
       const resolved = resolveHostdArtifactDirForRun(runId);
       if (resolved) runWithArtifacts.artifact_dir = resolved;
     }

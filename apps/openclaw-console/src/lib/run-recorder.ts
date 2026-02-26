@@ -19,8 +19,11 @@ export interface RunRecord {
   project_id: string;
   action: string;
   started_at: string;
-  finished_at: string;
-  status: "success" | "failure" | "error";
+  /** Omitted when status is "running" or "queued". */
+  finished_at?: string;
+  status: "success" | "failure" | "error" | "running" | "queued";
+  /** Stage from hostd (e.g. phase0, session_check). */
+  stage?: string | null;
   exit_code: number | null;
   duration_ms: number;
   error_summary: string | null;
@@ -67,6 +70,7 @@ const ACTION_PROJECT_MAP: Record<string, string> = {
   soma_mirror: "soma_kajabi_library_ownership",
   soma_kajabi_phase0: "soma_kajabi",
   soma_kajabi_auto_finish: "soma_kajabi",
+  soma_run_to_done: "soma_kajabi",
   soma_kajabi_reauth_and_resume: "soma_kajabi",
   soma_kajabi_session_check: "soma_kajabi",
   openclaw_novnc_restart: "soma_kajabi",
@@ -156,7 +160,8 @@ export function buildRunRecord(
   runId?: string,
   projectId?: string,
   artifactDir?: string | null,
-  errorClass?: string | null
+  errorClass?: string | null,
+  stage?: string | null
 ): RunRecord {
   return {
     run_id: runId ?? generateRunId(),
@@ -171,6 +176,31 @@ export function buildRunRecord(
     artifact_paths: [],
     ...(artifactDir != null && artifactDir !== "" && { artifact_dir: artifactDir }),
     ...(errorClass != null && errorClass !== "" && { error_class: errorClass }),
+    ...(stage != null && stage !== "" && { stage }),
+  };
+}
+
+/**
+ * Build an initial RunRecord for async start (status: queued|running).
+ * Caller must later update with buildRunRecord + writeRunRecord when finished.
+ */
+export function buildRunRecordStart(
+  action: string,
+  startedAt: Date,
+  runId: string,
+  projectId?: string,
+  status: "queued" | "running" = "running"
+): RunRecord {
+  return {
+    run_id: runId,
+    project_id: projectId || resolveProjectId(action),
+    action,
+    started_at: startedAt.toISOString(),
+    status,
+    exit_code: null,
+    duration_ms: 0,
+    error_summary: null,
+    artifact_paths: [],
   };
 }
 

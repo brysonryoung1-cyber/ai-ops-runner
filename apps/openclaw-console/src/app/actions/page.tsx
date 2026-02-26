@@ -91,6 +91,13 @@ const ACTIONS: ActionDef[] = [
     variant: "primary",
   },
   {
+    action: "soma_run_to_done",
+    label: "Run Soma to DONE",
+    description:
+      "Apply/deploy precheck, hostd recovery, noVNC readiness, triggers Auto-Finish, polls until RESULT.json, verifies acceptance + Mirror PASS. Proof artifacts every run.",
+    variant: "primary",
+  },
+  {
     action: "soma_auto_finish_unlock",
     label: "Unlock Auto-Finish (Stale Lock)",
     description:
@@ -223,14 +230,37 @@ export default function ActionsPage() {
               <div className="flex items-center gap-3">
                 <StatusDot variant={lastResult.ok ? "pass" : "fail"} />
                 <span className="text-sm font-semibold text-white/95">{lastResult.action}</span>
-                <Pill variant={lastResult.ok ? "success" : "fail"}>
-                  {lastResult.ok ? "Success" : lastResult.error ? "Error" : `Exit ${lastResult.exitCode}`}
+                <Pill variant={
+                  lastResult.status === "running"
+                    ? "info"
+                    : lastResult.ok
+                      ? "success"
+                      : "fail"
+                }>
+                  {lastResult.status === "running"
+                    ? "Running (poll for status)"
+                    : lastResult.ok
+                      ? "Success"
+                      : lastResult.error
+                        ? "Error"
+                        : `Exit ${lastResult.exitCode}`}
                 </Pill>
               </div>
               <span className="text-xs text-white/50">
                 {lastResult.durationMs}ms
               </span>
             </div>
+
+            {lastResult.run_id && lastResult.status === "running" && (
+              <div className="px-5 py-3 bg-blue-500/10 border-b border-blue-500/20">
+                <a
+                  href={`/runs?id=${encodeURIComponent(lastResult.run_id)}`}
+                  className="text-xs text-blue-400 hover:text-blue-300 underline"
+                >
+                  Poll run status →
+                </a>
+              </div>
+            )}
 
             {Boolean(lastResult.error || (lastResult as unknown as Record<string, unknown>).error_class) && (
               <div className="px-5 py-3 bg-red-500/10 border-b border-red-500/20">

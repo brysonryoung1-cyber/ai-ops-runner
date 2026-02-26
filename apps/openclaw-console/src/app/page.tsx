@@ -200,6 +200,17 @@ export default function OverviewPage() {
     summary_path: string | null;
     tailnet_url: string | null;
   } | null>(null);
+  const [somaStatus, setSomaStatus] = useState<{
+    build_sha: string;
+    last_run_id: string | null;
+    last_status: string | null;
+    stage: string | null;
+    mirror_pass: boolean | null;
+    exceptions_count: number | null;
+    artifact_dir: string | null;
+    acceptance_path: string | null;
+    proof_path: string | null;
+  } | null>(null);
 
   // Check connectivity via server-mediated endpoint; 3s hard timeout
   const HOST_STATUS_TIMEOUT_MS = 3000;
@@ -347,6 +358,33 @@ export default function OverviewPage() {
     }
   }, [token]);
 
+  // Soma Status (Run to DONE dashboard)
+  const fetchSomaStatus = useCallback(async () => {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) headers["X-OpenClaw-Token"] = token;
+      const res = await fetch("/api/projects/soma_kajabi/status", { headers });
+      const data = await res.json();
+      if (data?.ok) {
+        setSomaStatus({
+          build_sha: data.build_sha ?? "unknown",
+          last_run_id: data.last_run_id ?? null,
+          last_status: data.last_status ?? null,
+          stage: data.stage ?? null,
+          mirror_pass: data.mirror_pass ?? null,
+          exceptions_count: data.exceptions_count ?? null,
+          artifact_dir: data.artifact_dir ?? null,
+          acceptance_path: data.acceptance_path ?? null,
+          proof_path: data.proof_path ?? null,
+        });
+      } else {
+        setSomaStatus(null);
+      }
+    } catch {
+      setSomaStatus(null);
+    }
+  }, [token]);
+
   // Last deploy result (proof bundle)
   const fetchDeployLast = useCallback(async () => {
     try {
@@ -402,6 +440,7 @@ export default function OverviewPage() {
     fetchRecentRuns();
     fetchCostSummary();
     fetchHqAuditLast();
+    fetchSomaStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
 
@@ -410,6 +449,12 @@ export default function OverviewPage() {
   useEffect(() => {
     if (deployResult !== undefined) fetchDeployLast();
   }, [deployResult, fetchDeployLast]);
+
+  // Refetch Soma Status when soma_run_to_done or soma_kajabi_auto_finish completes
+  const somaRunResult = results["soma_run_to_done"] ?? results["soma_kajabi_auto_finish"];
+  useEffect(() => {
+    if (somaRunResult !== undefined) fetchSomaStatus();
+  }, [somaRunResult, fetchSomaStatus]);
 
   // Refetch last HQ Audit when openclaw_hq_audit completes
   const hqAuditResult = results["openclaw_hq_audit"];
@@ -591,6 +636,61 @@ export default function OverviewPage() {
                   )}
                 </div>
               )}
+            </div>
+          </div>
+        </GlassCard>
+      )}
+
+      {/* Soma Status (Run to DONE dashboard) */}
+      {somaStatus && (
+        <GlassCard className="mb-6">
+          <div className="px-5 py-3 border-b border-white/10 flex items-center justify-between">
+            <span className="text-sm font-semibold text-white/95">Soma Status</span>
+            <Pill variant={somaStatus.last_status === "SUCCESS" ? "success" : somaStatus.last_status === "WAITING_FOR_HUMAN" ? "warn" : "info"}>
+              {somaStatus.last_status ?? "—"}
+            </Pill>
+          </div>
+          <div className="p-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <span className="text-white/50 uppercase tracking-wider">Build SHA</span>
+                <p className="text-white/90 font-mono mt-0.5">{somaStatus.build_sha}</p>
+              </div>
+              <div>
+                <span className="text-white/50 uppercase tracking-wider">Last run_id</span>
+                <p className="text-white/90 font-mono mt-0.5 truncate">{somaStatus.last_run_id ?? "—"}</p>
+              </div>
+              <div>
+                <span className="text-white/50 uppercase tracking-wider">Stage</span>
+                <p className="text-white/90 mt-0.5">{somaStatus.stage ?? "—"}</p>
+              </div>
+              <div>
+                <span className="text-white/50 uppercase tracking-wider">Mirror</span>
+                <p className="text-white/90 mt-0.5">
+                  {somaStatus.mirror_pass === true ? "PASS" : somaStatus.mirror_pass === false ? `FAIL (${somaStatus.exceptions_count ?? "?"} exceptions)` : "—"}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 pt-4 border-t border-white/10 flex flex-wrap gap-2">
+              {somaStatus.acceptance_path && (
+                <Link
+                  href={`/artifacts?path=${encodeURIComponent(somaStatus.acceptance_path)}`}
+                  className="text-xs text-blue-300 hover:text-blue-200"
+                >
+                  Acceptance artifacts
+                </Link>
+              )}
+              {somaStatus.proof_path && (
+                <Link
+                  href={`/artifacts?path=${encodeURIComponent(somaStatus.proof_path)}`}
+                  className="text-xs text-blue-300 hover:text-blue-200"
+                >
+                  PROOF.md
+                </Link>
+              )}
+              <Link href="/actions" className="text-xs text-blue-300 hover:text-blue-200">
+                Run Soma to DONE
+              </Link>
             </div>
           </div>
         </GlassCard>
