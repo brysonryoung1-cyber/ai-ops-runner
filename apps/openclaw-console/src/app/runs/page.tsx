@@ -5,6 +5,8 @@ import { useToken } from "@/lib/token-context";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Suspense } from "react";
+import { useExec } from "@/lib/hooks";
+import { GlassButton } from "@/components/glass";
 
 interface RunData {
   run_id: string;
@@ -66,11 +68,21 @@ function RunsContent() {
   const token = useToken();
   const searchParams = useSearchParams();
   const projectFilter = searchParams.get("project");
+  const { exec, loading: execLoading } = useExec();
 
   const [runs, setRuns] = useState<RunData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<RunData | null>(null);
+  const [somaStatus, setSomaStatus] = useState<{
+    last_status: string | null;
+    novnc_url: string | null;
+    instruction_line: string | null;
+    artifact_dir: string | null;
+    error_class: string | null;
+    last_run_id: string | null;
+    artifact_links: Record<string, string>;
+  } | null>(null);
 
   const fetchRuns = useCallback(async () => {
     setLoading(true);
@@ -96,9 +108,37 @@ function RunsContent() {
     }
   }, [token, projectFilter]);
 
+  const fetchSomaStatus = useCallback(async () => {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) headers["X-OpenClaw-Token"] = token;
+      const res = await fetch("/api/projects/soma_kajabi/status", { headers });
+      const data = await res.json();
+      if (data?.ok) {
+        setSomaStatus({
+          last_status: data.last_status ?? null,
+          novnc_url: data.novnc_url ?? null,
+          instruction_line: data.instruction_line ?? null,
+          artifact_dir: data.artifact_dir ?? null,
+          error_class: data.error_class ?? null,
+          last_run_id: data.last_run_id ?? null,
+          artifact_links: (data.artifact_links as Record<string, string>) ?? {},
+        });
+      } else {
+        setSomaStatus(null);
+      }
+    } catch {
+      setSomaStatus(null);
+    }
+  }, [token]);
+
   useEffect(() => {
     fetchRuns();
   }, [fetchRuns]);
+
+  useEffect(() => {
+    if (projectFilter === "soma_kajabi" || !projectFilter) fetchSomaStatus();
+  }, [projectFilter, fetchSomaStatus]);
 
   // Group runs by date
   const runsByDate = runs.reduce<Record<string, RunData[]>>((acc, run) => {
@@ -135,7 +175,10 @@ function RunsContent() {
             </Link>
           )}
           <button
-            onClick={fetchRuns}
+            onClick={() => {
+              fetchRuns();
+              fetchSomaStatus();
+            }}
             disabled={loading}
             className="px-4 py-2 text-xs font-medium rounded-xl bg-white/10 hover:bg-white/15 text-white/90 border border-white/10 disabled:opacity-50"
           >
@@ -143,6 +186,57 @@ function RunsContent() {
           </button>
         </div>
       </div>
+
+      {/* Soma WAITING_FOR_HUMAN banner */}
+      {somaStatus?.last_status === "WAITING_FOR_HUMAN" && (
+        <div className="mb-6 p-5 rounded-2xl glass-surface border border-amber-500/40 bg-amber-500/5">
+          <h3 className="text-base font-semibold text-amber-200 mb-2">Soma needs you: Kajabi login</h3>
+          <p className="text-sm text-white/80 mb-4">After completing 2FA, stop touching the session. Autopilot will resume.</p>
+          <div className="flex flex-wrap gap-3">
+            {somaStatus.novnc_url && (
+              <a href={somaStatus.novnc_url} target="_blank" rel="noopener noreferrer" className="px-4 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 font-medium text-sm border border-amber-500/30">
+                Open noVNC
+              </a>
+            )}
+            {somaStatus.artifact_dir && (
+              <Link href={`/artifacts?path=${encodeURIComponent(somaStatus.artifact_dir)}`} className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white/90 font-medium text-sm border border-white/20">
+                Open artifacts
+              </Link>
+            )}
+            {somaStatus.instruction_line && (
+              <GlassButton variant="secondary" size="sm" onClick={() => navigator.clipboard.writeText(somaStatus.instruction_line ?? "")}>
+                Copy instruction line
+              </GlassButton>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Soma Failure summary card */}
+      {somaStatus && ["FAILURE", "TIMEOUT", "BLOCKED"].includes(somaStatus.last_status ?? "") && (
+        <div className="mb-6 p-5 rounded-2xl glass-surface border border-red-500/30 bg-red-500/5">
+          <h3 className="text-base font-semibold text-red-200 mb-2">Soma run failed</h3>
+          <div className="text-xs text-white/70 space-y-1 mb-4">
+            <p><span className="text-white/50">error_class:</span> {somaStatus.error_class ?? "—"}</p>
+            <p><span className="text-white/50">run_id:</span> {somaStatus.last_run_id ?? "—"}</p>
+            {somaStatus.artifact_dir && <p><span className="text-white/50">artifact_dir:</span> {somaStatus.artifact_dir}</p>}
+          </div>
+          <div className="flex flex-wrap gap-2 mb-3">
+            {somaStatus.artifact_dir && (
+              <Link href={`/artifacts?path=${encodeURIComponent(somaStatus.artifact_dir)}`} className="text-xs text-blue-300 hover:text-blue-200">Open artifact_dir</Link>
+            )}
+            {somaStatus.artifact_links?.stdout && (
+              <Link href={`/artifacts?path=${encodeURIComponent(somaStatus.artifact_links.stdout)}`} className="text-xs text-blue-300 hover:text-blue-200">stdout.txt</Link>
+            )}
+            {somaStatus.artifact_links?.stderr && (
+              <Link href={`/artifacts?path=${encodeURIComponent(somaStatus.artifact_links.stderr)}`} className="text-xs text-blue-300 hover:text-blue-200">stderr.txt</Link>
+            )}
+          </div>
+          <GlassButton variant="primary" onClick={() => exec("soma_fix_and_retry")} disabled={execLoading !== null && execLoading !== "soma_fix_and_retry"}>
+            {execLoading === "soma_fix_and_retry" ? "Running…" : "Fix and retry"}
+          </GlassButton>
+        </div>
+      )}
 
       {/* Error banner */}
       {error && (

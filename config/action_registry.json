@@ -195,6 +195,13 @@
       "cmd_template": "cd ${ROOT_DIR} && bash ./ops/scripts/novnc_shm_fix.sh"
     },
     {
+      "id": "soma_fix_and_retry",
+      "label": "Fix and Retry Soma",
+      "project_id": "soma_kajabi",
+      "timeout_sec": 2400,
+      "cmd_template": "cd ${ROOT_DIR} && ${ROOT_DIR}/.venv-hostd/bin/python ./ops/scripts/soma_fix_and_retry.py"
+    },
+    {
       "id": "soma_connectors_status",
       "label": "Connectors Status",
       "project_id": "soma_kajabi",

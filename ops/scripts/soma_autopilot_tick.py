@@ -3,9 +3,15 @@
 
 Runs every 10 minutes via openclaw-soma-autopilot.timer.
 - If flag missing: exit 0
-- If active run exists (soma_run_to_done locked): exit 0
-- If last status WAITING_FOR_HUMAN: exit 0 (pause until human intervenes)
-- Else: trigger soma_run_to_done via async exec, record run_id, write status artifact
+- If active run exists (soma_run_to_done locked): exit 0 (ACTIVE)
+- If last status WAITING_FOR_HUMAN: exit 0 (no spam)
+- If backoff window active: exit 0 (BACKOFF)
+- Deterministic recovery chain BEFORE Soma:
+  1) hostd reachable — if not: attempt recover; if still down: BLOCKED
+  2) openclaw_novnc_doctor (DEEP)
+  3) If FAIL: shm_fix → restart → doctor retry
+  4) If still FAIL: BLOCKED(novnc_not_ready), no Soma trigger
+- Only if doctor PASS → trigger soma_run_to_done
 
 Safety:
 - Never spam restarts
@@ -75,6 +81,9 @@ def _curl(method: str, path: str, data: dict | None = None, timeout: int = 15) -
         return -1, str(e)
 
 
+DOCTOR_TIMEOUT = 90
+
+
 def _last_proof_status(root: Path) -> str | None:
     """Return last terminal status from run_to_done PROOF.json (SUCCESS, WAITING_FOR_HUMAN, FAILURE, etc)."""
     run_dir = root / "artifacts" / "soma_kajabi" / "run_to_done"
@@ -90,6 +99,30 @@ def _last_proof_status(root: Path) -> str | None:
             except (json.JSONDecodeError, KeyError):
                 continue
     return None
+
+
+def _run_novnc_doctor(root: Path) -> bool:
+    """Run openclaw_novnc_doctor (DEEP). Return True if PASS."""
+    doctor = root / "ops" / "openclaw_novnc_doctor.sh"
+    if not doctor.exists() or not os.access(doctor, os.X_OK):
+        return True
+    try:
+        r = subprocess.run(
+            [str(doctor)],
+            capture_output=True,
+            text=True,
+            timeout=DOCTOR_TIMEOUT,
+            cwd=str(root),
+        )
+        if r.returncode != 0:
+            return False
+        line = (r.stdout or "").strip().split("\n")[-1]
+        if line:
+            doc = json.loads(line)
+            return doc.get("ok", False)
+        return False
+    except (subprocess.TimeoutExpired, json.JSONDecodeError):
+        return False
 
 
 def _is_soma_run_to_done_active() -> bool:
@@ -200,7 +233,42 @@ def main() -> int:
         _write_status_artifact(root, "SKIP", current_status="WAITING_FOR_HUMAN")
         return 0
 
-    # 6. Trigger soma_run_to_done
+    # 6. Hostd reachable (attempt recover if not)
+    code, _ = _curl("GET", "/api/exec?check=connectivity", timeout=10)
+    if code != 200:
+        try:
+            subprocess.run(
+                ["systemctl", "restart", "openclaw-hostd"],
+                capture_output=True,
+                timeout=10,
+            )
+            time.sleep(5)
+            code, _ = _curl("GET", "/api/exec?check=connectivity", timeout=10)
+        except Exception:
+            pass
+        if code != 200:
+            fail_count = int(fail_file.read_text()) if fail_file.exists() else 0
+            fail_count += 1
+            fail_file.write_text(str(fail_count))
+            last_fail_ts_file.write_text(str(int(time.time())))
+            _write_status_artifact(root, "FAIL", error_class="HOSTD_UNREACHABLE", fail_count=fail_count)
+            return 1
+
+    # 7. noVNC doctor (DEEP) — run recovery chain if FAIL
+    if not _run_novnc_doctor(root):
+        # Recovery: shm_fix → restart → doctor retry
+        _curl("POST", "/api/exec", data={"action": "openclaw_novnc_shm_fix"}, timeout=200)
+        time.sleep(5)
+        _curl("POST", "/api/exec", data={"action": "openclaw_novnc_restart"}, timeout=30)
+        time.sleep(15)
+        if not _run_novnc_doctor(root):
+            # Still FAIL: BLOCKED, no Soma trigger
+            _write_status_artifact(
+                root, "SKIP", current_status="BLOCKED", error_class="novnc_not_ready"
+            )
+            return 0
+
+    # 8. Trigger soma_run_to_done (doctor PASS)
     code, body = _curl("POST", "/api/exec", data={"action": "soma_run_to_done"}, timeout=10)
     if code == 409:
         _write_status_artifact(root, "SKIP", current_status=last_status, error_class="active_run_exists")

@@ -2,6 +2,7 @@
  * GET /api/projects/[projectId]/status
  *
  * Soma Status: build_sha, last soma_run_to_done run, stage, Mirror PASS/FAIL, artifact links.
+ * Uses Soma Last Run Resolver for consistent artifact links (even when stderr empty).
  * Only implemented for projectId=soma_kajabi.
  */
 
@@ -11,6 +12,7 @@ import { join } from "path";
 import { execSync } from "child_process";
 import { getRunsForProject, getLastRunForProject } from "@/lib/run-recorder";
 import { getLockInfo } from "@/lib/action-lock";
+import { resolveSomaLastRun } from "@/lib/soma-last-run-resolver";
 
 export const runtime = "nodejs";
 
@@ -50,22 +52,23 @@ export async function GET(
   const buildSha = getBuildSha();
 
   // Last soma_run_to_done run
-  const runs = getRunsForProject("soma_kajabi", 100);
-  const lastRunToDone = runs.find((r) => r.action === "soma_run_to_done");
-  const lastAutoFinish = runs.find((r) => r.action === "soma_kajabi_auto_finish");
-
-  let lastRunId: string | null = lastRunToDone?.run_id ?? null;
-  let lastStatus: string | null = null;
+  // Use Soma Last Run Resolver for canonical status + artifact links
+  const resolved = resolveSomaLastRun();
+  let lastRunId: string | null = resolved.run_id;
+  let lastStatus: string | null = resolved.status;
   let stage: string | null = null;
   let mirrorPass: boolean | null = null;
   let exceptionsCount: number | null = null;
   let acceptancePath: string | null = null;
   let proofPath: string | null = null;
-  let artifactDir: string | null = lastRunToDone?.artifact_dir ?? lastAutoFinish?.artifact_dir ?? null;
+  let artifactDir: string | null = resolved.artifact_dir;
+  const novncUrl: string | null = resolved.novnc_url;
+  const instructionLine: string | null = resolved.instruction_line;
+  const artifactLinks = resolved.artifact_links;
+  const errorClass: string | null = resolved.error_class;
 
-  if (lastRunToDone) {
-    lastStatus = lastRunToDone.status === "success" ? "SUCCESS" : lastRunToDone.status === "failure" ? "FAILURE" : lastRunToDone.error_class ?? "UNKNOWN";
-  }
+  const runs = getRunsForProject("soma_kajabi", 100);
+  const lastAutoFinish = runs.find((r) => r.action === "soma_kajabi_auto_finish");
 
   // Resolve stage from auto_finish artifact (lock or last run)
   const lockInfo = getLockInfo("soma_kajabi_auto_finish");
@@ -170,5 +173,9 @@ export async function GET(
     artifact_dir: artifactDir,
     acceptance_path: acceptancePath,
     proof_path: proofPath,
+    novnc_url: novncUrl,
+    instruction_line: instructionLine,
+    artifact_links: artifactLinks,
+    error_class: errorClass,
   });
 }
