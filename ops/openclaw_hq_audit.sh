@@ -119,6 +119,10 @@ _run_audit() {
     systemctl status "$unit" --no-pager 2>/dev/null >"$report_dir/systemd_${unit}.txt" || echo "not found" >"$report_dir/systemd_${unit}.txt"
   done
 
+  # 3a. hostd_guard: latest status.json (watchdog writes every 60s)
+  LATEST_HOSTD_GUARD="$(ls -1t "$ROOT_DIR/artifacts/hostd_guard" 2>/dev/null | head -1)"
+  [ -n "$LATEST_HOSTD_GUARD" ] && [ -f "$ROOT_DIR/artifacts/hostd_guard/$LATEST_HOSTD_GUARD/status.json" ] && cp "$ROOT_DIR/artifacts/hostd_guard/$LATEST_HOSTD_GUARD/status.json" "$report_dir/hostd_guard_status.json" 2>/dev/null || true
+
   # 3b. Run serve_guard + novnc_guard, capture latest status
   if [ -x "$ROOT_DIR/ops/guards/serve_guard.sh" ]; then
     OPENCLAW_RUN_ID="${RUN_ID}_serve" "$ROOT_DIR/ops/guards/serve_guard.sh" 2>/dev/null || true
@@ -207,6 +211,10 @@ _build_artifacts() {
   [ -f "$report_dir/novnc_guard_status.json" ] && NOVNC_GUARD_PASS=$(jq_safe "$report_dir/novnc_guard_status.json" '.service_active and .vnc_html_ok')
   [ "$NOVNC_GUARD_PASS" = "true" ] && NOVNC_GUARD_PASS=true || NOVNC_GUARD_PASS=false
 
+  HOSTD_GUARD_PASS=false
+  [ -f "$report_dir/hostd_guard_status.json" ] && HOSTD_GUARD_PASS=$(jq_safe "$report_dir/hostd_guard_status.json" '.ok // false')
+  [ "$HOSTD_GUARD_PASS" = "true" ] && HOSTD_GUARD_PASS=true || HOSTD_GUARD_PASS=false
+
   NOVNC_DOCTOR_PASS=false
   NOVNC_URL=""
   [ -f "$report_dir/novnc_doctor.json" ] && NOVNC_DOCTOR_PASS=$(jq_safe "$report_dir/novnc_doctor.json" '.ok // false')
@@ -221,6 +229,7 @@ _build_artifacts() {
   NV_PY=$([ "$NOVNC_PASS" = true ] && echo True || echo False)
   SG_PY=$([ "$SERVE_GUARD_PASS" = true ] && echo True || echo False)
   NG_PY=$([ "$NOVNC_GUARD_PASS" = true ] && echo True || echo False)
+  HG_PY=$([ "$HOSTD_GUARD_PASS" = true ] && echo True || echo False)
   OVERALL_PY=$([ "$HQ_PASS" = true ] && [ "$HE_PASS" = true ] && [ "$HOSTD_PASS" = true ] && echo True || echo False)
   python3 -c "
 import json, os
@@ -241,6 +250,7 @@ d = {
     'novnc': {'pass': $NV_PY, 'probe': '$NOVNC_PROBE'},
     'serve_guard': {'pass': $SG_PY},
     'novnc_guard': {'pass': $NG_PY},
+    'hostd_guard': {'pass': $HG_PY},
     'novnc_doctor': {'pass': $([ "$NOVNC_DOCTOR_PASS" = true ] && echo True || echo False), 'novnc_url': novnc_url}
   },
   'build_sha': '$BUILD_SHA',
@@ -271,6 +281,7 @@ with open('$ART_DIR/SUMMARY.json', 'w') as f:
 | noVNC           | $([ "$NOVNC_PASS" = true ] && echo "PASS" || echo "FAIL/skip") |
 | Serve Guard     | $([ "$SERVE_GUARD_PASS" = true ] && echo "PASS" || echo "FAIL/skip") |
 | noVNC Guard     | $([ "$NOVNC_GUARD_PASS" = true ] && echo "PASS" || echo "FAIL/skip") |
+| hostd Guard     | $([ "$HOSTD_GUARD_PASS" = true ] && echo "PASS" || echo "FAIL/skip") |
 | noVNC Doctor    | $([ "$NOVNC_DOCTOR_PASS" = true ] && echo "PASS" || echo "FAIL/skip") |
 
 ## noVNC URL (when doctor PASS)
