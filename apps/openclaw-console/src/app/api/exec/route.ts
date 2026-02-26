@@ -9,6 +9,7 @@ import {
   hashParams,
 } from "@/lib/audit";
 import { buildRunRecord, buildRunRecordStart, writeRunRecord } from "@/lib/run-recorder";
+import { writeSomaLastRunIndex } from "@/lib/soma-last-run-resolver";
 
 export const runtime = "nodejs";
 
@@ -159,6 +160,7 @@ async function runActionAsync(
         actionName === "soma_kajabi_phase0" ||
         actionName === "soma_kajabi_auto_finish" ||
         actionName === "soma_run_to_done" ||
+        actionName === "soma_fix_and_retry" ||
         actionName === "soma_kajabi_reauth_and_resume" ||
         actionName === "soma_kajabi_session_check" ||
         actionName === "soma_zane_finish_plan" ||
@@ -197,6 +199,13 @@ async function runActionAsync(
         result.artifact_dir ?? undefined
       );
       writeRunRecord(runRecord);
+      if (
+        actionName === "soma_run_to_done" ||
+        actionName === "soma_kajabi_auto_finish" ||
+        actionName === "soma_fix_and_retry"
+      ) {
+        writeSomaLastRunIndex();
+      }
     }
   } catch (err) {
     const finishedAt = new Date();
@@ -213,6 +222,13 @@ async function runActionAsync(
     writeRunRecord(
       buildRunRecord(actionName, startedAt, finishedAt, null, false, errorMsg, runId)
     );
+    if (
+      actionName === "soma_run_to_done" ||
+      actionName === "soma_kajabi_auto_finish" ||
+      actionName === "soma_fix_and_retry"
+    ) {
+      writeSomaLastRunIndex();
+    }
   } finally {
     releaseLock(actionName);
   }
@@ -498,6 +514,8 @@ export async function POST(req: NextRequest) {
     const isProjectAction =
       actionName === "soma_kajabi_phase0" ||
       actionName === "soma_kajabi_auto_finish" ||
+      actionName === "soma_run_to_done" ||
+      actionName === "soma_fix_and_retry" ||
       actionName === "soma_kajabi_reauth_and_resume" ||
       actionName === "soma_kajabi_session_check" ||
       actionName === "soma_zane_finish_plan" ||

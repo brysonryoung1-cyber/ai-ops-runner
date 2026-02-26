@@ -210,6 +210,10 @@ export default function OverviewPage() {
     artifact_dir: string | null;
     acceptance_path: string | null;
     proof_path: string | null;
+    novnc_url: string | null;
+    instruction_line: string | null;
+    artifact_links: Record<string, string>;
+    error_class: string | null;
   } | null>(null);
   const [somaAutopilotStatus, setSomaAutopilotStatus] = useState<{
     enabled: boolean;
@@ -388,6 +392,10 @@ export default function OverviewPage() {
           artifact_dir: data.artifact_dir ?? null,
           acceptance_path: data.acceptance_path ?? null,
           proof_path: data.proof_path ?? null,
+          novnc_url: data.novnc_url ?? null,
+          instruction_line: data.instruction_line ?? null,
+          artifact_links: (data.artifact_links as Record<string, string>) ?? {},
+          error_class: data.error_class ?? null,
         });
       } else {
         setSomaStatus(null);
@@ -683,6 +691,118 @@ export default function OverviewPage() {
             </div>
           </div>
         </GlassCard>
+      )}
+
+      {/* Soma: WAITING_FOR_HUMAN banner */}
+      {somaStatus?.last_status === "WAITING_FOR_HUMAN" && (
+        <div className="mb-6 p-5 rounded-2xl glass-surface border border-amber-500/40 bg-amber-500/5">
+          <h3 className="text-base font-semibold text-amber-200 mb-2">Soma needs you: Kajabi login</h3>
+          <p className="text-sm text-white/80 mb-4">
+            After completing 2FA, stop touching the session. Autopilot will resume.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            {somaStatus.novnc_url && (
+              <a
+                href={somaStatus.novnc_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-4 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 font-medium text-sm border border-amber-500/30"
+              >
+                Open noVNC
+              </a>
+            )}
+            {somaStatus.artifact_dir && (
+              <Link
+                href={`/artifacts?path=${encodeURIComponent(somaStatus.artifact_dir)}`}
+                className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white/90 font-medium text-sm border border-white/20"
+              >
+                Open artifacts
+              </Link>
+            )}
+            {somaStatus.instruction_line && (
+              <GlassButton
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  navigator.clipboard.writeText(somaStatus.instruction_line ?? "");
+                }}
+              >
+                Copy instruction line
+              </GlassButton>
+            )}
+            <GlassButton
+              variant="secondary"
+              size="sm"
+              onClick={() => exec("soma_kajabi_session_check")}
+              disabled={loading !== null && loading !== "soma_kajabi_session_check"}
+            >
+              {loading === "soma_kajabi_session_check" ? "Checking…" : "Resume check"}
+            </GlassButton>
+          </div>
+        </div>
+      )}
+
+      {/* Soma: Failure summary card */}
+      {somaStatus && ["FAILURE", "TIMEOUT", "BLOCKED"].includes(somaStatus.last_status ?? "") && (
+        <div className="mb-6 p-5 rounded-2xl glass-surface border border-red-500/30 bg-red-500/5">
+          <h3 className="text-base font-semibold text-red-200 mb-2">Soma run failed</h3>
+          <div className="text-xs text-white/70 space-y-1 mb-4">
+            <p><span className="text-white/50">error_class:</span> {somaStatus.error_class ?? "—"}</p>
+            <p><span className="text-white/50">run_id:</span> {somaStatus.last_run_id ?? "—"}</p>
+            {somaStatus.artifact_dir && (
+              <p><span className="text-white/50">artifact_dir:</span> {somaStatus.artifact_dir}</p>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2 mb-3">
+            {somaStatus.artifact_dir && (
+              <Link
+                href={`/artifacts?path=${encodeURIComponent(somaStatus.artifact_dir)}`}
+                className="text-xs text-blue-300 hover:text-blue-200"
+              >
+                Open artifact_dir
+              </Link>
+            )}
+            {somaStatus.artifact_links?.stdout && (
+              <Link
+                href={`/artifacts?path=${encodeURIComponent(somaStatus.artifact_links.stdout)}`}
+                className="text-xs text-blue-300 hover:text-blue-200"
+              >
+                stdout.txt
+              </Link>
+            )}
+            {somaStatus.artifact_links?.stderr && (
+              <Link
+                href={`/artifacts?path=${encodeURIComponent(somaStatus.artifact_links.stderr)}`}
+                className="text-xs text-blue-300 hover:text-blue-200"
+              >
+                stderr.txt
+              </Link>
+            )}
+            {somaStatus.artifact_links?.result_json && (
+              <Link
+                href={`/artifacts?path=${encodeURIComponent(somaStatus.artifact_links.result_json)}`}
+                className="text-xs text-blue-300 hover:text-blue-200"
+              >
+                RESULT.json
+              </Link>
+            )}
+            {somaStatus.artifact_links?.crash_json && (
+              <Link
+                href={`/artifacts?path=${encodeURIComponent(somaStatus.artifact_links.crash_json)}`}
+                className="text-xs text-blue-300 hover:text-blue-200"
+              >
+                CRASH.json
+              </Link>
+            )}
+          </div>
+          <GlassButton
+            variant="primary"
+            onClick={() => exec("soma_fix_and_retry")}
+            disabled={loading !== null && loading !== "soma_fix_and_retry"}
+          >
+            {loading === "soma_fix_and_retry" ? "Running…" : "Fix and retry"}
+          </GlassButton>
+        </div>
       )}
 
       {/* Soma Status (Run to DONE dashboard) */}

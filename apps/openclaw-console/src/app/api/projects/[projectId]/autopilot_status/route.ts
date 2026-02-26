@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
+import { resolveSomaLastRun } from "@/lib/soma-last-run-resolver";
 
 export const runtime = "nodejs";
 
@@ -98,6 +99,17 @@ export async function GET(
     }
   }
 
+  // When WAITING_FOR_HUMAN, include novnc_url + instruction_line from resolver
+  let novncUrl: string | null = null;
+  let instructionLine: string | null = null;
+  let artifactDir: string | null = null;
+  if (currentStatus === "WAITING_FOR_HUMAN") {
+    const resolved = resolveSomaLastRun();
+    novncUrl = resolved.novnc_url;
+    instructionLine = resolved.instruction_line;
+    artifactDir = resolved.artifact_dir;
+  }
+
   return NextResponse.json({
     ok: true,
     enabled,
@@ -110,5 +122,8 @@ export async function GET(
     error_class: errorClass,
     status_path: statusPath,
     timer_interval: "10min",
+    novnc_url: novncUrl,
+    instruction_line: instructionLine,
+    artifact_dir: artifactDir,
   });
 }

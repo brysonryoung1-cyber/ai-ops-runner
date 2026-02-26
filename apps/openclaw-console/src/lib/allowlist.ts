@@ -48,7 +48,8 @@ export type ActionName =
   | "llm.microgpt.canary"
   | "openclaw_hq_audit"
   | "openclaw_novnc_doctor"
-  | "openclaw_novnc_shm_fix";
+  | "openclaw_novnc_shm_fix"
+  | "soma_fix_and_retry";
 
 export interface AllowedAction {
   name: ActionName;
@@ -415,6 +416,14 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
       "Diagnose + recover shmget No space left on device. Applies sysctl, restarts noVNC, runs doctor. Writes artifacts/novnc_shm_fix/<run_id>/.",
     remoteCommand: "cd /opt/ai-ops-runner && bash ./ops/scripts/novnc_shm_fix.sh",
     timeoutSec: 180,
+  },
+  soma_fix_and_retry: {
+    name: "soma_fix_and_retry",
+    label: "Fix and Retry Soma",
+    description:
+      "Deterministic recovery: shm_fix → restart noVNC → doctor (DEEP) → soma_run_to_done. One-click recovery.",
+    remoteCommand: "cd /opt/ai-ops-runner && .venv-hostd/bin/python ./ops/scripts/soma_fix_and_retry.py",
+    timeoutSec: 2400,
   },
 };
 

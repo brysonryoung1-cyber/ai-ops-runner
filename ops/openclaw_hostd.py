@@ -344,13 +344,42 @@ def run_action(action: str, run_id: str) -> tuple[int, str, str, bool]:
             json.dump(result, f, indent=2)
         if proc.returncode != 0:
             stderr_tail = stderr_s.strip().split("\n")[-3:]
+            error_class = "action_nonzero_exit"
+            # Parse error_class from stdout (project actions print JSON)
+            if not stderr_s.strip() and stdout_s.strip():
+                for line in reversed(stdout_s.strip().split("\n")):
+                    line = line.strip()
+                    if line.startswith("{"):
+                        try:
+                            parsed = json.loads(line)
+                            if parsed.get("error_class"):
+                                error_class = parsed["error_class"]
+                                break
+                        except (json.JSONDecodeError, TypeError):
+                            pass
             _write_error_json(
                 art_dir,
-                error_class="action_nonzero_exit",
+                error_class=error_class,
                 reason=f"Action '{action}' exited with code {proc.returncode}",
                 recommended_next_action=f"Check stderr in {ARTIFACTS_HOSTD}/{run_id}/stderr.txt",
                 underlying_exception="\n".join(stderr_tail) if stderr_tail else None,
             )
+            # When stderr empty, write ERROR_SUMMARY.txt from stdout classification
+            if not stderr_s.strip() and stdout_s.strip():
+                try:
+                    summary_path = os.path.join(art_dir, "ERROR_SUMMARY.txt")
+                    with open(summary_path, "w", encoding="utf-8") as f:
+                        f.write(f"error_class: {error_class}\n")
+                        f.write(f"action: {action}\n")
+                        f.write(f"exit_code: {proc.returncode}\n")
+                        f.write("---\n")
+                        f.write(stdout_s[-4000:] if len(stdout_s) > 4000 else stdout_s)
+                except OSError:
+                    pass
+            # Ensure hostd_result.json has error_class for UI
+            result["error_class"] = error_class
+            with open(result_path, "w", encoding="utf-8") as f:
+                json.dump(result, f, indent=2)
         return (proc.returncode, stdout_s, stderr_s, truncated)
     except subprocess.TimeoutExpired:
         finished_at = datetime.now(timezone.utc).isoformat()

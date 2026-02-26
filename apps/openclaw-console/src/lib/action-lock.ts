@@ -53,6 +53,7 @@ const CONCURRENT_ALLOWED: ReadonlySet<string> = new Set([
 const LONG_RUNNING_ACTIONS = new Set([
   "soma_kajabi_auto_finish",
   "soma_run_to_done",
+  "soma_fix_and_retry",
   "soma_kajabi_reauth_and_resume",
   "soma_kajabi_capture_interactive",
   "deploy_and_verify",
