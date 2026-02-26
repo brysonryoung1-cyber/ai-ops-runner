@@ -35,6 +35,7 @@ COLLECT_SCRIPT="$ROOT_DIR/ops/scripts/novnc_collect_diagnostics.sh"
 mkdir -p "$ART_DIR"
 
 _fail_reason=""
+_FB_WARMUP_ATTEMPTS=0
 
 # --- 1) Service active ---
 _check_service() {
@@ -74,7 +75,8 @@ _check_websockify() {
 }
 
 # --- 5) Framebuffer not-all-black (skip if xwd not installed) ---
-# Retry up to 3x with 4s sleep: xsetroot needs a few seconds after Xvfb socket ready
+# On all-black: warm-up loop (xsetroot, openbox, kajabi_ui_ensure) up to 6 attempts before fail.
+# Records attempts in timings.json.
 _check_framebuffer() {
   if ! command -v xwd >/dev/null 2>&1; then
     # Fallback: HTTP check only (no framebuffer validation)
@@ -85,22 +87,26 @@ _check_framebuffer() {
     return 1
   fi
 
-  local attempt
-  for attempt in 1 2 3; do
+  local attempt warmup_attempt is_black=1
+  local FB_WARMUP_MAX=6
+  local FB_WARMUP_SLEEP=5
+  local KAJABI_ENSURE="$ROOT_DIR/ops/scripts/kajabi_ui_ensure.sh"
+
+  for warmup_attempt in $(seq 1 "$FB_WARMUP_MAX"); do
     rm -f "$XWD_FILE"
     if ! DISPLAY="$DISPLAY_NUM" xwd -root -silent -out "$XWD_FILE" 2>/dev/null; then
       _fail_reason="xwd_capture_failed"
-      [ "$attempt" -lt 3 ] && sleep 4
+      [ "$warmup_attempt" -lt "$FB_WARMUP_MAX" ] && sleep "$FB_WARMUP_SLEEP"
       continue
     fi
     if [ ! -s "$XWD_FILE" ]; then
       _fail_reason="xwd_empty"
-      [ "$attempt" -lt 3 ] && sleep 4
+      [ "$warmup_attempt" -lt "$FB_WARMUP_MAX" ] && sleep "$FB_WARMUP_SLEEP"
       continue
     fi
 
     local mean=""
-    local is_black=1
+    is_black=1
 
     if command -v convert >/dev/null 2>&1; then
       mean="$(convert "$XWD_FILE" -format "%[fx:mean]" info: 2>/dev/null || echo "0")"
@@ -114,13 +120,11 @@ import sys
 try:
     with open('$XWD_FILE', 'rb') as f:
         data = f.read()
-    # XWD header is typically 8 + variable; skip first 256 bytes to reach pixel data
     if len(data) < 500:
         sys.exit(1)
     pixels = data[256:min(256 + 50000, len(data))]
     unique = len(set(pixels))
     nonzero = sum(1 for b in pixels if b != 0)
-    # Not all-black if we have variance or nonzero bytes
     if unique > 1 or nonzero > 0:
         sys.exit(0)
     sys.exit(1)
@@ -134,12 +138,38 @@ except Exception:
     if [ "$is_black" -eq 0 ]; then
       break
     fi
+
+    # All-black: warm-up before next attempt (do NOT fail immediately)
     _fail_reason="framebuffer_all_black"
-    [ "$attempt" -lt 3 ] && sleep 4
+    if [ "$warmup_attempt" -lt "$FB_WARMUP_MAX" ]; then
+      # Re-apply non-black background
+      if command -v xsetroot >/dev/null 2>&1; then
+        DISPLAY="$DISPLAY_NUM" xsetroot -solid "#2b2b2b" 2>/dev/null || true
+      fi
+      # Ensure openbox running (restart if not)
+      if ! pgrep -f "openbox" >/dev/null 2>&1 && command -v openbox >/dev/null 2>&1; then
+        DISPLAY="$DISPLAY_NUM" openbox --sm-disable 2>/dev/null &
+        sleep 2
+      fi
+      # Launch Chromium via kajabi_ui_ensure (paints Kajabi UI on DISPLAY)
+      if [ -x "$KAJABI_ENSURE" ]; then
+        DISPLAY="$DISPLAY_NUM" "$KAJABI_ENSURE" 2>/dev/null || true
+        sleep 3
+      fi
+      # Save framebuffer artifact for this attempt (before retry)
+      if [ -f "$XWD_FILE" ] && [ -s "$XWD_FILE" ]; then
+        cp "$XWD_FILE" "$ART_DIR/novnc_fb_attempt${warmup_attempt}.xwd" 2>/dev/null || true
+        if command -v convert >/dev/null 2>&1; then
+          convert "$XWD_FILE" "$ART_DIR/framebuffer_attempt${warmup_attempt}.png" 2>/dev/null || true
+        fi
+      fi
+      sleep "$FB_WARMUP_SLEEP"
+    fi
   done
 
   if [ "$is_black" -ne 0 ]; then
     _fail_reason="framebuffer_all_black"
+    _FB_WARMUP_ATTEMPTS=$warmup_attempt
     return 1
   fi
   # Always write framebuffer.png to artifacts (proof artifact for WAITING_FOR_HUMAN)
@@ -194,7 +224,7 @@ _collect_and_fail() {
       convert "$XWD_FILE" "$ART_DIR/novnc_fb.png" 2>/dev/null || true
     fi
   fi
-  echo "{\"ok\":false,\"run_id\":\"$RUN_ID\",\"fail_reason\":\"$_fail_reason\",\"artifact_dir\":\"artifacts/novnc_debug/$RUN_ID\"}"
+  echo "{\"ok\":false,\"run_id\":\"$RUN_ID\",\"fail_reason\":\"$_fail_reason\",\"artifact_dir\":\"artifacts/novnc_debug/$RUN_ID\",\"fb_warmup_attempts\":${_FB_WARMUP_ATTEMPTS:-0}}"
   exit 1
 }
 
@@ -216,6 +246,7 @@ d = {
   'run_id': '$RUN_ID',
   'timestamp_utc': datetime.now(timezone.utc).isoformat(),
   'total_sec': round(t_end - t_start, 2),
+  'fb_warmup_attempts': ${_FB_WARMUP_ATTEMPTS:-0},
 }
 with open('$TIMINGS_FILE', 'w') as f: json.dump(d, f, indent=2)
 " 2>/dev/null || true
