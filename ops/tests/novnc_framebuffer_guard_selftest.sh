@@ -34,7 +34,11 @@ echo "  PASS: not-all-black logic present"
 grep -qE "restart|_hard_reset|pkill|remediate" "$GUARD" || { echo "  FAIL: script must have heal/hard-reset logic"; exit 1; }
 echo "  PASS: heal/hard-reset logic present"
 
-# 5. Integration test (skip by default): requires Xvfb, xwd, DISPLAY
+# 5. Contains warm-up loop for all-black (xsetroot, kajabi_ui_ensure before final fail)
+grep -qE "FB_WARMUP_MAX|kajabi_ui_ensure|KAJABI_ENSURE" "$GUARD" || { echo "  FAIL: script must have warm-up loop for all-black"; exit 1; }
+echo "  PASS: warm-up loop for all-black present"
+
+# 6. Integration test (skip by default): requires Xvfb, xwd, DISPLAY
 if [ "${OPENCLAW_NOVNC_SELFTEST_FULL:-0}" = "1" ] && command -v Xvfb >/dev/null 2>&1 && command -v xwd >/dev/null 2>&1; then
   echo "  Running integration (xsetroot mean change)..."
   export DISPLAY=:199

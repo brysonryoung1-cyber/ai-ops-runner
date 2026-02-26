@@ -22,7 +22,7 @@ HQ_BASE = os.environ.get("OPENCLAW_HQ_BASE", "http://127.0.0.1:8787")
 ADMIN_TOKEN = os.environ.get("OPENCLAW_ADMIN_TOKEN", "")
 POLL_INTERVAL = 12
 MAX_POLL_MINUTES = 35
-NOVNC_FAST_TIMEOUT = 25
+NOVNC_FAST_TIMEOUT = 90  # DEEP doctor: framebuffer warm-up (6×5s) + WS stability
 INSTRUCTION_LINE = (
     "Open the URL, complete Cloudflare/Kajabi login + 2FA, then go to Products → Courses "
     "and ensure Home User Library + Practitioner Library are visible; then stop touching the session."

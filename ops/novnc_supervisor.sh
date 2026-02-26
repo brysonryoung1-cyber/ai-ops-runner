@@ -124,10 +124,10 @@ fi
 # Minimal WM (openbox preferred; fluxbox fallback) — ensures window management for Chromium
 if command -v openbox >/dev/null 2>&1; then
   openbox --sm-disable 2>/dev/null &
-  sleep 1
+  sleep 3
 elif command -v fluxbox >/dev/null 2>&1; then
   fluxbox 2>/dev/null &
-  sleep 1
+  sleep 3
 fi
 
 # ── 3) Build websockify cmd ──

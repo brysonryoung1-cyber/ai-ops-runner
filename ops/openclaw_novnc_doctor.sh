@@ -60,7 +60,14 @@ if ! OPENCLAW_RUN_ID="$RUN_ID" OPENCLAW_NOVNC_PORT="$NOVNC_PORT" OPENCLAW_NOVNC_
   if [ -x "$COLLECT_SCRIPT" ]; then
     OPENCLAW_RUN_ID="$RUN_ID" OPENCLAW_NOVNC_PORT="$NOVNC_PORT" "$COLLECT_SCRIPT" 2>/dev/null || true
   fi
-  echo "{\"ok\":false,\"result\":\"FAIL\",\"novnc_url\":\"$NOVNC_URL\",\"artifact_dir\":\"artifacts/novnc_debug/$RUN_ID\"}"
+  FB_FAIL="$(python3 -c "
+import json
+try:
+    d = json.load(open('$ART_DIR/guard_result.json'))
+    print(d.get('fail_reason', 'framebuffer_guard_failed'))
+except: print('framebuffer_guard_failed')
+" 2>/dev/null)" || FB_FAIL="framebuffer_guard_failed"
+  echo "{\"ok\":false,\"result\":\"FAIL\",\"error_class\":\"${FB_FAIL}\",\"novnc_url\":\"$NOVNC_URL\",\"artifact_dir\":\"artifacts/novnc_debug/$RUN_ID\"}"
   exit 1
 fi
 
