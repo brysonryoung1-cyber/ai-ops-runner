@@ -4,10 +4,11 @@
 # Checks:
 #   - curl -fsS http://127.0.0.1:8787/api/ui/health_public succeeds
 #   - curl -fsS https://aiops-1.tailc75c62.ts.net/api/ui/health_public succeeds and contains ok=true
+#   - /novnc path returns 200 (noVNC over HTTPS, same origin)
 #
 # If tailnet health fails or returns Not Found:
 #   - tailscale serve reset
-#   - re-applies canonical mapping HTTPS "/" -> http://127.0.0.1:8787
+#   - re-applies: HTTPS /novnc -> 127.0.0.1:6080, HTTPS / -> 127.0.0.1:8787
 #
 # Writes JSON report to artifacts/hq_audit/serve_guard/<run_id>/status.json (no secrets).
 # Exit: 0 if pass (or remediated to pass), nonzero if fail-closed.
@@ -45,8 +46,9 @@ if curl -fsS --connect-timeout 3 --max-time 8 "http://127.0.0.1:$CONSOLE_PORT/ap
   fi
 fi
 
-# --- Check tailnet HQ ---
+# --- Check tailnet HQ + /novnc path ---
 tailnet_ok=false
+novnc_path_ok=false
 tailnet_body=""
 tailnet_remediated=false
 if command -v tailscale >/dev/null 2>&1; then
@@ -56,10 +58,16 @@ if command -v tailscale >/dev/null 2>&1; then
       tailnet_ok=true
     fi
   fi
+  # /novnc path must return 200 (noVNC over HTTPS)
+  if curl -kfsS --connect-timeout 3 --max-time 6 "https://${TS_HOSTNAME}/novnc/vnc.html" -o /dev/null -w "%{http_code}" 2>/dev/null | grep -q 200; then
+    novnc_path_ok=true
+  fi
 
   # Remediate if tailnet fails but local OK
   if [ "$local_ok" = true ] && [ "$tailnet_ok" = false ]; then
     tailscale serve reset 2>/dev/null || true
+    # Add /novnc first (more specific), then root
+    tailscale serve --bg --https=443 --set-path=/novnc "http://127.0.0.1:6080" 2>/dev/null || true
     if tailscale serve --bg --https=443 "http://127.0.0.1:$CONSOLE_PORT" 2>/dev/null; then
       sleep 2
       if curl -kfsS --connect-timeout 5 --max-time 10 "https://${TS_HOSTNAME}/api/ui/health_public" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') is True else 1)" 2>/dev/null; then
@@ -79,6 +87,7 @@ d = {
   'timestamp_utc': datetime.now(timezone.utc).isoformat(),
   'local_ok': $([ \"$local_ok\" = true ] && echo True || echo False),
   'tailnet_ok': $([ \"$tailnet_ok\" = true ] && echo True || echo False),
+  'novnc_path_ok': $([ \"$novnc_path_ok\" = true ] && echo True || echo False),
   'tailnet_remediated': $([ \"$tailnet_remediated\" = true ] && echo True || echo False),
   'ts_hostname': '$TS_HOSTNAME',
   'console_port': $CONSOLE_PORT,
@@ -87,8 +96,8 @@ with open('$REPORT_DIR/status.json', 'w') as f:
     json.dump(d, f, indent=2)
 " 2>/dev/null || true
 
-# --- Exit ---
-if [ "$local_ok" = true ] && [ "$tailnet_ok" = true ]; then
+# --- Exit: local + tailnet + /novnc path all required ---
+if [ "$local_ok" = true ] && [ "$tailnet_ok" = true ] && [ "$novnc_path_ok" = true ]; then
   exit 0
 fi
 exit 1

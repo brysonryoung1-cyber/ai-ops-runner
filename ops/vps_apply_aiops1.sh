@@ -111,11 +111,12 @@ if ! tailscale serve status &>/dev/null; then
   exit 0
 fi
 tailscale serve reset 2>/dev/null || true
+tailscale serve --bg --https=443 --set-path=/novnc http://127.0.0.1:6080 2>/dev/null || true
 tailscale serve --bg --https=443 http://127.0.0.1:8787 || {
   echo "  tailscale serve command failed (Serve may not be enabled on tailnet)"
   exit 0
 }
-echo '  Tailscale Serve configured: https://<tailnet-hostname>:443 -> 127.0.0.1:8787'
+echo '  Tailscale Serve: /novnc -> 6080, / -> 8787'
 tailscale serve status 2>/dev/null || true
 REMOTE_STEP4
 echo ""
