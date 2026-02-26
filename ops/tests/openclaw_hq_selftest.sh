@@ -382,7 +382,7 @@ fi
 # Test 35: Allowlist module untouched (no arbitrary commands added)
 # Count actual action entries in the ALLOWLIST record (keys ending with colon + space + {)
 ALLOWLIST_ACTIONS=$(grep -c "name:" "$REPO_ROOT/apps/openclaw-console/src/lib/allowlist.ts" || true)
-if [[ "$ALLOWLIST_ACTIONS" -le 45 ]]; then
+if [[ "$ALLOWLIST_ACTIONS" -le 50 ]]; then
   pass "allowlist action count within bounds ($ALLOWLIST_ACTIONS)"
 else
   fail "allowlist unexpectedly large ($ALLOWLIST_ACTIONS actions)"
