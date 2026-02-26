@@ -3,14 +3,17 @@
 # Deploy origin/main (target SHA) to aiops-1, enable Soma Autopilot, prove end-to-end.
 #
 # Usage: ./ops/csr_deploy_soma_autopilot.sh [target_sha]
-# Default target_sha: 4ce3f14
-# Run from Mac or aiops-1. Uses OPENCLAW_VPS_SSH_HOST, OPENCLAW_VPS_SSH_IDENTITY for remote.
+# Default target_sha: origin/main HEAD
+# Run from Mac or aiops-1. NO SSH required when:
+#   - ON aiops-1 (local mode), or
+#   - OPENCLAW_HQ_BASE=https://aiops-1.tailc75c62.ts.net + OPENCLAW_HQ_TOKEN (HQ API mode)
+# Remote SSH: OPENCLAW_VPS_SSH_HOST, OPENCLAW_VPS_SSH_IDENTITY (only when HQ API not used).
 # No secrets printed.
 set -euo pipefail
 
-TARGET_SHA="${1:-4ce3f14}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+TARGET_SHA="${1:-$(cd "$ROOT_DIR" && git rev-parse --short origin/main 2>/dev/null || echo "6d40278")}"
 VPS_HOST="${OPENCLAW_VPS_SSH_HOST:-root@100.123.61.57}"
 SSH_OPTS="-o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
 [ -n "${OPENCLAW_VPS_SSH_IDENTITY:-}" ] && [ -r "${OPENCLAW_VPS_SSH_IDENTITY}" ] && SSH_OPTS="$SSH_OPTS -o IdentitiesOnly=yes -i ${OPENCLAW_VPS_SSH_IDENTITY}"
@@ -24,9 +27,27 @@ ON_AIOPS=0
 [ "$(hostname -s 2>/dev/null || hostname)" = "aiops-1" ] && ON_AIOPS=1
 [ "$ROOT_DIR" = "/opt/ai-ops-runner" ] && ON_AIOPS=1
 
+# HQ API mode: when OPENCLAW_HQ_BASE is https URL + token, use curl (no SSH). APPLY_MODE_DRIFT: never require SSH for aiops-1.
+HQ_BASE="${OPENCLAW_HQ_BASE:-}"
+HQ_TOKEN="${OPENCLAW_HQ_TOKEN:-}"
+USE_HQ_API=0
+if [ "$ON_AIOPS" = "0" ] && [[ "$HQ_BASE" =~ ^https:// ]] && [ -n "$HQ_TOKEN" ]; then
+  USE_HQ_API=1
+fi
+# When SSH key missing and HQ API available, prefer HQ API (must not stop at SSH key missing)
+if [ "$ON_AIOPS" = "0" ] && [ "$USE_HQ_API" = "0" ] && { [ -z "${OPENCLAW_VPS_SSH_IDENTITY:-}" ] || [ ! -r "${OPENCLAW_VPS_SSH_IDENTITY}" ]; }; then
+  if [[ "${HQ_BASE:-}" =~ ^https:// ]] && [ -n "${HQ_TOKEN:-}" ]; then
+    USE_HQ_API=1
+    echo "  Note: SSH key not set; using HQ API mode (OPENCLAW_HQ_BASE + OPENCLAW_HQ_TOKEN)" >&2
+  fi
+fi
+
 _run_remote() {
   if [ "$ON_AIOPS" = "1" ]; then
     eval "$@"
+  elif [ "$USE_HQ_API" = "1" ]; then
+    echo "  HQ API mode: _run_remote not supported for: $*" >&2
+    return 1
   else
     ssh $SSH_OPTS "$VPS_HOST" "$@"
   fi
@@ -35,21 +56,52 @@ _run_remote() {
 _run_remote_bash() {
   if [ "$ON_AIOPS" = "1" ]; then
     bash -c "$1"
+  elif [ "$USE_HQ_API" = "1" ]; then
+    echo "  HQ API mode: _run_remote_bash not supported" >&2
+    return 1
   else
     ssh $SSH_OPTS "$VPS_HOST" "bash -c $(printf '%q' "$1")"
   fi
 }
 
+_hq_curl() {
+  local method="${1:-GET}"
+  local path="$2"
+  local data="${3:-}"
+  local curl_args=(-sS -X "$method" "${HQ_BASE}${path}" -H "Content-Type: application/json")
+  [ -n "$HQ_TOKEN" ] && curl_args+=(-H "X-OpenClaw-Token: $HQ_TOKEN")
+  [ -n "$data" ] && curl_args+=(-d "$data")
+  curl "${curl_args[@]}"
+}
+
 echo "=== CSR Deploy + Soma Autopilot ==="
 echo "  Target SHA: $TARGET_SHA"
-echo "  Mode: $([ "$ON_AIOPS" = "1" ] && echo "local (aiops-1)" || echo "remote ($VPS_HOST)")"
+echo "  Mode: $([ "$ON_AIOPS" = "1" ] && echo "local (aiops-1)" || ([ "$USE_HQ_API" = "1" ] && echo "HQ API ($HQ_BASE)" || echo "remote ($VPS_HOST)"))"
 echo "  Proof dir: $PROOF_DIR"
 echo ""
 
 # --- A) Deploy + Verify ---
 echo "==> A) Deploy + Verify (deploy_and_verify via HQ)"
 DEPLOY_RC=0
-_run_remote_bash '
+if [ "$USE_HQ_API" = "1" ]; then
+  resp="$(_hq_curl POST /api/exec '{"action":"deploy_and_verify"}')"
+  if ! echo "$resp" | grep -q '"run_id"'; then
+    echo "  Trigger failed: $resp"
+    DEPLOY_RC=1
+  else
+    run_id="$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('run_id',''))")"
+    echo "  run_id=$run_id"
+    for i in $(seq 1 120); do
+      run_json="$(_hq_curl GET "/api/runs?id=$run_id")"
+      status="$(echo "$run_json" | python3 -c "import sys,json; r=json.load(sys.stdin).get('run',{}); print(r.get('status',''))" 2>/dev/null || echo "")"
+      [ "$status" = "success" ] && echo "  status=success" && DEPLOY_RC=0 && break
+      [ "$status" = "failure" ] || [ "$status" = "error" ] && echo "  status=$status" && DEPLOY_RC=1 && break
+      sleep 5
+    done
+    [ "$DEPLOY_RC" != "0" ] && echo "  status=timeout" && DEPLOY_RC=1
+  fi
+else
+  _run_remote_bash '
   cd /opt/ai-ops-runner
   HQ_BASE="http://127.0.0.1:8787"
   TOKEN=""
@@ -77,14 +129,22 @@ _run_remote_bash '
   echo "status=timeout"
   exit 1
 ' || DEPLOY_RC=$?
+fi
 
 if [ "$DEPLOY_RC" -ne 0 ]; then
   echo "  Deploy poll returned non-success; checking build_sha (may already match)..."
-  BUILD_CHECK="$(_run_remote_bash 'curl -sf http://127.0.0.1:8787/api/ui/health_public 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"build_sha\",\"\"))" 2>/dev/null || echo ""')"
+  if [ "$USE_HQ_API" = "1" ]; then
+    BUILD_CHECK="$(_hq_curl GET /api/ui/health_public | python3 -c "import sys,json; print(json.load(sys.stdin).get('build_sha',''))" 2>/dev/null || echo "")"
+  else
+    BUILD_CHECK="$(_run_remote_bash 'curl -sf http://127.0.0.1:8787/api/ui/health_public 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"build_sha\",\"\"))" 2>/dev/null || echo ""')"
+  fi
   if [ -n "$BUILD_CHECK" ] && [[ "$BUILD_CHECK" == "$TARGET_SHA"* ]]; then
     echo "  build_sha already matches $TARGET_SHA; continuing"
     DEPLOY_RC=0
   else
+    if [ "$USE_HQ_API" = "1" ]; then
+      echo "  HQ API mode: no retry loop (deploy triggered once)"
+    else
     echo "  Looping retry per fail-closed..."
     for retry in 1 2 3; do
       echo "  Retry $retry/3..."
@@ -107,13 +167,18 @@ if [ "$DEPLOY_RC" -ne 0 ]; then
         exit 1
       ' && DEPLOY_RC=0 && break
     done
+    fi
   fi
 fi
 
 # Verify build_sha
 echo ""
 echo "==> A2) Verify build_sha"
-BUILD_SHA="$(_run_remote_bash 'curl -sf http://127.0.0.1:8787/api/ui/health_public 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"build_sha\",\"\"))" 2>/dev/null || echo ""')"
+if [ "$USE_HQ_API" = "1" ]; then
+  BUILD_SHA="$(_hq_curl GET /api/ui/health_public | python3 -c "import sys,json; print(json.load(sys.stdin).get('build_sha',''))" 2>/dev/null || echo "")"
+else
+  BUILD_SHA="$(_run_remote_bash 'curl -sf http://127.0.0.1:8787/api/ui/health_public 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"build_sha\",\"\"))" 2>/dev/null || echo ""')"
+fi
 echo "  build_sha: ${BUILD_SHA:-unknown}"
 if [ -z "$BUILD_SHA" ] || [[ ! "$BUILD_SHA" == "$TARGET_SHA"* ]]; then
   echo "  MISMATCH: expected $TARGET_SHA*, got $BUILD_SHA"
@@ -122,6 +187,18 @@ if [ -z "$BUILD_SHA" ] || [[ ! "$BUILD_SHA" == "$TARGET_SHA"* ]]; then
 fi
 echo "  PASS: build_sha starts with $TARGET_SHA"
 echo ""
+
+if [ "$USE_HQ_API" = "1" ]; then
+  echo "  HQ API mode: steps B–E require host access. Run on aiops-1 for full autopilot install."
+  echo "  Deploy verified. Exiting."
+  echo ""
+  echo "=== CSR OUTPUT (no secrets) ==="
+  echo "origin/main SHA: $TARGET_SHA"
+  echo "aiops-1 build_sha: $BUILD_SHA"
+  echo "mode: HQ API (deploy only; autopilot install skipped)"
+  echo "=== END ==="
+  exit 0
+fi
 
 # --- B) Install autopilot units ---
 echo "==> B) Install autopilot units"
