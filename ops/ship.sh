@@ -24,6 +24,9 @@ cd "$ROOT_DIR"
 MAX_ATTEMPTS=${SHIP_MAX_ATTEMPTS:-5}
 SKIP_TESTS=0
 ATTEMPT=0
+
+# Hermetic: ship must never require noVNC on Mac. Interactive/noVNC selftests opt-in only.
+export OPENCLAW_RUN_INTERACTIVE_TESTS="${OPENCLAW_RUN_INTERACTIVE_TESTS:-0}"
 LOCK_DIR="$ROOT_DIR/.locks"
 LOCK_FILE="$LOCK_DIR/ship.lock"
 
