@@ -211,6 +211,18 @@ export default function OverviewPage() {
     acceptance_path: string | null;
     proof_path: string | null;
   } | null>(null);
+  const [somaAutopilotStatus, setSomaAutopilotStatus] = useState<{
+    enabled: boolean;
+    blocked: boolean;
+    fail_count: number;
+    last_tick: string | null;
+    last_run_id: string | null;
+    current_status: string | null;
+    outcome: string | null;
+    error_class: string | null;
+    status_path: string | null;
+    timer_interval: string;
+  } | null>(null);
 
   // Check connectivity via server-mediated endpoint; 3s hard timeout
   const HOST_STATUS_TIMEOUT_MS = 3000;
@@ -385,6 +397,34 @@ export default function OverviewPage() {
     }
   }, [token]);
 
+  // Soma Autopilot status
+  const fetchSomaAutopilotStatus = useCallback(async () => {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) headers["X-OpenClaw-Token"] = token;
+      const res = await fetch("/api/projects/soma_kajabi/autopilot_status", { headers });
+      const data = await res.json();
+      if (data?.ok) {
+        setSomaAutopilotStatus({
+          enabled: data.enabled ?? false,
+          blocked: data.blocked ?? false,
+          fail_count: data.fail_count ?? 0,
+          last_tick: data.last_tick ?? null,
+          last_run_id: data.last_run_id ?? null,
+          current_status: data.current_status ?? null,
+          outcome: data.outcome ?? null,
+          error_class: data.error_class ?? null,
+          status_path: data.status_path ?? null,
+          timer_interval: data.timer_interval ?? "10min",
+        });
+      } else {
+        setSomaAutopilotStatus(null);
+      }
+    } catch {
+      setSomaAutopilotStatus(null);
+    }
+  }, [token]);
+
   // Last deploy result (proof bundle)
   const fetchDeployLast = useCallback(async () => {
     try {
@@ -441,6 +481,7 @@ export default function OverviewPage() {
     fetchCostSummary();
     fetchHqAuditLast();
     fetchSomaStatus();
+    fetchSomaAutopilotStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
 
@@ -453,8 +494,11 @@ export default function OverviewPage() {
   // Refetch Soma Status when soma_run_to_done or soma_kajabi_auto_finish completes
   const somaRunResult = results["soma_run_to_done"] ?? results["soma_kajabi_auto_finish"];
   useEffect(() => {
-    if (somaRunResult !== undefined) fetchSomaStatus();
-  }, [somaRunResult, fetchSomaStatus]);
+    if (somaRunResult !== undefined) {
+      fetchSomaStatus();
+      fetchSomaAutopilotStatus();
+    }
+  }, [somaRunResult, fetchSomaStatus, fetchSomaAutopilotStatus]);
 
   // Refetch last HQ Audit when openclaw_hq_audit completes
   const hqAuditResult = results["openclaw_hq_audit"];
@@ -691,6 +735,73 @@ export default function OverviewPage() {
               <Link href="/actions" className="text-xs text-blue-300 hover:text-blue-200">
                 Run Soma to DONE
               </Link>
+            </div>
+          </div>
+        </GlassCard>
+      )}
+
+      {/* Soma Autopilot */}
+      {somaAutopilotStatus && (
+        <GlassCard className="mb-6">
+          <div className="px-5 py-3 border-b border-white/10 flex items-center justify-between">
+            <span className="text-sm font-semibold text-white/95">Soma Autopilot</span>
+            <Pill
+              variant={
+                somaAutopilotStatus.blocked
+                  ? "warn"
+                  : somaAutopilotStatus.enabled
+                    ? "success"
+                    : "info"
+              }
+            >
+              {somaAutopilotStatus.blocked
+                ? "BLOCKED"
+                : somaAutopilotStatus.enabled
+                  ? "enabled"
+                  : "disabled"}
+            </Pill>
+          </div>
+          <div className="p-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <span className="text-white/50 uppercase tracking-wider">Last tick</span>
+                <p className="text-white/90 font-mono mt-0.5 truncate">
+                  {somaAutopilotStatus.last_tick ?? "—"}
+                </p>
+              </div>
+              <div>
+                <span className="text-white/50 uppercase tracking-wider">Last run_id</span>
+                <p className="text-white/90 font-mono mt-0.5 truncate">
+                  {somaAutopilotStatus.last_run_id ?? "—"}
+                </p>
+              </div>
+              <div>
+                <span className="text-white/50 uppercase tracking-wider">Current status</span>
+                <p className="text-white/90 mt-0.5">{somaAutopilotStatus.current_status ?? "—"}</p>
+              </div>
+              <div>
+                <span className="text-white/50 uppercase tracking-wider">Interval</span>
+                <p className="text-white/90 mt-0.5">{somaAutopilotStatus.timer_interval}</p>
+              </div>
+              {somaAutopilotStatus.fail_count > 0 && (
+                <div>
+                  <span className="text-white/50 uppercase tracking-wider">Infra fail count</span>
+                  <p className="text-white/90 mt-0.5">{somaAutopilotStatus.fail_count}</p>
+                </div>
+              )}
+            </div>
+            <div className="mt-4 pt-4 border-t border-white/10 flex flex-wrap gap-2">
+              {somaAutopilotStatus.status_path && (
+                <Link
+                  href={`/artifacts?path=${encodeURIComponent(somaAutopilotStatus.status_path)}`}
+                  className="text-xs text-blue-300 hover:text-blue-200"
+                >
+                  Status artifact
+                </Link>
+              )}
+              <span className="text-xs text-white/50">
+                Enable: touch /etc/ai-ops-runner/config/soma_autopilot_enabled.txt
+              </span>
             </div>
           </div>
         </GlassCard>

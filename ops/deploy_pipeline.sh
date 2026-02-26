@@ -189,6 +189,19 @@ else
 fi
 echo ""
 
+# --- Step 2c4: Install Soma Autopilot timer (every 10 min; enabled via config flag) ---
+echo "==> Step 2c4: Install Soma Autopilot timer"
+if [ -f "$SCRIPT_DIR/openclaw_install_soma_autopilot.sh" ]; then
+  if ! bash "$SCRIPT_DIR/openclaw_install_soma_autopilot.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/soma_autopilot_install.log"; then
+    echo "  WARNING: soma-autopilot install failed (non-fatal)" >&2
+  else
+    echo "  soma-autopilot: installed (enable via touch /etc/ai-ops-runner/config/soma_autopilot_enabled.txt)"
+  fi
+else
+  echo "  (openclaw_install_soma_autopilot.sh not found — skip)"
+fi
+echo ""
+
 # --- Step 2d: noVNC firewall (port 6080 Tailscale-only) ---
 echo "==> Step 2d: noVNC firewall (Tailscale-only)"
 if [ -f "$SCRIPT_DIR/ufw_novnc_tailscale_only.sh" ]; then
