@@ -14,6 +14,16 @@ import { getRunsForProject, getLastRunForProject } from "@/lib/run-recorder";
 import { getLockInfo } from "@/lib/action-lock";
 import { resolveSomaLastRun } from "@/lib/soma-last-run-resolver";
 
+/** When WAITING_FOR_HUMAN, use lock's run_id if available (active run). */
+function getActiveRunId(
+  lastStatus: string | null,
+  lastRunId: string | null,
+  lockInfo: { active_run_id: string } | null
+): string | null {
+  if (lastStatus !== "WAITING_FOR_HUMAN") return lastRunId;
+  return lockInfo?.active_run_id ?? lastRunId;
+}
+
 export const runtime = "nodejs";
 
 function getArtifactsRoot(): string {
@@ -162,10 +172,15 @@ export async function GET(
     }
   }
 
+  const activeRunId = getActiveRunId(lastStatus, lastRunId, lockInfo);
+  const resumeActionAvailable = lastStatus === "WAITING_FOR_HUMAN";
+
   return NextResponse.json({
     ok: true,
     build_sha: buildSha,
     last_run_id: lastRunId,
+    active_run_id: activeRunId,
+    current_status: lastStatus,
     last_status: lastStatus,
     stage,
     mirror_pass: mirrorPass,
@@ -177,5 +192,6 @@ export async function GET(
     instruction_line: instructionLine,
     artifact_links: artifactLinks,
     error_class: errorClass,
+    resume_action_available: resumeActionAvailable,
   });
 }

@@ -187,30 +187,7 @@ function RunsContent() {
         </div>
       </div>
 
-      {/* Soma WAITING_FOR_HUMAN banner */}
-      {somaStatus?.last_status === "WAITING_FOR_HUMAN" && (
-        <div className="mb-6 p-5 rounded-2xl glass-surface border border-amber-500/40 bg-amber-500/5">
-          <h3 className="text-base font-semibold text-amber-200 mb-2">Soma needs you: Kajabi login</h3>
-          <p className="text-sm text-white/80 mb-4">After completing 2FA, stop touching the session. Autopilot will resume.</p>
-          <div className="flex flex-wrap gap-3">
-            {somaStatus.novnc_url && (
-              <a href={somaStatus.novnc_url} target="_blank" rel="noopener noreferrer" className="px-4 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 font-medium text-sm border border-amber-500/30">
-                Open noVNC
-              </a>
-            )}
-            {somaStatus.artifact_dir && (
-              <Link href={`/artifacts?path=${encodeURIComponent(somaStatus.artifact_dir)}`} className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white/90 font-medium text-sm border border-white/20">
-                Open artifacts
-              </Link>
-            )}
-            {somaStatus.instruction_line && (
-              <GlassButton variant="secondary" size="sm" onClick={() => navigator.clipboard.writeText(somaStatus.instruction_line ?? "")}>
-                Copy instruction line
-              </GlassButton>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Soma WAITING_FOR_HUMAN banner — rendered by GuidedHumanGateBanner in Shell */}
 
       {/* Soma Failure summary card */}
       {somaStatus && ["FAILURE", "TIMEOUT", "BLOCKED"].includes(somaStatus.last_status ?? "") && (

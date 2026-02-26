@@ -92,6 +92,7 @@ export async function GET() {
     build_sha: buildSha,
     deploy_sha: deploySha,
     canonical_url: canonicalUrl,
+    embed_novnc: process.env.OPENCLAW_EMBED_NOVNC === "1",
     routes: CONSOLE_ROUTES,
     artifacts: {
       readable: artifactsReadable,
