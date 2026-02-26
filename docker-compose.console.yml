@@ -25,7 +25,7 @@ services:
       - "127.0.0.1:8787:8787"
     environment:
       PORT: "8787"
-      HOSTNAME: "127.0.0.1"
+      HOSTNAME: "0.0.0.0"
       OPENCLAW_CONSOLE_TOKEN: "${OPENCLAW_CONSOLE_TOKEN}"
       OPENCLAW_ADMIN_TOKEN: "${OPENCLAW_ADMIN_TOKEN}"
       OPENCLAW_HOSTD_URL: "${OPENCLAW_HOSTD_URL:-http://host.docker.internal:8877}"
