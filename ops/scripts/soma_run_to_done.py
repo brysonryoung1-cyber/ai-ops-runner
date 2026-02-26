@@ -340,8 +340,61 @@ def main() -> int:
         }))
         return 0
 
-    # FAILURE or TIMEOUT
+    # FAILURE or TIMEOUT — reclassify auth gates as WAITING_FOR_HUMAN (never false-fail)
     error_class = result_data.get("error_class", "UNKNOWN")
+    AUTH_NEEDED = frozenset({
+        "KAJABI_CLOUDFLARE_BLOCKED", "KAJABI_NOT_LOGGED_IN", "KAJABI_SESSION_EXPIRED",
+        "KAJABI_CAPTURE_INTERACTIVE_FAILED", "SESSION_CHECK_TIMEOUT", "SESSION_CHECK_BROWSER_CLOSED",
+        "KAJABI_INTERACTIVE_CAPTURE_ERROR", "KAJABI_INTERACTIVE_CAPTURE_TIMEOUT",
+    })
+    if terminal_status in ("FAILURE", "TIMEOUT") and error_class in AUTH_NEEDED:
+        novnc_url = result_data.get("novnc_url", "")
+        instruction = result_data.get("instruction_line", INSTRUCTION_LINE)
+        if not novnc_url and artifact_dir:
+            wfh_path = root / artifact_dir / "WAITING_FOR_HUMAN.json"
+            if wfh_path.exists():
+                try:
+                    wfh = json.loads(wfh_path.read_text())
+                    novnc_url = wfh.get("novnc_url", "")
+                    instruction = wfh.get("instruction_line", instruction)
+                except (json.JSONDecodeError, OSError):
+                    pass
+        if not novnc_url and (root / "ops" / "openclaw_novnc_doctor.sh").exists():
+            try:
+                r = subprocess.run(
+                    [str(root / "ops" / "openclaw_novnc_doctor.sh")],
+                    capture_output=True, text=True, timeout=60, cwd=str(root),
+                )
+                if r.returncode == 0:
+                    line = (r.stdout or "").strip().split("\n")[-1]
+                    if line:
+                        doc = json.loads(line)
+                        novnc_url = doc.get("novnc_url", "")
+            except (subprocess.TimeoutExpired, json.JSONDecodeError):
+                pass
+        proof = {
+            "run_id": run_id,
+            "auto_run_id": auto_run_id,
+            "status": "WAITING_FOR_HUMAN",
+            "novnc_url": novnc_url,
+            "instruction_line": instruction,
+            "artifact_dir": artifact_dir,
+            "build_sha": _get_build_sha(root),
+        }
+        (out_dir / "PROOF.json").write_text(json.dumps(proof, indent=2))
+        (out_dir / "PROOF.md").write_text(
+            f"# Soma Run to DONE — WAITING_FOR_HUMAN (auth gate)\n\n"
+            f"**novnc_url**: {novnc_url}\n\n**Instruction**: {instruction}\n"
+        )
+        print(json.dumps({
+            "ok": False,
+            "status": "WAITING_FOR_HUMAN",
+            "run_id": run_id,
+            "novnc_url": novnc_url,
+            "instruction_line": instruction,
+            "artifact_dir": artifact_dir or f"artifacts/soma_kajabi/run_to_done/{run_id}",
+        }))
+        return 0
     (out_dir / "PROOF.json").write_text(json.dumps({
         "run_id": run_id,
         "auto_run_id": auto_run_id,

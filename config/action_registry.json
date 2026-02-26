@@ -179,19 +179,19 @@
       "id": "openclaw_novnc_restart",
       "label": "Restart noVNC",
       "project_id": "soma_kajabi",
-      "timeout_sec": 30,
+      "timeout_sec": 60,
       "cmd_template": "cd ${ROOT_DIR} && bash ./ops/scripts/novnc_restart.sh"
     },
     {
       "id": "openclaw_novnc_doctor",
       "label": "noVNC Doctor",
-      "timeout_sec": 90,
+      "timeout_sec": 120,
       "cmd_template": "cd ${ROOT_DIR} && ./ops/openclaw_novnc_doctor.sh"
     },
     {
       "id": "openclaw_novnc_shm_fix",
       "label": "noVNC shm Fix",
-      "timeout_sec": 300,
+      "timeout_sec": 360,
       "cmd_template": "cd ${ROOT_DIR} && bash ./ops/scripts/novnc_shm_fix.sh"
     },
     {

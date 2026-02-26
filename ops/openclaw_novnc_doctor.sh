@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # openclaw_novnc_doctor.sh — noVNC doctor: framebuffer guard + WS stability (local + tailnet).
 #
+# --fast: Skip framebuffer warm-up (1 attempt), shorter WS hold (3s). ~25s vs ~90s. For autopilot precheck.
+#
 # Runs novnc_framebuffer_guard, then novnc_ws_stability_check for BOTH:
 #   - ws://127.0.0.1:6080/websockify (local)
 #   - ws://<tailnet_host>:6080/websockify (tailnet)
@@ -22,6 +24,8 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUN_ID="${OPENCLAW_RUN_ID:-$(date -u +%Y%m%d_%H%M%S)_novnc_doctor}"
+FAST_MODE=0
+[[ "${1:-}" = "--fast" ]] && FAST_MODE=1
 FB_GUARD="$SCRIPT_DIR/guards/novnc_framebuffer_guard.sh"
 COLLECT_SCRIPT="$SCRIPT_DIR/scripts/novnc_collect_diagnostics.sh"
 WS_CHECK="$SCRIPT_DIR/scripts/novnc_ws_stability_check.py"
@@ -56,6 +60,7 @@ except: pass
 NOVNC_URL="$(_get_novnc_url)"
 
 # Run framebuffer guard (pass DISPLAY + VNC for canonical config)
+[[ "$FAST_MODE" -eq 1 ]] && export OPENCLAW_NOVNC_DOCTOR_FAST=1
 if ! OPENCLAW_RUN_ID="$RUN_ID" OPENCLAW_NOVNC_PORT="$NOVNC_PORT" OPENCLAW_NOVNC_DISPLAY="$DISPLAY_NUM" OPENCLAW_NOVNC_VNC_PORT="$VNC_PORT" "$FB_GUARD" >"$ART_DIR/guard_result.json" 2>/dev/null; then
   if [ -x "$COLLECT_SCRIPT" ]; then
     OPENCLAW_RUN_ID="$RUN_ID" OPENCLAW_NOVNC_PORT="$NOVNC_PORT" "$COLLECT_SCRIPT" 2>/dev/null || true
@@ -73,7 +78,9 @@ fi
 
 # WS stability: both local + tailnet must PASS
 _run_ws_check() {
-  OPENCLAW_NOVNC_PORT="$NOVNC_PORT" python3 "$WS_CHECK" --all 2>/dev/null
+  local ws_hold=10
+  [[ "$FAST_MODE" -eq 1 ]] && ws_hold=3
+  OPENCLAW_NOVNC_PORT="$NOVNC_PORT" OPENCLAW_WS_STABILITY_HOLD_SEC="$ws_hold" python3 "$WS_CHECK" --all 2>/dev/null
 }
 
 WS_FAIL_REASON=""

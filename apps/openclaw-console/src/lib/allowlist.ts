@@ -407,7 +407,7 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     description:
       "Framebuffer-aware noVNC check. Runs guard, heals if needed, returns PASS/FAIL + verified noVNC URL.",
     remoteCommand: "cd /opt/ai-ops-runner && ./ops/openclaw_novnc_doctor.sh",
-    timeoutSec: 90,
+    timeoutSec: 120,
   },
   openclaw_novnc_shm_fix: {
     name: "openclaw_novnc_shm_fix",
@@ -415,7 +415,7 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     description:
       "Diagnose + recover shmget No space left on device. Applies sysctl, restarts noVNC, runs doctor. Writes artifacts/novnc_shm_fix/<run_id>/.",
     remoteCommand: "cd /opt/ai-ops-runner && bash ./ops/scripts/novnc_shm_fix.sh",
-    timeoutSec: 180,
+    timeoutSec: 360,
   },
   soma_fix_and_retry: {
     name: "soma_fix_and_retry",

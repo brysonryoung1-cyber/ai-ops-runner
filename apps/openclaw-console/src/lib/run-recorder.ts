@@ -93,6 +93,8 @@ const ACTION_PROJECT_MAP: Record<string, string> = {
   "pred_markets.report.health": "pred_markets",
   "pred_markets.report.daily": "pred_markets",
   openclaw_hq_audit: "infra_openclaw",
+  openclaw_novnc_doctor: "soma_kajabi",
+  openclaw_novnc_shm_fix: "soma_kajabi",
 };
 
 export function resolveProjectId(action: string): string {
