@@ -225,12 +225,35 @@ if echo "$SELFTEST_OUT" | grep -q 'APPLY_MODE=ssh_target'; then
 else
   fail "Remote target must select ssh_target mode (got: $SELFTEST_OUT)"
 fi
+# 14d: target=127.0.0.1 => local (aiops-1 self-apply)
+SELFTEST_OUT="$(OPENCLAW_TEST_HOSTNAME=other OPENCLAW_TEST_ROOT_DIR=/home/other OPENCLAW_VPS_SSH_HOST=root@127.0.0.1 "$APPLY_SCRIPT" --selftest-mode 2>/dev/null || true)"
+if echo "$SELFTEST_OUT" | grep -q 'APPLY_MODE=local'; then
+  pass "target=127.0.0.1 => local mode"
+else
+  fail "Loopback target must select local mode (got: $SELFTEST_OUT)"
+fi
 
 # ---------------------------------------------------------------------------
-# Test 15: Drift detection triggers deploy when console build_sha != origin/main
+# Test 15: APPLY_MODE_DRIFT assertion (no SSH when target=this host)
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- Test 15: Apply convergence (drift → deploy) ---"
+echo "--- Test 15: APPLY_MODE_DRIFT + local ignores SSH identity ---"
+if grep -q 'APPLY_MODE_DRIFT' "$APPLY_SCRIPT"; then
+  pass "Has APPLY_MODE_DRIFT hard assertion"
+else
+  fail "Must fail with APPLY_MODE_DRIFT when target=this host but ssh_target"
+fi
+if grep -q 'OPENCLAW_VPS_SSH_IDENTITY.*ignored' "$APPLY_SCRIPT" || grep -q 'Local mode:.*OPENCLAW_VPS_SSH_IDENTITY' "$APPLY_SCRIPT"; then
+  pass "Local mode ignores OPENCLAW_VPS_SSH_IDENTITY"
+else
+  fail "Script must document that local mode ignores SSH identity"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 16: Drift detection triggers deploy when console build_sha != origin/main
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 16: Apply convergence (drift → deploy) ---"
 if grep -q 'build_sha' "$APPLY_SCRIPT" && grep -q 'health_public' "$APPLY_SCRIPT"; then
   pass "Apply checks build_sha via health_public"
 else
