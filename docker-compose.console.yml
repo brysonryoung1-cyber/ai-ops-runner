@@ -3,13 +3,12 @@
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.console.yml up -d --build
 #
-# Console uses bridge network with extra_hosts so it can reach hostd via host.docker.internal.
-# hostd binds 127.0.0.1:8877 only. Expose to tailnet via:
+# Console uses network_mode: host so it can reach hostd at 127.0.0.1:8877 (hostd binds
+# 127.0.0.1 only). Console listens on 127.0.0.1:8787. Expose to tailnet via:
 #   sudo tailscale serve --bg --https=443 http://127.0.0.1:8787
 # NEVER bind console to 0.0.0.0.
 #
-# Host Executor (hostd): console calls OPENCLAW_HOSTD_URL (http://host.docker.internal:8877).
-# extra_hosts ensures host.docker.internal resolves on Linux (Docker 20.10+).
+# Host Executor (hostd): console calls http://127.0.0.1:8877. No SSH.
 # Artifacts: read-only mount from host artifacts dir.
 
 services:
@@ -19,18 +18,15 @@ services:
       dockerfile: Dockerfile
       args:
         OPENCLAW_BUILD_SHA: ${OPENCLAW_BUILD_SHA:-unknown}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    ports:
-      - "127.0.0.1:8787:8787"
+    network_mode: host
     environment:
       PORT: "8787"
-      HOSTNAME: "0.0.0.0"
+      HOSTNAME: "127.0.0.1"
       OPENCLAW_CONSOLE_TOKEN: "${OPENCLAW_CONSOLE_TOKEN}"
       OPENCLAW_ADMIN_TOKEN: "${OPENCLAW_ADMIN_TOKEN}"
-      OPENCLAW_HOSTD_URL: "${OPENCLAW_HOSTD_URL:-http://host.docker.internal:8877}"
+      OPENCLAW_HOSTD_URL: "${OPENCLAW_HOSTD_URL:-http://127.0.0.1:8877}"
       AIOPS_HOST: "${AIOPS_HOST}"
-      RUNNER_API_URL: "${RUNNER_API_URL:-http://test_runner_api:8000}"
+      RUNNER_API_URL: "${RUNNER_API_URL:-http://127.0.0.1:8000}"
       OPENCLAW_TRUST_TAILSCALE: "${OPENCLAW_TRUST_TAILSCALE:-1}"
       OPENCLAW_BUILD_SHA: "${OPENCLAW_BUILD_SHA:-}"
       OPENCLAW_CANONICAL_URL: "${OPENCLAW_CANONICAL_URL:-}"
