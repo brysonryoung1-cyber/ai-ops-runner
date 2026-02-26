@@ -33,3 +33,4 @@ apps/openclaw-console/artifacts/
 apps/openclaw-console/data/
 apps/openclaw-console/test-results/
 logs/
+test-results/

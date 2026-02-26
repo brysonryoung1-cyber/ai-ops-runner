@@ -14,6 +14,10 @@ interface SomaStatus {
   active_run_id: string | null;
   resume_action_available: boolean;
   artifact_links?: Record<string, string>;
+  framebuffer_url: string | null;
+  artifact_dir_url: string | null;
+  doctor_framebuffer_url: string | null;
+  doctor_artifact_dir_url: string | null;
 }
 
 const POLL_INTERVAL_MS = 30_000;
@@ -47,6 +51,10 @@ export default function GuidedHumanGateBanner() {
           active_run_id: statusData.active_run_id ?? statusData.last_run_id ?? null,
           resume_action_available: statusData.resume_action_available === true,
           artifact_links: statusData.artifact_links ?? {},
+          framebuffer_url: statusData.framebuffer_url ?? null,
+          artifact_dir_url: statusData.artifact_dir_url ?? null,
+          doctor_framebuffer_url: statusData.doctor_framebuffer_url ?? null,
+          doctor_artifact_dir_url: statusData.doctor_artifact_dir_url ?? null,
         });
       } else {
         setStatus(null);
@@ -97,7 +105,20 @@ export default function GuidedHumanGateBanner() {
     }
   }, [status?.novnc_url, embedNovnc]);
 
-  const framebufferPath = status?.artifact_links?.framebuffer ?? (status?.artifact_dir ? `${status.artifact_dir}/framebuffer.png` : null);
+  const framebufferUrl = status?.framebuffer_url ?? status?.doctor_framebuffer_url ?? null;
+  const framebufferIsDoctorFallback = !status?.framebuffer_url && !!status?.doctor_framebuffer_url;
+  const artifactDirUrl = status?.artifact_dir_url ?? status?.doctor_artifact_dir_url ?? null;
+
+  const handleCopyLinks = useCallback(() => {
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const lines: string[] = [];
+    if (status?.framebuffer_url) lines.push(`framebuffer: ${origin}${status.framebuffer_url}`);
+    if (status?.doctor_framebuffer_url) lines.push(`framebuffer (doctor fallback): ${origin}${status.doctor_framebuffer_url}`);
+    if (status?.artifact_dir_url) lines.push(`artifact_dir: ${origin}${status.artifact_dir_url}`);
+    if (status?.doctor_artifact_dir_url) lines.push(`artifact_dir (doctor fallback): ${origin}${status.doctor_artifact_dir_url}`);
+    const text = lines.length > 0 ? lines.join("\n") : "No links available";
+    navigator.clipboard.writeText(text);
+  }, [status]);
 
   if (!status || status.current_status !== "WAITING_FOR_HUMAN") return null;
 
@@ -130,21 +151,40 @@ export default function GuidedHumanGateBanner() {
           >
             {resumeLoading ? "Checking…" : "Resume after login"}
           </GlassButton>
-          {framebufferPath && (
+          {framebufferUrl ? (
             <Link
-              href={`/artifacts?path=${encodeURIComponent(framebufferPath)}`}
+              href={framebufferUrl}
               className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white/90 font-medium text-sm border border-white/20"
             >
-              Open framebuffer
+              Open framebuffer{framebufferIsDoctorFallback ? " (doctor fallback)" : ""}
             </Link>
+          ) : (
+            <span
+              className="px-4 py-2 rounded-xl bg-white/5 text-white/40 font-medium text-sm border border-white/10 cursor-not-allowed"
+              title="No framebuffer available yet"
+            >
+              Open framebuffer
+            </span>
           )}
-          {status.artifact_dir && (
+          {artifactDirUrl ? (
             <Link
-              href={`/artifacts?path=${encodeURIComponent(status.artifact_dir)}`}
+              href={artifactDirUrl}
               className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white/90 font-medium text-sm border border-white/20"
             >
               Open artifacts
             </Link>
+          ) : (
+            <span
+              className="px-4 py-2 rounded-xl bg-white/5 text-white/40 font-medium text-sm border border-white/10 cursor-not-allowed"
+              title="No artifact directory available"
+            >
+              Open artifacts
+            </span>
+          )}
+          {(framebufferUrl || artifactDirUrl) && (
+            <GlassButton variant="secondary" size="sm" onClick={handleCopyLinks}>
+              Copy links
+            </GlassButton>
           )}
           {status.instruction_line && (
             <GlassButton
