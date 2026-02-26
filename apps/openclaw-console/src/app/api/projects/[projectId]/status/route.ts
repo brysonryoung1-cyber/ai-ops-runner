@@ -24,6 +24,37 @@ function getActiveRunId(
   return lockInfo?.active_run_id ?? lastRunId;
 }
 
+/** Convert artifact_dir to URL path segments for /artifacts/[...path]. */
+function artifactDirToPathSegments(artifactDir: string | null): string[] {
+  if (!artifactDir) return [];
+  const stripped = artifactDir.replace(/^artifacts\/?/, "").replace(/\/$/, "");
+  return stripped ? stripped.split("/").filter(Boolean) : [];
+}
+
+/** Build direct /artifacts/[...path] URL (not query param). */
+function toArtifactUrl(artifactDir: string | null, file?: string): string | null {
+  const segs = artifactDirToPathSegments(artifactDir);
+  if (segs.length === 0) return null;
+  const path = file ? [...segs, file].join("/") : segs.join("/");
+  return `/artifacts/${path}`;
+}
+
+/** Find latest novnc_debug dir with framebuffer.png for doctor fallback. */
+function findLatestDoctorFramebufferDir(artifactsRoot: string): string | null {
+  const novncRoot = join(artifactsRoot, "novnc_debug");
+  if (!existsSync(novncRoot)) return null;
+  const dirs = readdirSync(novncRoot, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort()
+    .reverse();
+  for (const d of dirs.slice(0, 20)) {
+    const fbPath = join(novncRoot, d, "framebuffer.png");
+    if (existsSync(fbPath)) return `artifacts/novnc_debug/${d}`;
+  }
+  return null;
+}
+
 export const runtime = "nodejs";
 
 function getArtifactsRoot(): string {
@@ -175,6 +206,31 @@ export async function GET(
   const activeRunId = getActiveRunId(lastStatus, lastRunId, lockInfo);
   const resumeActionAvailable = lastStatus === "WAITING_FOR_HUMAN";
 
+  // Direct URLs for Guided Human Gate (single source of truth). Use /artifacts/[...path], NOT /artifacts?path=.
+  let framebufferUrl: string | null = null;
+  let artifactDirUrl: string | null = null;
+  let doctorFramebufferUrl: string | null = null;
+  let doctorArtifactDirUrl: string | null = null;
+
+  if (lastStatus === "WAITING_FOR_HUMAN") {
+    const repoRoot = process.env.OPENCLAW_REPO_ROOT || process.cwd();
+    const primaryFbPath = artifactDir ? join(repoRoot, artifactDir, "framebuffer.png") : null;
+    const primaryFbExists = primaryFbPath ? existsSync(primaryFbPath) : false;
+
+    artifactDirUrl = toArtifactUrl(artifactDir);
+    if (primaryFbExists && artifactDir) {
+      framebufferUrl = toArtifactUrl(artifactDir, "framebuffer.png");
+    }
+    // Fallback: run framebuffer missing → use latest noVNC doctor framebuffer
+    if (!framebufferUrl) {
+      const doctorDir = findLatestDoctorFramebufferDir(artifactsRoot);
+      if (doctorDir) {
+        doctorFramebufferUrl = toArtifactUrl(doctorDir, "framebuffer.png");
+        doctorArtifactDirUrl = toArtifactUrl(doctorDir);
+      }
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     build_sha: buildSha,
@@ -193,5 +249,9 @@ export async function GET(
     artifact_links: artifactLinks,
     error_class: errorClass,
     resume_action_available: resumeActionAvailable,
+    framebuffer_url: framebufferUrl,
+    artifact_dir_url: artifactDirUrl,
+    doctor_framebuffer_url: doctorFramebufferUrl,
+    doctor_artifact_dir_url: doctorArtifactDirUrl,
   });
 }
