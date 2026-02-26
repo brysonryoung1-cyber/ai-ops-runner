@@ -151,7 +151,8 @@ fi
 echo ""
 echo "==> D) Verify noVNC..."
 systemctl restart openclaw-novnc.service 2>/dev/null || true
-sleep 5
+sleep 12
+# Allow supervisor time to paint xsetroot + openbox before doctor framebuffer check
 
 # Wait for vnc.html
 for i in $(seq 1 15); do
