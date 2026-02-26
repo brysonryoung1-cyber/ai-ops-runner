@@ -25,6 +25,7 @@ mkdir -p "$ART_DIR"
 
 # ── A) Diagnose ──
 echo "==> A) Collecting diagnostics..."
+IPCS_BEFORE="$(ipcs -m 2>/dev/null | tail -n +4 | wc -l || echo 0)"
 {
   echo "=== df -h /dev/shm ==="
   df -h /dev/shm 2>/dev/null || echo "(df failed)"
@@ -41,6 +42,18 @@ echo "==> A) Collecting diagnostics..."
   echo "=== journalctl -u openclaw-novnc.service -n 200 ==="
   journalctl -u openclaw-novnc.service -n 200 --no-pager 2>/dev/null || echo "(journalctl failed)"
 } >"$ART_DIR/diagnostics.txt" 2>&1
+
+# Fail-fast: /dev/shm must be mounted and >= 64M
+SHM_SIZE_K="$(df -k /dev/shm 2>/dev/null | awk 'NR==2 {print $2}' || echo 0)"
+if [ "${SHM_SIZE_K:-0}" -lt 65536 ] 2>/dev/null; then
+  echo "  FAIL: /dev/shm too small or not mounted (${SHM_SIZE_K}K < 64M). error_class=SHM_DEVSHM_TOO_SMALL" >&2
+  python3 -c "
+import json
+d = {'classification': 'A1', 'error_class': 'SHM_DEVSHM_TOO_SMALL', 'shm_size_k': int('$SHM_SIZE_K'), 'required_k': 65536}
+with open('$ART_DIR/classification.json', 'w') as f: json.dump(d, f, indent=2)
+" 2>/dev/null || true
+  exit 1
+fi
 
 # Determine root cause from diagnostics
 ROOT_CAUSE="unknown"
@@ -61,6 +74,25 @@ if grep -q "shmget: No space left on device" "$ART_DIR/diagnostics.txt" 2>/dev/n
     ROOT_CAUSE="orphaned_shm_segments"
   fi
 fi
+
+# Write classification.json
+CLASSIFICATION="A"
+case "$ROOT_CAUSE" in
+  /dev/shm_full) CLASSIFICATION="A1" ;;
+  sysctl_shmmax_too_low) CLASSIFICATION="A2" ;;
+  orphaned_shm_segments) CLASSIFICATION="A3" ;;
+  *) CLASSIFICATION="A5" ;;  # namespace/permission/PrivateTmp
+esac
+python3 -c "
+import json
+d = {
+  'classification': '$CLASSIFICATION',
+  'root_cause': '$ROOT_CAUSE',
+  'ipcs_before': int('$IPCS_BEFORE'),
+  'shm_size_k': int('$SHM_SIZE_K'),
+}
+with open('$ART_DIR/classification.json', 'w') as f: json.dump(d, f, indent=2)
+" 2>/dev/null || true
 
 echo "  Root cause (inferred): $ROOT_CAUSE"
 echo "  Diagnostics: $ART_DIR/diagnostics.txt"
@@ -97,7 +129,8 @@ while read -r line; do
     ipcrm -m "$shmid" 2>/dev/null && ORPHAN_COUNT=$((ORPHAN_COUNT + 1)) || true
   fi
 done < <(ipcs -m 2>/dev/null | tail -n +4)
-[ "$ORPHAN_COUNT" -gt 0 ] && echo "  Cleared $ORPHAN_COUNT orphaned shm segments" || true
+IPCS_AFTER="$(ipcs -m 2>/dev/null | tail -n +4 | wc -l || echo 0)"
+[ "$ORPHAN_COUNT" -gt 0 ] && echo "  Cleared $ORPHAN_COUNT orphaned shm segments (ipcs before=$IPCS_BEFORE after=$IPCS_AFTER)" || true
 
 # ── C) Permanent fix ──
 echo ""
@@ -168,11 +201,15 @@ d = {
   'doctor_pass': bool($DOCTOR_PASS),
   'fix_applied': {
     'sysctl': '99-openclaw-novnc.conf',
-    'systemd': 'RuntimeDirectory, PrivateTmp',
+    'systemd': 'RuntimeDirectory, PrivateTmp=false',
   },
+  'ipcs_before': int('${IPCS_BEFORE:-0}'),
+  'ipcs_after': int('${IPCS_AFTER:-0}'),
+  'orphans_cleared': int('${ORPHAN_COUNT:-0}'),
   'artifacts': {
     'diagnostics': 'artifacts/novnc_shm_fix/$RUN_ID/diagnostics.txt',
     'proof': 'artifacts/novnc_shm_fix/$RUN_ID/proof.json',
+    'classification': 'artifacts/novnc_shm_fix/$RUN_ID/classification.json',
   },
 }
 with open('$PROOF', 'w') as f: json.dump(d, f, indent=2)

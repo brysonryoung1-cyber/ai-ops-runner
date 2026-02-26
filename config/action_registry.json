@@ -191,7 +191,7 @@
     {
       "id": "openclaw_novnc_shm_fix",
       "label": "noVNC shm Fix",
-      "timeout_sec": 180,
+      "timeout_sec": 300,
       "cmd_template": "cd ${ROOT_DIR} && bash ./ops/scripts/novnc_shm_fix.sh"
     },
     {

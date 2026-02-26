@@ -44,6 +44,10 @@ if [ -f "$ROOT_DIR/ops/sysctl/99-openclaw-novnc.conf" ]; then
   sudo cp "$ROOT_DIR/ops/sysctl/99-openclaw-novnc.conf" /etc/sysctl.d/99-openclaw-novnc.conf
   sudo sysctl --system >/dev/null 2>&1 || true
   echo "  sysctl 99-openclaw-novnc.conf: installed"
+  SHMMAX="$(sysctl -n kernel.shmmax 2>/dev/null || echo 0)"
+  if [ "${SHMMAX:-0}" -lt 67108864 ] 2>/dev/null; then
+    echo "  WARNING: sysctl kernel.shmmax=$SHMMAX < 64M (expected 268435456)" >&2
+  fi
 fi
 
 echo "openclaw-novnc: unit installed (start on demand via systemctl start openclaw-novnc)"
