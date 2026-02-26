@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
-import { executeAction, checkConnectivity, getHostdUrl } from "@/lib/hostd";
+import { executeAction, checkConnectivity, getHostdUrl, LONG_RUNNING_ACTIONS } from "@/lib/hostd";
 import { acquireLock, releaseLock, getLockInfo, forceClearLock } from "@/lib/action-lock";
 import {
   writeAuditEntry,
   deriveActor,
   hashParams,
 } from "@/lib/audit";
-import { buildRunRecord, writeRunRecord } from "@/lib/run-recorder";
+import { buildRunRecord, buildRunRecordStart, writeRunRecord } from "@/lib/run-recorder";
 
 export const runtime = "nodejs";
 
@@ -118,6 +118,103 @@ function getMaintenanceMode(): { maintenance_mode: boolean; deploy_run_id?: stri
     };
   } catch {
     return { maintenance_mode: false };
+  }
+}
+
+/** Background execution for long-running actions. Writes run record and releases lock on completion. */
+async function runActionAsync(
+  actionName: string,
+  runId: string,
+  startedAt: Date,
+  actor: string
+): Promise<void> {
+  try {
+    const result = await executeAction(actionName);
+    const finishedAt = new Date();
+
+    if (result.httpStatus === 423) {
+      writeAuditEntry({
+        timestamp: finishedAt.toISOString(),
+        actor,
+        action_name: actionName,
+        params_hash: hashParams({ action: actionName }),
+        exit_code: null,
+        duration_ms: finishedAt.getTime() - startedAt.getTime(),
+        error: `error_class: ${result.error_class ?? "LANE_LOCKED_SOMA_FIRST"}`,
+      });
+      writeRunRecord(
+        buildRunRecord(
+          actionName,
+          startedAt,
+          finishedAt,
+          null,
+          false,
+          result.error_class ?? "LANE_LOCKED_SOMA_FIRST",
+          runId
+        )
+      );
+    } else {
+      let errorForRecord = result.error || null;
+      const isProjectAction =
+        actionName === "soma_kajabi_phase0" ||
+        actionName === "soma_kajabi_auto_finish" ||
+        actionName === "soma_run_to_done" ||
+        actionName === "soma_kajabi_reauth_and_resume" ||
+        actionName === "soma_kajabi_session_check" ||
+        actionName === "soma_zane_finish_plan" ||
+        actionName === "openclaw_hq_audit" ||
+        actionName.startsWith("pred_markets.");
+      if (isProjectAction && result.stdout) {
+        try {
+          const parsed = JSON.parse(result.stdout.trim().split("\n").pop() || "{}");
+          if (parsed.error_class) {
+            errorForRecord = `error_class: ${parsed.error_class}`;
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+
+      writeAuditEntry({
+        timestamp: finishedAt.toISOString(),
+        actor,
+        action_name: actionName,
+        params_hash: hashParams({ action: actionName }),
+        exit_code: result.exitCode,
+        duration_ms: result.durationMs,
+        ...(errorForRecord != null && { error: errorForRecord }),
+      });
+
+      const runRecord = buildRunRecord(
+        actionName,
+        startedAt,
+        finishedAt,
+        result.exitCode,
+        result.ok,
+        errorForRecord,
+        runId,
+        undefined,
+        result.artifact_dir ?? undefined
+      );
+      writeRunRecord(runRecord);
+    }
+  } catch (err) {
+    const finishedAt = new Date();
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    writeAuditEntry({
+      timestamp: finishedAt.toISOString(),
+      actor,
+      action_name: actionName,
+      params_hash: hashParams({ action: actionName }),
+      exit_code: null,
+      duration_ms: finishedAt.getTime() - startedAt.getTime(),
+      ...(errorMsg && { error: errorMsg }),
+    });
+    writeRunRecord(
+      buildRunRecord(actionName, startedAt, finishedAt, null, false, errorMsg, runId)
+    );
+  } finally {
+    releaseLock(actionName);
   }
 }
 
@@ -335,6 +432,21 @@ export async function POST(req: NextRequest) {
         artifact_dir: artifactDir,
       },
       { status: 502 }
+    );
+  }
+
+  // Async path: long-running actions return 202 immediately; client polls /api/runs?id=<run_id>
+  if (LONG_RUNNING_ACTIONS.has(actionName)) {
+    writeRunRecord(buildRunRecordStart(actionName, startedAt, runId, undefined, "running"));
+    void runActionAsync(actionName, runId, startedAt, actor);
+    return NextResponse.json(
+      {
+        ok: true,
+        run_id: runId,
+        status: "running",
+        message: "Poll GET /api/runs?id=" + runId + " for status",
+      },
+      { status: 202 }
     );
   }
 

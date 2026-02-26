@@ -162,6 +162,13 @@
       "cmd_template": "cd ${ROOT_DIR} && ${ROOT_DIR}/.venv-hostd/bin/python ./ops/scripts/soma_kajabi_auto_finish.py"
     },
     {
+      "id": "soma_run_to_done",
+      "label": "Run Soma to DONE",
+      "project_id": "soma_kajabi",
+      "timeout_sec": 2100,
+      "cmd_template": "cd ${ROOT_DIR} && ${ROOT_DIR}/.venv-hostd/bin/python ./ops/scripts/soma_run_to_done.py"
+    },
+    {
       "id": "soma_kajabi_session_check",
       "label": "Session Check",
       "project_id": "soma_kajabi",

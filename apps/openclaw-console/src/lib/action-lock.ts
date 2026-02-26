@@ -52,6 +52,7 @@ const CONCURRENT_ALLOWED: ReadonlySet<string> = new Set([
 /** Long-running actions: 30 min TTL (auto_finish can run ~25 min). */
 const LONG_RUNNING_ACTIONS = new Set([
   "soma_kajabi_auto_finish",
+  "soma_run_to_done",
   "soma_kajabi_reauth_and_resume",
   "soma_kajabi_capture_interactive",
   "deploy_and_verify",

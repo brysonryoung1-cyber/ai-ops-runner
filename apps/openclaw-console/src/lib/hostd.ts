@@ -12,10 +12,11 @@
 import { Agent, fetch as undiciFetch } from "undici";
 import { ACTION_TO_HOSTD } from "./action_registry.generated";
 
-/** Actions that may run >5 min; use extended exec timeout to avoid undici bodyTimeout. */
-const LONG_RUNNING_ACTIONS = new Set([
+/** Actions that may run >5 min; use extended exec timeout. Exported for async exec routing. */
+export const LONG_RUNNING_ACTIONS = new Set([
   "soma_kajabi_reauth_and_resume",
   "soma_kajabi_auto_finish",
+  "soma_run_to_done",
   "soma_kajabi_capture_interactive",
   "soma_kajabi_session_check",
   "soma_kajabi_unblock_and_run",
