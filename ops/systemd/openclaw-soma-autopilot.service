@@ -1,0 +1,11 @@
+[Unit]
+Description=OpenClaw Soma Autopilot — timer-driven soma_run_to_done tick
+After=ai-ops-runner.service
+Wants=ai-ops-runner.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai-ops-runner
+ExecStart=/usr/bin/python3 /opt/ai-ops-runner/ops/scripts/soma_autopilot_tick.py
+TimeoutStartSec=60
+Environment=OPENCLAW_REPO_ROOT=/opt/ai-ops-runner

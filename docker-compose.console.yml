@@ -43,6 +43,7 @@ services:
       - ./docs:/app/docs:ro
       - ./artifacts:/app/artifacts:rw
       - /var/lib/ai-ops-runner/autopilot:/var/lib/ai-ops-runner/autopilot:ro
+      - /var/lib/ai-ops-runner/soma_autopilot:/var/lib/ai-ops-runner/soma_autopilot:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8787/ || exit 1"]
       interval: 30s

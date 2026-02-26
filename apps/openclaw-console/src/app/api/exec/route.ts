@@ -612,14 +612,25 @@ export async function GET(req: NextRequest) {
   if (originError) return originError;
 
   const check = req.nextUrl.searchParams.get("check");
+  const action = req.nextUrl.searchParams.get("action");
 
   if (check === "connectivity") {
     const result = await checkConnectivity();
     return NextResponse.json(result, { status: result.ok ? 200 : 502 });
   }
 
+  if (check === "lock" && action) {
+    const lockInfo = getLockInfo(action);
+    return NextResponse.json({
+      ok: true,
+      locked: !!lockInfo,
+      active_run_id: lockInfo?.active_run_id ?? null,
+      started_at: lockInfo?.started_at ?? null,
+    });
+  }
+
   return NextResponse.json(
-    { error: "Use POST with { action } or GET with ?check=connectivity" },
+    { error: "Use POST with { action } or GET with ?check=connectivity or ?check=lock&action=<name>" },
     { status: 400 }
   );
 }

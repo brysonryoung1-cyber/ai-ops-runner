@@ -148,16 +148,17 @@ if [ "$DELIV_HOST_EXECUTOR_REACHABLE" != "true" ]; then
 fi
 
 echo ""
-echo "=== STEP 6 — Trigger ONE Apply from HQ (no-click) ==="
+echo "=== STEP 6 — Trigger ONE Apply from HQ (no-click, Mode: local) ==="
 APPLY_EXIT=0
 APPLY_OUTPUT=""
-APPLY_SCRIPT="$OPS_DIR/vps_apply_aiops1.sh"
+# On aiops-1, Apply runs via HQ/hostd in Mode: local (no SSH). Use hq_apply.sh.
+APPLY_SCRIPT="$OPS_DIR/hq_apply.sh"
 if [ "$DELIV_HOST_EXECUTOR_REACHABLE" = "true" ]; then
   if [ ! -x "$APPLY_SCRIPT" ]; then
     echo "ERROR: Apply script missing or not executable: $APPLY_SCRIPT (fail-closed)" >&2
     exit 1
   fi
-  APPLY_OUTPUT="$(OPENCLAW_HQ_BASE="$BASE" "$APPLY_SCRIPT" 2>&1)" || APPLY_EXIT=$?
+  APPLY_OUTPUT="$(OPENCLAW_HQ_BASE="$BASE" "$APPLY_SCRIPT" apply 2>&1)" || APPLY_EXIT=$?
   echo "$APPLY_OUTPUT"
   DELIV_APPLY_EXIT_CODE="$APPLY_EXIT"
   DELIV_APPLY_RUN_ID="$(echo "$APPLY_OUTPUT" | sed -n 's/run_id: *//p' | head -1)"

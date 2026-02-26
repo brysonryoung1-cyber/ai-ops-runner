@@ -16,15 +16,19 @@ fi
 # Ensure hostd venv with Playwright + Chromium (required for /api/exec soma_kajabi_phase0)
 sudo bash "$ROOT_DIR/ops/scripts/ensure_hostd_venv_playwright.sh"
 
-# Ensure hostd env has OPENCLAW_VPS_SSH_IDENTITY when deploy key exists (Apply SSH to self)
+# On aiops-1, Apply runs in Mode: local (no SSH). Do NOT set OPENCLAW_VPS_SSH_IDENTITY.
+# Only set it when NOT on aiops-1 (ship host deploying to remote VPS).
 SECRETS_DIR="/etc/ai-ops-runner/secrets"
 DEPLOY_KEY="${SECRETS_DIR}/openclaw_ssh/vps_deploy_ed25519"
 HOSTD_ENV="${SECRETS_DIR}/openclaw_hostd.env"
 if [ -f "$DEPLOY_KEY" ]; then
   sudo mkdir -p "$SECRETS_DIR"
-  if ! sudo grep -q "OPENCLAW_VPS_SSH_IDENTITY" "$HOSTD_ENV" 2>/dev/null; then
-    echo "OPENCLAW_VPS_SSH_IDENTITY=$DEPLOY_KEY" | sudo tee -a "$HOSTD_ENV" >/dev/null
-    echo "  Set OPENCLAW_VPS_SSH_IDENTITY in $HOSTD_ENV for Apply (SSH to self)"
+  HOSTNAME_SHORT="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo "")"
+  if [ "$HOSTNAME_SHORT" != "aiops-1" ] && [ "$ROOT_DIR" != "/opt/ai-ops-runner" ]; then
+    if ! sudo grep -q "OPENCLAW_VPS_SSH_IDENTITY" "$HOSTD_ENV" 2>/dev/null; then
+      echo "OPENCLAW_VPS_SSH_IDENTITY=$DEPLOY_KEY" | sudo tee -a "$HOSTD_ENV" >/dev/null
+      echo "  Set OPENCLAW_VPS_SSH_IDENTITY in $HOSTD_ENV for Apply (remote SSH)"
+    fi
   fi
 fi
 

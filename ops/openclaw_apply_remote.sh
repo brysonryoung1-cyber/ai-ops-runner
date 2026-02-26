@@ -47,7 +47,8 @@ if [[ ! "$TARGET_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 # Deterministic local-mode detection (no SSH when target is this host)
-# FORCE local if ANY of: hostname=aiops-1, repo path=/opt/ai-ops-runner, or target IP = this host's Tailscale IP
+# FORCE local if ANY of: hostname=aiops-1, repo path=/opt/ai-ops-runner, target IP = this host's Tailscale IP,
+#   or target is loopback (127.0.0.1, ::1). In local mode, OPENCLAW_VPS_SSH_IDENTITY is ignored.
 # Selftest override: OPENCLAW_TEST_HOSTNAME, OPENCLAW_TEST_ROOT_DIR (used only when set)
 LOCAL_TAILSCALE_IP=""
 if command -v tailscale >/dev/null 2>&1; then
@@ -62,6 +63,8 @@ elif [ "$ROOT_DIR_FOR_DETECT" = "/opt/ai-ops-runner" ]; then
   APPLY_MODE="local"
 elif [ -n "$LOCAL_TAILSCALE_IP" ] && [ "$TARGET_IP" = "$LOCAL_TAILSCALE_IP" ]; then
   APPLY_MODE="local"
+elif [ "$TARGET_IP" = "127.0.0.1" ] || [ "$TARGET_IP" = "::1" ] || [ "$TARGET_HOST" = "localhost" ]; then
+  APPLY_MODE="local"
 fi
 
 # Selftest mode: print mode and exit (no SSH, no deploy) — must run before SSH key check
@@ -72,7 +75,22 @@ if [ "${1:-}" = "--selftest-mode" ]; then
   exit 0
 fi
 
-# ssh_target mode: require SSH key (fail-closed)
+# APPLY_MODE_DRIFT: fail if target is this host but we would require SSH (detection bug)
+# Never prompt for SSH key when target resolves to this host.
+TARGET_IS_THIS_HOST=0
+[ "$HOSTNAME_SHORT" = "aiops-1" ] && TARGET_IS_THIS_HOST=1
+[ "$ROOT_DIR_FOR_DETECT" = "/opt/ai-ops-runner" ] && TARGET_IS_THIS_HOST=1
+[ -n "$LOCAL_TAILSCALE_IP" ] && [ "$TARGET_IP" = "$LOCAL_TAILSCALE_IP" ] && TARGET_IS_THIS_HOST=1
+[ "$TARGET_IP" = "127.0.0.1" ] || [ "$TARGET_IP" = "::1" ] || [ "$TARGET_HOST" = "localhost" ] && TARGET_IS_THIS_HOST=1
+if [ "$TARGET_IS_THIS_HOST" = "1" ] && [ "$APPLY_MODE" = "ssh_target" ]; then
+  echo "=== openclaw_apply_remote.sh: APPLY_MODE_DRIFT ===" >&2
+  echo "  error_class: APPLY_MODE_DRIFT" >&2
+  echo "  Target ($VPS_HOST) resolves to this host but mode=ssh_target. Detection bug." >&2
+  echo "  Run in Mode: local. Never prompt for SSH key when target is this host." >&2
+  exit 1
+fi
+
+# ssh_target mode: require SSH key (fail-closed). Local mode: OPENCLAW_VPS_SSH_IDENTITY ignored.
 SSH_OPTS="-o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
 if [ "$APPLY_MODE" = "ssh_target" ]; then
   if [ -z "${OPENCLAW_VPS_SSH_IDENTITY:-}" ] || [ ! -r "${OPENCLAW_VPS_SSH_IDENTITY}" ]; then
