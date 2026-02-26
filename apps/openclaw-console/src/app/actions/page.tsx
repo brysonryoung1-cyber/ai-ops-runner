@@ -44,6 +44,13 @@ const ACTIONS: ActionDef[] = [
     variant: "secondary",
   },
   {
+    action: "openclaw_novnc_shm_fix",
+    label: "noVNC shm Fix",
+    description:
+      "Diagnose + recover shmget No space left on device. Applies sysctl, restarts noVNC, runs doctor.",
+    variant: "secondary",
+  },
+  {
     action: "doctor",
     label: "Run Doctor",
     description: "Full health check of the OpenClaw stack on aiops-1",
