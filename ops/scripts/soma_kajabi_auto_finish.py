@@ -617,6 +617,48 @@ def _run_main(root: Path, out_dir: Path, run_id: str, result_state: dict[str, ob
             # session_check PASS → retry phase0 (continue loop)
             continue
 
+        # Auth gate: NEVER hard-fail; always WAITING_FOR_HUMAN (HARD RULE)
+        if is_auth_needed_error(error_class):
+            from novnc_ready import ensure_novnc_ready_with_recovery
+            ready, url, err_class, journal_artifact = ensure_novnc_ready_with_recovery(out_dir, run_id)
+            if not ready and err_class:
+                write_stage(out_dir, "capture_interactive", "failed", last_error_class=err_class or "NOVNC_BACKEND_UNAVAILABLE")
+                set_result("FAILURE", stage="capture_interactive", error_class=err_class, message=f"noVNC backend unavailable. Journal: {journal_artifact or 'N/A'}")
+                return _fail_closed(out_dir, run_id, err_class, f"noVNC backend unavailable. Journal: {journal_artifact or 'N/A'}")
+            _run_self_heal(root, out_dir, run_id, phase="waiting_for_human")
+            artifact_dir = f"artifacts/novnc_debug/{run_id}"
+            for heal_attempt in range(3):
+                _run_kajabi_ui_ensure(root, run_id)
+                doctor_ok, artifact_dir = _run_doctor_for_framebuffer(root, run_id)
+                if doctor_ok:
+                    break
+                if heal_attempt < 2:
+                    subprocess.run(["systemctl", "restart", "openclaw-novnc"], capture_output=True, timeout=15)
+                    time.sleep(5)
+            if not doctor_ok:
+                write_stage(out_dir, "kajabi_ui_ensure", "failed", last_error_class=KAJABI_UI_NOT_PRESENT)
+                set_result("FAILURE", stage="kajabi_ui_ensure", error_class=KAJABI_UI_NOT_PRESENT, message="Kajabi UI not present on noVNC after 3 self-heal attempts.")
+                return _fail_closed(out_dir, run_id, KAJABI_UI_NOT_PRESENT, "Kajabi UI not present on noVNC after 3 self-heal attempts.")
+            instruction = INSTRUCTION_LINE
+            set_result("WAITING_FOR_HUMAN", novnc_url=url, instruction_line=instruction)
+            write_result_json(out_dir, "WAITING_FOR_HUMAN", run_id=run_id, novnc_url=url, instruction_line=instruction)
+            _emit_waiting_for_human(out_dir, url, instruction, run_id, artifact_dir)
+            write_stage(out_dir, "session_check", "polling")
+            append_summary_line(out_dir, "[session_check] polling for reauth (auth gate)")
+            start = time.monotonic()
+            artifact_dir_val = f"artifacts/soma_kajabi/auto_finish/{run_id}"
+            while time.monotonic() - start < _reauth_poll_timeout():
+                _touch_lock_heartbeat(root, artifact_dir=artifact_dir_val)
+                sc_rc, sc_out = _run_session_check(root, venv_python, use_exit_node)
+                sc_doc = _parse_last_json_line(sc_out)
+                if sc_rc == 0 and sc_doc.get("ok"):
+                    write_stage(out_dir, "session_check", "done")
+                    append_summary_line(out_dir, "[session_check] PASS - resuming pipeline")
+                    continue
+                time.sleep(SESSION_CHECK_POLL_INTERVAL)
+            write_stage(out_dir, "session_check", "failed", last_error_class=KAJABI_REAUTH_TIMEOUT)
+            set_result("TIMEOUT", stage="session_check", error_class=KAJABI_REAUTH_TIMEOUT, message="Human reauth timed out.")
+            return _fail_closed(out_dir, run_id, KAJABI_REAUTH_TIMEOUT, "Human reauth timed out. session_check did not PASS.")
         write_stage(out_dir, "phase0", "failed", last_error_class=error_class or "PHASE0_FAILED")
         set_result("FAILURE", stage="phase0", error_class=error_class or "PHASE0_FAILED", message=doc.get("recommended_next_action", phase0_out[:500]) or "Phase0 failed")
         return _fail_closed(

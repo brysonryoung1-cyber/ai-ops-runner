@@ -163,7 +163,18 @@ function extractFromArtifactDir(artifactDir: string): {
       if (data.error_class) result.error_class = data.error_class;
       if (data.novnc_url) result.novnc_url = data.novnc_url;
       if (data.instruction_line) result.instruction_line = data.instruction_line;
-      return result;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // WAITING_FOR_HUMAN.json (auth gate artifact; fills novnc_url when RESULT has FAILURE + auth error_class)
+  const wfhPath = join(fullPath, "WAITING_FOR_HUMAN.json");
+  if (existsSync(wfhPath)) {
+    try {
+      const data = JSON.parse(readFileSync(wfhPath, "utf-8"));
+      if (data.novnc_url) result.novnc_url = data.novnc_url;
+      if (data.instruction_line) result.instruction_line = data.instruction_line;
     } catch {
       /* ignore */
     }
@@ -289,6 +300,25 @@ export function resolveSomaLastRun(): SomaLastRunResolved {
   let rawStatus = extracted.status ?? runRecord.status ?? "UNKNOWN";
   if (rawStatus === "success") rawStatus = "SUCCESS";
   if (rawStatus === "failure" || rawStatus === "error") rawStatus = "FAILURE";
+
+  const AUTH_NEEDED_ERROR_CLASSES = new Set([
+    "KAJABI_CLOUDFLARE_BLOCKED",
+    "KAJABI_NOT_LOGGED_IN",
+    "KAJABI_SESSION_EXPIRED",
+    "KAJABI_CAPTURE_INTERACTIVE_FAILED",
+    "SESSION_CHECK_TIMEOUT",
+    "SESSION_CHECK_BROWSER_CLOSED",
+    "KAJABI_INTERACTIVE_CAPTURE_ERROR",
+    "KAJABI_INTERACTIVE_CAPTURE_TIMEOUT",
+  ]);
+  const errorClass = extracted.error_class ?? runRecord.error_class ?? null;
+  if (
+    (rawStatus === "FAILURE" || rawStatus === "TIMEOUT") &&
+    errorClass &&
+    AUTH_NEEDED_ERROR_CLASSES.has(errorClass)
+  ) {
+    rawStatus = "WAITING_FOR_HUMAN";
+  }
 
   const validStatuses = ["SUCCESS", "WAITING_FOR_HUMAN", "FAILURE", "TIMEOUT", "BLOCKED", "running"] as const;
   const finalStatus = validStatuses.includes(rawStatus as (typeof validStatuses)[number])

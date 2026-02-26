@@ -90,6 +90,7 @@ _check_framebuffer() {
   local attempt warmup_attempt is_black=1
   local FB_WARMUP_MAX=6
   local FB_WARMUP_SLEEP=5
+  [[ "${OPENCLAW_NOVNC_DOCTOR_FAST:-0}" = "1" ]] && { FB_WARMUP_MAX=1; FB_WARMUP_SLEEP=2; }
   local KAJABI_ENSURE="$ROOT_DIR/ops/scripts/kajabi_ui_ensure.sh"
 
   for warmup_attempt in $(seq 1 "$FB_WARMUP_MAX"); do

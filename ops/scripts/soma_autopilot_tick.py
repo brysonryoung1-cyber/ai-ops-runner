@@ -81,7 +81,24 @@ def _curl(method: str, path: str, data: dict | None = None, timeout: int = 15) -
         return -1, str(e)
 
 
-DOCTOR_TIMEOUT = 90
+DOCTOR_FAST_TIMEOUT = 35
+DOCTOR_DEEP_TIMEOUT = 90
+
+
+def _journal_indicates_shm(root: Path) -> bool:
+    """Check if openclaw-novnc journal indicates shmget or /dev/shm constraint."""
+    try:
+        r = subprocess.run(
+            ["journalctl", "-u", "openclaw-novnc.service", "-n", "50", "--no-pager"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=str(root),
+        )
+        out = (r.stdout or "") + (r.stderr or "")
+        return "shmget" in out or "No space left on device" in out or "/dev/shm" in out.lower()
+    except Exception:
+        return False
 
 
 def _last_proof_status(root: Path) -> str | None:
@@ -101,28 +118,32 @@ def _last_proof_status(root: Path) -> str | None:
     return None
 
 
-def _run_novnc_doctor(root: Path) -> bool:
-    """Run openclaw_novnc_doctor (DEEP). Return True if PASS."""
+def _run_novnc_doctor(root: Path, fast: bool = False) -> tuple[bool, str | None]:
+    """Run openclaw_novnc_doctor. Return (ok, error_class). FAST ~25s, DEEP ~90s."""
     doctor = root / "ops" / "openclaw_novnc_doctor.sh"
     if not doctor.exists() or not os.access(doctor, os.X_OK):
-        return True
+        return True, None
+    args = [str(doctor)]
+    if fast:
+        args.append("--fast")
+    timeout = DOCTOR_FAST_TIMEOUT if fast else DOCTOR_DEEP_TIMEOUT
     try:
         r = subprocess.run(
-            [str(doctor)],
+            args,
             capture_output=True,
             text=True,
-            timeout=DOCTOR_TIMEOUT,
+            timeout=timeout,
             cwd=str(root),
         )
-        if r.returncode != 0:
-            return False
         line = (r.stdout or "").strip().split("\n")[-1]
         if line:
             doc = json.loads(line)
-            return doc.get("ok", False)
-        return False
+            if doc.get("ok", False):
+                return True, None
+            return False, doc.get("error_class")
+        return False, None
     except (subprocess.TimeoutExpired, json.JSONDecodeError):
-        return False
+        return False, "DOCTOR_TIMEOUT"
 
 
 def _is_soma_run_to_done_active() -> bool:
@@ -254,15 +275,19 @@ def main() -> int:
             _write_status_artifact(root, "FAIL", error_class="HOSTD_UNREACHABLE", fail_count=fail_count)
             return 1
 
-    # 7. noVNC doctor (DEEP) — run recovery chain if FAIL
-    if not _run_novnc_doctor(root):
-        # Recovery: shm_fix → restart → doctor retry
-        _curl("POST", "/api/exec", data={"action": "openclaw_novnc_shm_fix"}, timeout=200)
-        time.sleep(5)
-        _curl("POST", "/api/exec", data={"action": "openclaw_novnc_restart"}, timeout=30)
+    # 7. noVNC doctor FAST first — only run shm_fix if journal indicates shm
+    doctor_ok, doctor_err = _run_novnc_doctor(root, fast=True)
+    if not doctor_ok:
+        # Only run shm_fix when journal indicates shmget or /dev/shm constraint
+        run_shm_fix = _journal_indicates_shm(root)
+        if run_shm_fix:
+            _curl("POST", "/api/exec", data={"action": "openclaw_novnc_shm_fix"}, timeout=300)
+            time.sleep(5)
+        # Restart only if service not active or ports missing (doctor_err hints)
+        _curl("POST", "/api/exec", data={"action": "openclaw_novnc_restart"}, timeout=60)
         time.sleep(15)
-        if not _run_novnc_doctor(root):
-            # Still FAIL: BLOCKED, no Soma trigger
+        doctor_ok, _ = _run_novnc_doctor(root, fast=False)
+        if not doctor_ok:
             _write_status_artifact(
                 root, "SKIP", current_status="BLOCKED", error_class="novnc_not_ready"
             )
