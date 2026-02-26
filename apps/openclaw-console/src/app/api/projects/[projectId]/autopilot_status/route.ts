@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { resolveSomaLastRun } from "@/lib/soma-last-run-resolver";
+import { getLockInfo } from "@/lib/action-lock";
 
 export const runtime = "nodejs";
 
@@ -103,12 +104,16 @@ export async function GET(
   let novncUrl: string | null = null;
   let instructionLine: string | null = null;
   let artifactDir: string | null = null;
+  let activeRunId: string | null = lastRunId;
   if (currentStatus === "WAITING_FOR_HUMAN") {
     const resolved = resolveSomaLastRun();
     novncUrl = resolved.novnc_url;
     instructionLine = resolved.instruction_line;
     artifactDir = resolved.artifact_dir;
+    const lockInfo = getLockInfo("soma_kajabi_auto_finish");
+    activeRunId = lockInfo?.active_run_id ?? resolved.run_id ?? lastRunId;
   }
+  const resumeActionAvailable = currentStatus === "WAITING_FOR_HUMAN";
 
   return NextResponse.json({
     ok: true,
@@ -117,6 +122,7 @@ export async function GET(
     fail_count: failCount,
     last_tick: lastTick,
     last_run_id: lastRunId,
+    active_run_id: activeRunId,
     current_status: currentStatus,
     outcome,
     error_class: errorClass,
@@ -125,5 +131,6 @@ export async function GET(
     novnc_url: novncUrl,
     instruction_line: instructionLine,
     artifact_dir: artifactDir,
+    resume_action_available: resumeActionAvailable,
   });
 }
