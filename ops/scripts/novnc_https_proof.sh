@@ -100,7 +100,8 @@ d = {
   },
   'proof_dir': 'artifacts/hq_proofs/novnc_https_fix/' + os.environ.get('PROOF_TS', ''),
 }
-with open(os.environ.get('PROOF_DIR', ''), 'w') as f:
+proof_path = os.path.join(os.environ.get('PROOF_DIR', ''), 'proof.json')
+with open(proof_path, 'w') as f:
     json.dump(d, f, indent=2)
 "
 
