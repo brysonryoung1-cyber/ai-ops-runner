@@ -8,4 +8,4 @@ if [ -d "$SECRETS_DIR" ]; then
   # Optional: one file with key per line for other providers
   true
 fi
-exec litellm --config /etc/litellm/config.yaml --port 4000 --host 0.0.0.0
+exec litellm --config /etc/litellm/config.yaml --port 4000 --host 127.0.0.1
