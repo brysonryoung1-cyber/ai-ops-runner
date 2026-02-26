@@ -39,8 +39,9 @@ EnvironmentFile=-/etc/ai-ops-runner/secrets/openclaw_hostd.env
 Environment=PLAYWRIGHT_BROWSERS_PATH=/var/lib/ai-ops-runner/playwright-browsers
 ExecStart=$VENV_PYTHON $ROOT_DIR/ops/openclaw_hostd.py
 WorkingDirectory=$ROOT_DIR
-Restart=on-failure
+Restart=always
 RestartSec=2
+StartLimitIntervalSec=0
 TimeoutStartSec=10
 TimeoutStopSec=10
 
