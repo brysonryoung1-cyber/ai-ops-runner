@@ -4,6 +4,11 @@ After=network.target
 
 [Service]
 Type=simple
+# Runtime dirs: clear-on-start, avoid shm leak across restarts
+RuntimeDirectory=openclaw-novnc openclaw
+RuntimeDirectoryMode=0755
+# Private /tmp: isolate X locks, avoid cross-run pollution
+PrivateTmp=true
 # Explicit DISPLAY and ports (overridden by next.env when capture writes it)
 Environment=OPENCLAW_NOVNC_ARTIFACT_DIR=/run/openclaw-novnc
 Environment=OPENCLAW_NOVNC_PORT=6080

@@ -39,4 +39,11 @@ if [ -f "$ROOT_DIR/config/novnc_display.env" ]; then
   echo "  novnc_display.env: installed"
 fi
 
+# SysV shm limits (fixes shmget: No space left on device)
+if [ -f "$ROOT_DIR/ops/sysctl/99-openclaw-novnc.conf" ]; then
+  sudo cp "$ROOT_DIR/ops/sysctl/99-openclaw-novnc.conf" /etc/sysctl.d/99-openclaw-novnc.conf
+  sudo sysctl --system >/dev/null 2>&1 || true
+  echo "  sysctl 99-openclaw-novnc.conf: installed"
+fi
+
 echo "openclaw-novnc: unit installed (start on demand via systemctl start openclaw-novnc)"
