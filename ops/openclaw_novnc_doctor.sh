@@ -37,7 +37,7 @@ MAX_WS_RETRIES=3
 
 mkdir -p "$ART_DIR"
 
-# Get Tailscale URL for noVNC
+# Get Tailscale URL for noVNC. Prefer HTTPS /novnc path (same origin as HQ) to avoid mixed-content blank.
 _get_novnc_url() {
   if command -v tailscale >/dev/null 2>&1; then
     local dns
@@ -50,11 +50,12 @@ try:
 except: pass
 " 2>/dev/null)"
     if [ -n "$dns" ] && [[ "$dns" == *".ts.net" ]]; then
-      echo "http://${dns}:${NOVNC_PORT}/vnc.html?autoconnect=1"
+      # Canonical: https same-host /novnc path (avoids http:6080 mixed-content blank)
+      echo "https://${dns}/novnc/vnc.html?autoconnect=1"
       return
     fi
   fi
-  echo "http://<TAILSCALE_IP>:$NOVNC_PORT/vnc.html?autoconnect=1"
+  echo "https://<TAILSCALE_HOST>/novnc/vnc.html?autoconnect=1"
 }
 
 NOVNC_URL="$(_get_novnc_url)"

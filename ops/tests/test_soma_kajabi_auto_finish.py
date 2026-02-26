@@ -399,7 +399,9 @@ def test_waiting_for_human_contract_includes_novnc_url_and_instruction(tmp_path)
     url = wfh["novnc_url"]
     assert isinstance(url, str)
     assert url.startswith("http://") or url.startswith("https://")
-    assert ":6080" in url and "vnc.html" in url
+    assert "vnc.html" in url
+    # Canonical: https://host/novnc/vnc.html (same-origin) or legacy http://host:6080/vnc.html
+    assert "/novnc/" in url or ":6080" in url
     assert "instruction" in wfh or "instruction_line" in wfh
     instr = wfh.get("instruction") or wfh.get("instruction_line", "")
     assert len(instr) > 10
@@ -483,7 +485,7 @@ def test_is_auth_needed_error_expands_to_kajabi_not_logged_in(tmp_path):
     assert (out_dir / "WAITING_FOR_HUMAN.json").exists()
     wfh = json.loads((out_dir / "WAITING_FOR_HUMAN.json").read_text())
     assert wfh["novnc_url"]
-    assert ":6080" in wfh["novnc_url"]
+    assert "vnc.html" in wfh["novnc_url"]
 
 
 def test_reauth_timeout_emits_artifact_bundle(tmp_path):

@@ -23,8 +23,8 @@ def test_ensure_novnc_ready_retries_on_doctor_fail(tmp_path):
         nonlocal call_count
         call_count += 1
         if call_count < 3:
-            return False, "http://test.ts.net:6080/vnc.html", "NOVNC_WS_TAILNET_FAILED"
-        return True, "http://test.ts.net:6080/vnc.html?autoconnect=1", None
+            return False, "https://test.ts.net/novnc/vnc.html", "NOVNC_WS_TAILNET_FAILED"
+        return True, "https://test.ts.net/novnc/vnc.html?autoconnect=1", None
 
     restart_calls = []
 
@@ -38,7 +38,7 @@ def test_ensure_novnc_ready_retries_on_doctor_fail(tmp_path):
         ready, url, err_class, journal = nr.ensure_novnc_ready(tmp_path, "run_123")
 
     assert ready is True
-    assert url == "http://test.ts.net:6080/vnc.html?autoconnect=1"
+    assert url == "https://test.ts.net/novnc/vnc.html?autoconnect=1"
     assert err_class is None
     assert call_count == 3
     assert len(restart_calls) == 2  # Restart after attempt 1 and 2
@@ -55,8 +55,8 @@ def test_ensure_novnc_ready_with_recovery_triggers_restart_on_novnc_not_ready(tm
         call_count += 1
         # First ensure_novnc_ready exhausts 5 retries (5 calls), then recovery runs (1+ calls)
         if call_count <= 5:
-            return False, "http://test.ts.net:6080/vnc.html", "NOVNC_NOT_READY"
-        return True, "http://recovered.ts.net:6080/vnc.html?autoconnect=1", None
+            return False, "https://test.ts.net/novnc/vnc.html", "NOVNC_NOT_READY"
+        return True, "https://recovered.ts.net/novnc/vnc.html?autoconnect=1", None
 
     restart_calls = []
 
@@ -70,7 +70,7 @@ def test_ensure_novnc_ready_with_recovery_triggers_restart_on_novnc_not_ready(tm
         ready, url, err_class, journal = nr.ensure_novnc_ready_with_recovery(tmp_path, "run_456")
 
     assert ready is True
-    assert "6080" in url
+    assert "/novnc/" in url or "vnc.html" in url
     assert err_class is None
     assert len(restart_calls) >= 1  # Recovery triggers one restart before retry
 

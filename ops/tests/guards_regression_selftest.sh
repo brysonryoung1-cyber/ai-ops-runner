@@ -96,6 +96,11 @@ if grep -q "Serve Guard" "$ROOT_DIR/ops/openclaw_hq_audit.sh"; then
 else
   fail "HQ audit SUMMARY does not include Serve Guard"
 fi
+if grep -q "/novnc" "$ROOT_DIR/ops/guards/serve_guard.sh"; then
+  pass "serve_guard checks /novnc path (HTTPS same-origin)"
+else
+  fail "serve_guard must check /novnc path"
+fi
 
 echo ""
 echo "=== guards_regression_selftest: $PASS_COUNT passed, $ERRORS failed ==="
