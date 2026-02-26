@@ -98,7 +98,9 @@ function mockHostdResult(actionName: string): HostdResult {
 
 /** Exported for fail-fast error messages and status UI (no secrets; localhost or host.docker.internal). */
 export function getHostdUrl(): string | null {
-  const url = process.env.OPENCLAW_HOSTD_URL;
+  const url =
+    process.env.OPENCLAW_HOSTD_URL ??
+    "http://host.docker.internal:8877";
   if (!url || typeof url !== "string" || !url.startsWith("http")) return null;
   return url.replace(/\/$/, "");
 }

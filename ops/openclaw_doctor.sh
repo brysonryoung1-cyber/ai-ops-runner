@@ -493,6 +493,26 @@ else
   fi
 fi
 
+# --- 9b2. Host Executor Reachability (container) — console must reach hostd from inside container ---
+echo "--- Host Executor Reachability (container) ---"
+CONTAINER_HOSTD_OK=0
+if command -v docker >/dev/null 2>&1; then
+  CONSOLE_CONTAINER="$(docker ps --filter 'name=openclaw_console' --format '{{.Names}}' 2>/dev/null | head -1)"
+  HOSTD_URL_FOR_CONTAINER="$(docker inspect "$CONSOLE_CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep '^OPENCLAW_HOSTD_URL=' | head -1 | sed 's/^OPENCLAW_HOSTD_URL=//')"
+  [ -z "$HOSTD_URL_FOR_CONTAINER" ] && HOSTD_URL_FOR_CONTAINER="http://host.docker.internal:8877"
+  if [ -n "$CONSOLE_CONTAINER" ]; then
+    if docker exec "$CONSOLE_CONTAINER" sh -c "wget -qO- --timeout=5 \"${HOSTD_URL_FOR_CONTAINER}/health\" 2>/dev/null" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
+      pass "Host Executor reachable from console container ($HOSTD_URL_FOR_CONTAINER)"
+      CONTAINER_HOSTD_OK=1
+    fi
+  fi
+  if [ "$CONTAINER_HOSTD_OK" -ne 1 ]; then
+    fail "Host Executor unreachable from console container — check extra_hosts, OPENCLAW_HOSTD_URL ($HOSTD_URL_FOR_CONTAINER)"
+  fi
+else
+  pass "Host Executor (container) check N/A (docker not available)"
+fi
+
 # --- 9c. hostd Playwright (required for Soma Phase0 /api/exec) ---
 HOSTD_VENV_PYTHON="$ROOT_DIR/.venv-hostd/bin/python"
 PYPLAYWRIGHT_OK=0
