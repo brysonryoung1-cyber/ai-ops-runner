@@ -19,6 +19,7 @@ export const ACTION_TO_HOSTD: Record<string, string> = {
   "openclaw_hq_audit": "openclaw_hq_audit",
   "openclaw_novnc_doctor": "openclaw_novnc_doctor",
   "openclaw_novnc_restart": "openclaw_novnc_restart",
+  "openclaw_novnc_shm_fix": "openclaw_novnc_shm_fix",
   "orb.backtest.bulk": "orb.backtest.bulk",
   "orb.backtest.confirm_nt8": "orb.backtest.confirm_nt8",
   "port_audit": "port_audit",

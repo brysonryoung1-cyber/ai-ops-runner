@@ -47,7 +47,8 @@ export type ActionName =
   | "autopilot_install"
   | "llm.microgpt.canary"
   | "openclaw_hq_audit"
-  | "openclaw_novnc_doctor";
+  | "openclaw_novnc_doctor"
+  | "openclaw_novnc_shm_fix";
 
 export interface AllowedAction {
   name: ActionName;
@@ -406,6 +407,14 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
       "Framebuffer-aware noVNC check. Runs guard, heals if needed, returns PASS/FAIL + verified noVNC URL.",
     remoteCommand: "cd /opt/ai-ops-runner && ./ops/openclaw_novnc_doctor.sh",
     timeoutSec: 90,
+  },
+  openclaw_novnc_shm_fix: {
+    name: "openclaw_novnc_shm_fix",
+    label: "noVNC shm Fix",
+    description:
+      "Diagnose + recover shmget No space left on device. Applies sysctl, restarts noVNC, runs doctor. Writes artifacts/novnc_shm_fix/<run_id>/.",
+    remoteCommand: "cd /opt/ai-ops-runner && bash ./ops/scripts/novnc_shm_fix.sh",
+    timeoutSec: 180,
   },
 };
 
