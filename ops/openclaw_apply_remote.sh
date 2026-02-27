@@ -157,7 +157,8 @@ if [ "$APPLY_MODE" = "local" ]; then
     BUILD_SHA="$(curl -sf --connect-timeout 5 --max-time 10 "http://127.0.0.1:8787/api/ui/health_public" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('build_sha',''))" 2>/dev/null || echo "")"
   fi
   DRIFT=0
-  if [ -z "$BUILD_SHA" ] || [ "$BUILD_SHA" != "$GIT_HEAD" ]; then
+  # Compare by prefix to avoid false drift when build_sha is longer than short git HEAD.
+  if [ -z "$BUILD_SHA" ] || [[ "$BUILD_SHA" != "$GIT_HEAD"* ]]; then
     DRIFT=1
     echo "  Drift detected: build_sha=${BUILD_SHA:-unknown} != git_head=$GIT_HEAD"
   fi
@@ -167,7 +168,7 @@ cd /opt/ai-ops-runner
 GIT_HEAD=$(git rev-parse --short HEAD 2>/dev/null || echo "")
 BUILD_SHA=""
 [ -n "$GIT_HEAD" ] && BUILD_SHA=$(curl -sf --connect-timeout 5 --max-time 10 "http://127.0.0.1:8787/api/ui/health_public" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('build_sha',''))" 2>/dev/null || echo "")
-if [ -z "$BUILD_SHA" ] || [ "$BUILD_SHA" != "$GIT_HEAD" ]; then
+if [ -z "$BUILD_SHA" ] || [[ "$BUILD_SHA" != "$GIT_HEAD"* ]]; then
   echo "  Drift detected: build_sha=${BUILD_SHA:-unknown} != git_head=$GIT_HEAD"
   echo "1"
 else
