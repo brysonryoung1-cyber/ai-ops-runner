@@ -127,10 +127,11 @@ async function runActionAsync(
   actionName: string,
   runId: string,
   startedAt: Date,
-  actor: string
+  actor: string,
+  params?: Record<string, unknown>
 ): Promise<void> {
   try {
-    const result = await executeAction(actionName);
+    const result = await executeAction(actionName, params);
     const finishedAt = new Date();
 
     if (result.httpStatus === 423) {
@@ -286,18 +287,25 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Reject unexpected fields (defense in depth)
-  const allowedFields = new Set(["action"]);
+  // Reject unexpected fields (defense in depth). code.opencode.propose_patch may include params.
+  const allowedFields = new Set(
+    actionName === "code.opencode.propose_patch" ? ["action", "params"] : ["action"]
+  );
   const extraFields = Object.keys(body).filter((k) => !allowedFields.has(k));
   if (extraFields.length > 0) {
     return NextResponse.json(
       {
         ok: false,
-        error: `Unexpected fields: ${extraFields.join(", ")}. Only "action" is accepted.`,
+        error: `Unexpected fields: ${extraFields.join(", ")}. Allowed: ${Array.from(allowedFields).join(", ")}.`,
       },
       { status: 400 }
     );
   }
+
+  const opencodeParams =
+    actionName === "code.opencode.propose_patch" && body.params && typeof body.params === "object"
+      ? (body.params as Record<string, unknown>)
+      : undefined;
 
   // Admin-only actions: deploy_and_verify (and ship_only when exposed). Fail-closed.
   const adminOnlyActions = new Set(["deploy_and_verify"]);
@@ -401,6 +409,7 @@ export async function POST(req: NextRequest) {
   const runId = lockResult.runId!;
   const actor = deriveActor(req.headers.get("x-openclaw-token"));
   const params = { action: actionName };
+  const execParams = opencodeParams;
   const startedAt = new Date();
 
   // Probe hostd with retry/backoff (10s, 20s, 40s; total ≤90s) before failing
@@ -457,7 +466,7 @@ export async function POST(req: NextRequest) {
   // Async path: long-running actions return 202 immediately; client polls /api/runs?id=<run_id>
   if (LONG_RUNNING_ACTIONS.has(actionName)) {
     writeRunRecord(buildRunRecordStart(actionName, startedAt, runId, undefined, "running"));
-    void runActionAsync(actionName, runId, startedAt, actor);
+    void runActionAsync(actionName, runId, startedAt, actor, execParams);
     return NextResponse.json(
       {
         ok: true,
@@ -471,7 +480,7 @@ export async function POST(req: NextRequest) {
 
   try {
     // executeAction validates allowlist and calls hostd (fail-closed)
-    const result = await executeAction(actionName);
+    const result = await executeAction(actionName, execParams);
 
     // Soma-first gate: pass through 423 Locked from hostd
     if (result.httpStatus === 423) {

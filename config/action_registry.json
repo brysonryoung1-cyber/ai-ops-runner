@@ -394,6 +394,13 @@
       "label": "Playbook: Recover HQ Routing",
       "timeout_sec": 120,
       "cmd_template": "cd ${ROOT_DIR} && ./ops/playbooks/recover_hq_routing.sh"
+    },
+    {
+      "id": "code.opencode.propose_patch",
+      "label": "OpenCode Propose Patch",
+      "timeout_sec": 900,
+      "cmd_template": "cd ${ROOT_DIR} && bash ./ops/scripts/opencode_run.sh",
+      "description": "Optional code lane: run OpenCode in sandboxed container to propose a patch. Produces patch.diff, patch_summary.json, PROOF.md. Never merges/deploys."
     }
   ]
 }

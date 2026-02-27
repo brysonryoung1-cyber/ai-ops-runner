@@ -292,9 +292,10 @@ def _write_error_json(art_dir: str, error_class: str, reason: str,
         pass
 
 
-def run_action(action: str, run_id: str) -> tuple[int, str, str, bool]:
+def run_action(action: str, run_id: str, params: dict | None = None) -> tuple[int, str, str, bool]:
     """Run allowlisted action. Returns (exit_code, stdout, stderr, truncated).
-    Always writes stdout.txt, stderr.txt, hostd_result.json, and error.json (on failure)."""
+    Always writes stdout.txt, stderr.txt, hostd_result.json, and error.json (on failure).
+    For code.opencode.propose_patch, params (goal, ref, test_command, dry_run) are written to params.json."""
     if action not in ALLOWLIST:
         return (-1, "", f"Action not in allowlist: {action}", False)
     spec = ALLOWLIST[action]
@@ -303,6 +304,11 @@ def run_action(action: str, run_id: str) -> tuple[int, str, str, bool]:
     started_at = datetime.now(timezone.utc).isoformat()
     art_dir = os.path.join(ROOT_DIR, ARTIFACTS_HOSTD, run_id)
     os.makedirs(art_dir, exist_ok=True)
+    if params and action == "code.opencode.propose_patch":
+        allowed_params = {"goal", "ref", "test_command", "dry_run"}
+        filtered = {k: v for k, v in params.items() if k in allowed_params and isinstance(v, (str, bool, int, float))}
+        with open(os.path.join(art_dir, "params.json"), "w", encoding="utf-8") as f:
+            json.dump(filtered, f, indent=2)
     stdout_path = os.path.join(art_dir, "stdout.txt")
     stderr_path = os.path.join(art_dir, "stderr.txt")
     result_path = os.path.join(art_dir, "hostd_result.json")
@@ -495,7 +501,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._require_admin():
             return
         content_length = self.headers.get("Content-Length")
-        if not content_length or int(content_length) > 4096:
+        if not content_length or int(content_length) > 65536:
             self.send_json(400, {"error": "Invalid or missing body"})
             return
         body = self.rfile.read(int(content_length)).decode("utf-8", errors="replace")
@@ -511,6 +517,11 @@ class Handler(BaseHTTPRequestHandler):
         if action not in ALLOWLIST:
             self.send_json(403, {"error": "Action not allowlisted"})
             return
+        params = data.get("params") if isinstance(data.get("params"), dict) else None
+        if action == "code.opencode.propose_patch":
+            if not params or not isinstance(params.get("goal"), str) or not str(params.get("goal", "")).strip():
+                self.send_json(400, {"error": "code.opencode.propose_patch requires params.goal (non-empty string)"})
+                return
         run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + os.urandom(4).hex()
         # Soma-first gate: block orb.backtest.* until baseline PASS and gate unlocked
         if action in ORB_BACKTEST_ACTIONS:
@@ -529,7 +540,7 @@ class Handler(BaseHTTPRequestHandler):
                     "artifact_dir": f"artifacts/backtests/blocked/{run_id}",
                 }).encode("utf-8"))
                 return
-        exit_code, stdout, stderr, truncated = run_action(action, run_id)
+        exit_code, stdout, stderr, truncated = run_action(action, run_id, params)
         self.send_json(200, {
             "ok": exit_code == 0,
             "action": action,
