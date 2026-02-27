@@ -1,0 +1,6 @@
+{
+  "aiops1": {
+    "ssh": "root@aiops-1.tailc75c62.ts.net",
+    "hq_base": "https://aiops-1.tailc75c62.ts.net"
+  }
+}

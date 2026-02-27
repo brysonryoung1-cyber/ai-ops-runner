@@ -7,11 +7,12 @@
 # Usage:
 #   ./ops/ship_deploy_verify.sh [--skip-ship] [--skip-deploy]
 #
-# Env:
-#   OPENCLAW_AIOPS1_SSH — e.g. root@aiops-1.tailc75c62.ts.net (for deploy step)
-#   OPENCLAW_HQ_BASE    — e.g. https://aiops-1.tailc75c62.ts.net (for verify)
+# Deploy target resolution (no manual exports required):
+#   1) ops/config/deploy_targets.json (preferred)
+#   2) /etc/ai-ops-runner/deploy_target.env
+#   3) Env vars OPENCLAW_AIOPS1_SSH, OPENCLAW_HQ_BASE (fallback)
 #
-# Writes: artifacts/hq_proofs/ship_deploy_verify/<run_id>/PROOF.md
+# Writes: artifacts/hq_proofs/version_drift_truthy_live/<run_id>/PROOF.md
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -19,7 +20,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
 RUN_ID="$(date -u +%Y%m%d_%H%M%S)Z"
-PROOF_DIR="$ROOT_DIR/artifacts/hq_proofs/ship_deploy_verify/$RUN_ID"
+PROOF_DIR="$ROOT_DIR/artifacts/hq_proofs/version_drift_truthy_live/$RUN_ID"
 mkdir -p "$PROOF_DIR"
 
 SKIP_SHIP=0
@@ -36,6 +37,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Resolve deploy target (fail-closed if deploy needed and unresolved)
+if [ "$SKIP_DEPLOY" -eq 0 ]; then
+  if ! source "$SCRIPT_DIR/scripts/resolve_deploy_target.sh"; then
+    exit 1
+  fi
+fi
 AIOPS_SSH="${OPENCLAW_AIOPS1_SSH:-}"
 HQ_BASE="${OPENCLAW_HQ_BASE:-https://aiops-1.tailc75c62.ts.net}"
 
@@ -54,6 +61,13 @@ if [ "$SKIP_SHIP" -eq 0 ]; then
   echo "==> Phase 1: Ship (push to origin/main)"
   if echo "$(hostname 2>/dev/null || echo)" | grep -qi "aiops-1"; then
     echo "  SKIP: ship must not run on production"
+  elif [ -f "$SCRIPT_DIR/ship.sh" ]; then
+    if ! "$SCRIPT_DIR/ship.sh" 2>&1 | tee "$PROOF_DIR/ship.log"; then
+      echo "ERROR: ship.sh failed" >&2
+      echo '{"overall":"FAIL","phase":"ship","run_id":"'"$RUN_ID"'"}' > "$PROOF_DIR/result.json"
+      exit 2
+    fi
+    echo "  Ship: PASS"
   elif [ -f "$SCRIPT_DIR/ship_pipeline.sh" ]; then
     if ! "$SCRIPT_DIR/ship_pipeline.sh" 2>&1 | tee "$PROOF_DIR/ship.log"; then
       echo "ERROR: ship_pipeline failed" >&2
@@ -62,7 +76,7 @@ if [ "$SKIP_SHIP" -eq 0 ]; then
     fi
     echo "  Ship: PASS"
   else
-    echo "  SKIP: ship_pipeline.sh not found"
+    echo "  SKIP: ship.sh / ship_pipeline.sh not found"
   fi
   echo ""
 fi
@@ -127,6 +141,12 @@ ORIGIN_TREE="$(echo "$VERSION_JSON" | python3 -c "import sys,json; d=json.load(s
 if [ "$DRIFT_STATUS" = "unknown" ]; then
   echo "ERROR: Drift status unknown (origin_main_tree_sha unavailable or ship_info stale). deployed_tree_sha=$DEPLOYED_TREE origin_main_tree_sha=$ORIGIN_TREE" >&2
   echo '{"overall":"FAIL","phase":"tree_verify","drift_status":"unknown","run_id":"'"$RUN_ID"'"}' > "$PROOF_DIR/result.json"
+  exit 2
+fi
+
+if [ -z "$ORIGIN_TREE" ] || [ "$ORIGIN_TREE" = "null" ]; then
+  echo "ERROR: origin_main_tree_sha must not be null (ship_info.json must be deployed)." >&2
+  echo '{"overall":"FAIL","phase":"tree_verify","origin_main_tree_sha":"null","run_id":"'"$RUN_ID"'"}' > "$PROOF_DIR/result.json"
   exit 2
 fi
 
