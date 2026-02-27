@@ -16,28 +16,31 @@
 http://127.0.0.1:8788 {
 	bind 127.0.0.1
 
-	# WebSocket upgrade: match by path + Upgrade header (ensures we hit 6080, not catch-all)
-	@websockify {
-		path_regexp ^/(websockify|novnc/websockify)
-		header Connection *Upgrade*
-		header Upgrade websocket
-	}
-	handle @websockify {
-		uri replace /novnc/websockify /websockify
-		reverse_proxy 127.0.0.1:6080 {
-			transport http {
-				versions 1.1
+	# Enforce order: route prevents Caddy from re-sorting handles
+	route {
+		# WebSocket upgrade: match by path + Upgrade header
+		@websockify {
+			path_regexp ^/(websockify|novnc/websockify)
+			header Connection *Upgrade*
+			header Upgrade websocket
+		}
+		handle @websockify {
+			uri replace /novnc/websockify /websockify
+			reverse_proxy 127.0.0.1:6080 {
+				transport http {
+					versions 1.1
+				}
 			}
 		}
-	}
 
-	# /novnc/* — noVNC web UI (vnc.html, app/, etc.)
-	handle_path /novnc/* {
-		reverse_proxy 127.0.0.1:6080
-	}
+		# /novnc/* — noVNC web UI (vnc.html, app/, etc.)
+		handle_path /novnc/* {
+			reverse_proxy 127.0.0.1:6080
+		}
 
-	# All other paths → HQ Console (catch-all)
-	handle {
-		reverse_proxy 127.0.0.1:8787
+		# All other paths → HQ Console (catch-all)
+		handle {
+			reverse_proxy 127.0.0.1:8787
+		}
 	}
 }
