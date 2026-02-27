@@ -94,6 +94,7 @@ except: pass
 " 2>/dev/null)/" 2>/dev/null)" || true
     if echo "$root_body" | grep -qE "Directory listing for /|vnc\.html"; then
       tailscale serve --bg --https=443 --set-path=/novnc "http://127.0.0.1:6080" 2>/dev/null || true
+      tailscale serve --bg --https=443 --set-path=/websockify "http://127.0.0.1:6080" 2>/dev/null || true
       tailscale serve --bg --https=443 "http://127.0.0.1:$CONSOLE_PORT" 2>/dev/null || true
       sleep 2
     fi

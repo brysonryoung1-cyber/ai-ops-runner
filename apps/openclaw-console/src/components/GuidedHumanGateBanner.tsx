@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useToken } from "@/lib/token-context";
 import { GlassButton } from "@/components/glass";
+import { toCanonicalNovncUrl } from "@/lib/novnc-url";
 
 interface SomaStatus {
   current_status: string | null;
@@ -42,10 +43,12 @@ export default function GuidedHumanGateBanner() {
       const statusData = await statusRes.json();
       const healthData = await healthRes.json();
       if (statusData?.ok) {
+        const raw = statusData.novnc_url ?? statusData.novnc_url_canonical ?? null;
+        const canonical = toCanonicalNovncUrl(raw) ?? raw;
         setStatus({
           current_status: statusData.current_status ?? statusData.last_status ?? null,
           last_status: statusData.last_status ?? null,
-          novnc_url: statusData.novnc_url ?? null,
+          novnc_url: canonical ?? null,
           instruction_line: statusData.instruction_line ?? null,
           artifact_dir: statusData.artifact_dir ?? null,
           active_run_id: statusData.active_run_id ?? statusData.last_run_id ?? null,

@@ -297,7 +297,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 step "Set up tailscale serve (HTTPS /novnc → 6080, / → $CONSOLE_PORT)"
 TS_SERVE_RC=0
-_ssh_cmd "sudo tailscale serve reset 2>/dev/null; sudo tailscale serve --bg --https=443 --set-path=/novnc http://127.0.0.1:6080 2>/dev/null; sudo tailscale serve --bg --https=443 http://127.0.0.1:${CONSOLE_PORT}" || TS_SERVE_RC=$?
+_ssh_cmd "sudo tailscale serve reset 2>/dev/null; sudo tailscale serve --bg --https=443 --set-path=/novnc http://127.0.0.1:6080 2>/dev/null; sudo tailscale serve --bg --https=443 --set-path=/websockify http://127.0.0.1:6080 2>/dev/null; sudo tailscale serve --bg --https=443 http://127.0.0.1:${CONSOLE_PORT}" || TS_SERVE_RC=$?
 
 if [ "$TS_SERVE_RC" -eq 0 ]; then
   pass "Tailscale serve configured"

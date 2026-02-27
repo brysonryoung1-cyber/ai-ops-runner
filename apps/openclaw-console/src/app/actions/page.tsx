@@ -51,6 +51,13 @@ const ACTIONS: ActionDef[] = [
     variant: "secondary",
   },
   {
+    action: "openclaw_novnc_routing_fix",
+    label: "Fix noVNC Routing",
+    description:
+      "One-click: serve remediation (/novnc + /websockify), doctor (fast then deep), proof artifact.",
+    variant: "secondary",
+  },
+  {
     action: "doctor",
     label: "Run Doctor",
     description: "Full health check of the OpenClaw stack on aiops-1",
