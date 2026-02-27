@@ -13,14 +13,16 @@
 #   /novnc/websockify -> rewrite to /websockify -> 127.0.0.1:6080 (alias)
 #   * -> 127.0.0.1:8787 (HQ default)
 
-127.0.0.1:8788 {
+http://127.0.0.1:8788 {
 	bind 127.0.0.1
+
 	# /novnc/websockify alias: rewrite to /websockify for websockify server
 	handle_path /novnc/websockify* {
 		rewrite * /websockify
 		reverse_proxy 127.0.0.1:6080
 	}
-	# /websockify — websocket upgrade (Caddy handles Upgrade header)
+
+	# /websockify — websocket upgrade (Caddy transparently handles Upgrade header)
 	handle /websockify* {
 		reverse_proxy 127.0.0.1:6080
 	}
@@ -30,10 +32,8 @@
 		reverse_proxy 127.0.0.1:6080
 	}
 
-	# /api/* and all other HQ paths
-	handle /api/*
-	handle /_next/*
-	handle /favicon.ico
-	handle /
-	reverse_proxy 127.0.0.1:8787
+	# All other paths → HQ Console (catch-all; must have body block)
+	handle {
+		reverse_proxy 127.0.0.1:8787
+	}
 }
