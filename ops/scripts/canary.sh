@@ -101,12 +101,17 @@ else
 fi
 echo ""
 
-# --- 2. noVNC connectivity audit (skip when noVNC stack not running — infra-only canary) ---
+# --- 2. noVNC connectivity audit (STRICT: fail if noVNC stack not running) ---
 echo "==> 2. noVNC connectivity audit"
 NOVNC_RUN_ID="canary_${RUN_ID}_novnc"
 NOVNC_STACK_AVAILABLE=false
 [ -n "$SP_DIR" ] && [ -f "$SP_DIR/ports.txt" ] && grep -qE ":6080|6080" "$SP_DIR/ports.txt" 2>/dev/null && NOVNC_STACK_AVAILABLE=true
-if [ "$NOVNC_STACK_AVAILABLE" = true ]; then
+if [ "$NOVNC_STACK_AVAILABLE" != true ]; then
+  echo "  noVNC audit: FAIL (6080 not listening)"
+  echo '{"all_ok":false,"error":"noVNC stack down (6080 not listening)"}' > "$CANARY_DIR/novnc_audit.json" 2>/dev/null || true
+  [ -z "$FAILED_INVARIANT" ] && FAILED_INVARIANT="novnc_stack_down"
+  REMEDIATE=1
+else
   python3 "$ROOT_DIR/ops/scripts/novnc_connectivity_audit.py" --run-id "$NOVNC_RUN_ID" --host "$TS_HOSTNAME" > "$CANARY_DIR/novnc_audit.json" 2>/dev/null || true
   NOVNC_OK=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/novnc_audit.json')); print(d.get('all_ok', False))" 2>/dev/null) || NOVNC_OK="False"
   if [ "$NOVNC_OK" != "True" ]; then
@@ -116,18 +121,13 @@ if [ "$NOVNC_STACK_AVAILABLE" = true ]; then
   else
     echo "  noVNC audit: PASS"
   fi
-else
-  echo "  noVNC audit: SKIP (noVNC stack not running — infra-only)"
-  echo '{"all_ok":true,"skipped":"novnc_stack_not_running"}' > "$CANARY_DIR/novnc_audit.json" 2>/dev/null || true
 fi
 WS_PROOF="artifacts/novnc_debug/ws_probe/$NOVNC_RUN_ID"
 echo ""
 
 # --- 3. /api/ask smoke (deterministic; no Kajabi/auth) ---
 echo "==> 3. /api/ask smoke"
-# When noVNC not available, use infra-only question (avoids noVNC-dependent citations)
 ASK_QUESTION='{"question":"Is noVNC reachable?"}'
-[ "$NOVNC_STACK_AVAILABLE" != "true" ] && ASK_QUESTION='{"question":"What is the current deploy SHA?"}'
 if curl -sf --connect-timeout 5 --max-time 15 -X POST "$CONSOLE_BASE/api/ask" \
   -H "Content-Type: application/json" \
   -d "$ASK_QUESTION" 2>/dev/null > "$CANARY_DIR/ask_response.json"; then
@@ -188,13 +188,9 @@ if [ "$REMEDIATE" -eq 1 ]; then
   esac
   sleep 15
   echo "  Re-running canary checks..."
-  # Re-run critical checks only
-  if [ "$NOVNC_STACK_AVAILABLE" = true ]; then
-    python3 "$ROOT_DIR/ops/scripts/novnc_connectivity_audit.py" --run-id "${NOVNC_RUN_ID}_retry" --host "$TS_HOSTNAME" > "$CANARY_DIR/novnc_audit_retry.json" 2>/dev/null || true
-    NOVNC_RETRY=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/novnc_audit_retry.json')); print(d.get('all_ok', False))" 2>/dev/null) || NOVNC_RETRY="False"
-  else
-    NOVNC_RETRY="True"
-  fi
+  # Re-run critical checks (remediation may have started noVNC)
+  python3 "$ROOT_DIR/ops/scripts/novnc_connectivity_audit.py" --run-id "${NOVNC_RUN_ID}_retry" --host "$TS_HOSTNAME" > "$CANARY_DIR/novnc_audit_retry.json" 2>/dev/null || true
+  NOVNC_RETRY=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/novnc_audit_retry.json')); print(d.get('all_ok', False))" 2>/dev/null) || NOVNC_RETRY="False"
   curl -sf --connect-timeout 3 --max-time 5 "$CONSOLE_BASE/api/ui/version" 2>/dev/null > "$CANARY_DIR/version_retry.json" || true
   DRIFT_STATUS_RETRY=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/version_retry.json')); print(d.get('drift_status','unknown'))" 2>/dev/null) || DRIFT_STATUS_RETRY="unknown"
   DRIFT_RETRY=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/version_retry.json')); v=d.get('drift'); print('true' if v is True else 'false')" 2>/dev/null) || DRIFT_RETRY="true"

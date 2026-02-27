@@ -124,21 +124,21 @@ def evaluate_invariants(state_pack_dir: Path) -> dict:
     })
     evidence.append(invariants[-1]["evidence"])
 
-    # noVNC stack available? (port 6080 listening) — if not, novnc/ws_probe are optional (infra-only canary)
+    # noVNC stack: STRICT. Canary must FAIL if 6080 not listening (no skip/optional).
     novnc_stack_available = ":6080" in ports_txt or "6080" in ports_txt
 
-    # 5. novnc HTTP 200 for /novnc/vnc.html (optional when noVNC stack not running)
+    # 5. novnc HTTP 200 for /novnc/vnc.html (REQUIRED; fail if 6080 not listening or non-200)
     novnc_url_local = f"http://127.0.0.1:{FRONTDOOR_PORT}/novnc/vnc.html"
     novnc_code, _ = _curl_http(novnc_url_local)
     novnc_http_ok = novnc_code == 200
     invariants.append({
         "id": "novnc_http_200",
-        "pass": novnc_http_ok or not novnc_stack_available,
-        "reason": "OK" if novnc_http_ok else ("skipped (noVNC stack not running)" if not novnc_stack_available else f"GET {novnc_url_local} returned {novnc_code}"),
+        "pass": novnc_http_ok and novnc_stack_available,
+        "reason": "OK" if novnc_http_ok and novnc_stack_available else (f"GET {novnc_url_local} returned {novnc_code}" if novnc_stack_available else "noVNC stack down (6080 not listening)"),
         "evidence": f"live_probe:{novnc_url_local}",
     })
 
-    # 6. WSS probe >=10s for /websockify AND /novnc/websockify (optional when noVNC stack not running)
+    # 6. WSS probe >=10s for /websockify AND /novnc/websockify (REQUIRED; fail if 6080 not listening or probe fails)
     ws_probe_script = ROOT_DIR / "ops" / "scripts" / "novnc_ws_probe.py"
     ws_websockify_ok = False
     ws_novnc_ws_ok = False
@@ -160,14 +160,14 @@ def evaluate_invariants(state_pack_dir: Path) -> dict:
             pass
     invariants.append({
         "id": "ws_probe_websockify_ge_10s",
-        "pass": ws_websockify_ok or not novnc_stack_available,
-        "reason": "OK" if ws_websockify_ok else ("skipped (noVNC stack not running)" if not novnc_stack_available else "WSS /websockify probe did not hold >=10s"),
+        "pass": ws_websockify_ok and novnc_stack_available,
+        "reason": "OK" if ws_websockify_ok else ("WSS /websockify probe did not hold >=10s" if novnc_stack_available else "noVNC stack down (6080 not listening)"),
         "evidence": f"live_probe:wss://{TS_HOSTNAME}/websockify",
     })
     invariants.append({
         "id": "ws_probe_novnc_websockify_ge_10s",
-        "pass": ws_novnc_ws_ok or not novnc_stack_available,
-        "reason": "OK" if ws_novnc_ws_ok else ("skipped (noVNC stack not running)" if not novnc_stack_available else "WSS /novnc/websockify probe did not hold >=10s"),
+        "pass": ws_novnc_ws_ok and novnc_stack_available,
+        "reason": "OK" if ws_novnc_ws_ok else ("WSS /novnc/websockify probe did not hold >=10s" if novnc_stack_available else "noVNC stack down (6080 not listening)"),
         "evidence": f"live_probe:wss://{TS_HOSTNAME}/novnc/websockify",
     })
 
