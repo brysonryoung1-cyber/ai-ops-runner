@@ -10,10 +10,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$ROOT_DIR"
 
-# Paths that deploy is allowed to modify (project state, templates from update_project_state.py)
+# Paths that deploy is allowed to modify (project state, templates from update_project_state.py;
+# scripts chmod +x by install_openclaw_novnc.sh and other installers)
 is_allowed() {
   case "$1" in
     config/project_state.json|docs/OPENCLAW_CURRENT.md|docs/OPENCLAW_NEXT.md) return 0 ;;
+    ops/scripts/novnc_ws_stability_check.py|ops/novnc_supervisor.sh|ops/novnc_probe.sh|ops/guards/novnc_framebuffer_guard.sh|ops/scripts/novnc_collect_diagnostics.sh|ops/openclaw_novnc_doctor.sh) return 0 ;;
     *) return 1 ;;
   esac
 }
