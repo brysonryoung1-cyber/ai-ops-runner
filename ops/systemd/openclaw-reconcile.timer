@@ -1,9 +1,10 @@
 [Unit]
-Description=OpenClaw reconcile timer (every N minutes)
+Description=OpenClaw reconcile timer (every 5-10 min with jitter)
 
 [Timer]
-OnBootSec=10min
-OnUnitActiveSec=10min
+OnBootSec=5min
+OnUnitActiveSec=5min
+RandomizedDelaySec=300
 Persistent=true
 
 [Install]

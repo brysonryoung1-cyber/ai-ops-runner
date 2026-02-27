@@ -33,6 +33,11 @@ echo "  Timer: enabled and started (every 10 min)"
 echo "  Timer status:"
 systemctl status openclaw-soma-autopilot.timer --no-pager 2>/dev/null || true
 
+# HumanGateWatcher: auto-resume after Kajabi login (no manual "Click Resume")
+if [ -f "$SCRIPT_DIR/openclaw_install_human_gate_watcher.sh" ]; then
+  bash "$SCRIPT_DIR/openclaw_install_human_gate_watcher.sh" 2>/dev/null || true
+fi
+
 echo ""
 echo "=== openclaw_install_soma_autopilot.sh COMPLETE ==="
 echo "  To enable: sudo touch /etc/ai-ops-runner/config/soma_autopilot_enabled.txt"

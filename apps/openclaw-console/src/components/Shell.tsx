@@ -76,6 +76,11 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           </span>
         )}
         <div className="hidden md:flex items-center gap-2 ml-auto">
+          {buildSha && (
+            <span className="text-[10px] font-mono text-white/40" title={`Build: ${buildSha}${deploySha ? ` Deploy: ${deploySha}` : ""}`}>
+              {buildSha}
+            </span>
+          )}
           <HydrationBadge />
           <span className="text-white/20 mx-1">|</span>
           <StatusDot variant="idle" />
