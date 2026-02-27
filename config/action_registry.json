@@ -358,6 +358,36 @@
       "label": "Run HQ Audit",
       "timeout_sec": 120,
       "cmd_template": "cd ${ROOT_DIR} && ./ops/openclaw_hq_audit.sh"
+    },
+    {
+      "id": "system.state_pack",
+      "label": "State Pack",
+      "timeout_sec": 60,
+      "cmd_template": "cd ${ROOT_DIR} && ./ops/scripts/state_pack.sh"
+    },
+    {
+      "id": "system.reconcile",
+      "label": "Reconcile (Desired State)",
+      "timeout_sec": 600,
+      "cmd_template": "cd ${ROOT_DIR} && ./ops/scripts/reconcile.sh"
+    },
+    {
+      "id": "playbook.reconcile_frontdoor_serve",
+      "label": "Playbook: Reconcile Frontdoor Serve",
+      "timeout_sec": 120,
+      "cmd_template": "cd ${ROOT_DIR} && ./ops/playbooks/reconcile_frontdoor_serve.sh"
+    },
+    {
+      "id": "playbook.recover_novnc_ws",
+      "label": "Playbook: Recover noVNC WebSocket",
+      "timeout_sec": 300,
+      "cmd_template": "cd ${ROOT_DIR} && ./ops/playbooks/recover_novnc_ws.sh"
+    },
+    {
+      "id": "playbook.recover_hq_routing",
+      "label": "Playbook: Recover HQ Routing",
+      "timeout_sec": 120,
+      "cmd_template": "cd ${ROOT_DIR} && ./ops/playbooks/recover_hq_routing.sh"
     }
   ]
 }

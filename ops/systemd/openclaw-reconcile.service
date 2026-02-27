@@ -1,0 +1,12 @@
+[Unit]
+Description=OpenClaw Reconcile — desired state + invariants loop
+After=ai-ops-runner.service openclaw-frontdoor.service
+Wants=ai-ops-runner.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai-ops-runner
+ExecStart=/bin/bash /opt/ai-ops-runner/ops/scripts/reconcile.sh
+TimeoutStartSec=600
+Environment=OPENCLAW_ARTIFACTS_ROOT=/opt/ai-ops-runner/artifacts
+Environment=OPENCLAW_REPO_ROOT=/opt/ai-ops-runner

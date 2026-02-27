@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OCL Result",
+  "description": "OpenClaw Communication Layer v1 — result schema. Every OCL Result MUST include status, checks[], evidence[], and optional next (OCL TaskRequest).",
+  "type": "object",
+  "required": ["status", "checks", "evidence"],
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["ok", "fail", "partial"],
+      "description": "Overall result status"
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "pass"],
+        "properties": {
+          "name": { "type": "string" },
+          "pass": { "type": "boolean" },
+          "detail": { "type": "string" }
+        }
+      },
+      "description": "Individual check results"
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": { "type": "string", "description": "Artifact path or URL" },
+          "label": { "type": "string" }
+        }
+      },
+      "description": "Artifact paths used as evidence (proof-native)"
+    },
+    "next": {
+      "$ref": "#/definitions/TaskRequest",
+      "description": "Optional follow-up OCL TaskRequest"
+    },
+    "run_id": {
+      "type": "string",
+      "description": "Run ID when applicable"
+    },
+    "message": {
+      "type": "string",
+      "description": "Human-readable summary"
+    }
+  },
+  "definitions": {
+    "TaskRequest": {
+      "type": "object",
+      "required": ["action"],
+      "properties": {
+        "action": { "type": "string", "minLength": 1 },
+        "params": { "type": "object" },
+        "read_only": { "type": "boolean", "default": true }
+      }
+    }
+  }
+}

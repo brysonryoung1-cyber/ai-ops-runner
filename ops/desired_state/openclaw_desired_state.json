@@ -1,0 +1,56 @@
+{
+  "$schema": "./openclaw_desired_state.schema.json",
+  "version": "1.0.0",
+  "tailscale_serve": {
+    "single_root": true,
+    "target": "http://127.0.0.1:8788",
+    "description": "Single-root Serve: https://* -> frontdoor"
+  },
+  "frontdoor": {
+    "listen": "127.0.0.1:8788",
+    "route_rules": [
+      {
+        "path": "/novnc/websockify*",
+        "rewrite": "/websockify",
+        "upstream": "127.0.0.1:6080"
+      },
+      {
+        "path": "/websockify*",
+        "upstream": "127.0.0.1:6080"
+      },
+      {
+        "path": "/novnc/*",
+        "upstream": "127.0.0.1:6080"
+      },
+      {
+        "path": "/api/*",
+        "upstream": "127.0.0.1:8787"
+      },
+      {
+        "path": "/",
+        "upstream": "127.0.0.1:8787"
+      }
+    ]
+  },
+  "ports_services": {
+    "8787": "HQ Console",
+    "8788": "Frontdoor (Caddy)",
+    "6080": "noVNC web + websockify",
+    "5900": "x11vnc/VNC"
+  },
+  "novnc": {
+    "canonical_url_format": "https://<host>/novnc/vnc.html?autoconnect=1&path=/websockify",
+    "http_path": "/novnc/vnc.html",
+    "ws_paths": ["/websockify", "/novnc/websockify"],
+    "ws_probe_hold_sec": 10
+  },
+  "invariants": {
+    "hq_health_build_sha_not_unknown": true,
+    "autopilot_status_http_200": true,
+    "serve_single_root_targets_frontdoor": true,
+    "frontdoor_listening_8788": true,
+    "novnc_http_200": true,
+    "ws_probe_websockify_ge_10s": true,
+    "ws_probe_novnc_websockify_ge_10s": true
+  }
+}

@@ -12,6 +12,7 @@ import {
   Pill,
   StatusDot,
 } from "@/components/glass";
+import AskOpenClawPanel from "@/components/AskOpenClawPanel";
 
 type CardStatus = "pass" | "fail" | "loading" | "idle" | "warn";
 
@@ -227,6 +228,7 @@ export default function OverviewPage() {
     status_path: string | null;
     timer_interval: string;
   } | null>(null);
+  const [statePackRunId, setStatePackRunId] = useState<string | null>(null);
 
   // Check connectivity via server-mediated endpoint; 3s hard timeout
   const HOST_STATUS_TIMEOUT_MS = 3000;
@@ -348,6 +350,20 @@ export default function OverviewPage() {
       else setRecentRuns([]);
     } catch {
       setRecentRuns([]);
+    }
+  }, [token]);
+
+  // Latest State Pack run_id
+  const fetchStatePackLast = useCallback(async () => {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) headers["X-OpenClaw-Token"] = token;
+      const res = await fetch("/api/state-pack/last", { headers });
+      const data = await res.json();
+      if (data?.ok && data.run_id) setStatePackRunId(data.run_id);
+      else setStatePackRunId(null);
+    } catch {
+      setStatePackRunId(null);
     }
   }, [token]);
 
@@ -490,6 +506,7 @@ export default function OverviewPage() {
     fetchHqAuditLast();
     fetchSomaStatus();
     fetchSomaAutopilotStatus();
+    fetchStatePackLast();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
 
@@ -651,6 +668,11 @@ export default function OverviewPage() {
             </div>
           </div>
         </GlassCard>
+      )}
+
+      {/* Ask OpenClaw */}
+      {connected === true && (
+        <AskOpenClawPanel token={token} statePackRunId={statePackRunId} />
       )}
 
       {/* HQ Audit */}

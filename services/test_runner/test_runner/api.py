@@ -62,6 +62,21 @@ class JobResponse(BaseModel):
     artifact_dir: Optional[str] = None
 
 
+class AskRequest(BaseModel):
+    question: str
+    state_pack_dir: str
+    project_id: Optional[str] = None
+    run_id: Optional[str] = None
+    engine: Optional[str] = None
+
+
+class AskResponse(BaseModel):
+    answer: str
+    citations: list[str]
+    recommended_next_action: dict
+    confidence: str
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -100,6 +115,38 @@ def project_state():
         except Exception:
             pass
     return {"ok": True, "state": state, "latest_snapshot": latest_snapshot}
+
+
+@app.post("/ask", response_model=AskResponse)
+def ask_openclaw(req: AskRequest):
+    """Ask OpenClaw — grounded Q&A from State Pack + artifacts. Read-only."""
+    from .ask_engine import ask
+    engine = (req.engine or os.environ.get("ASK_ENGINE", "default")).lower()
+    if engine not in ("default", "microgpt"):
+        engine = "default"
+    result = ask(
+        question=req.question,
+        state_pack_dir=req.state_pack_dir,
+        project_id=req.project_id,
+        run_id=req.run_id,
+        engine=engine,
+    )
+    citations = result.get("citations") or []
+    if not citations:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "No citations available",
+                "message": "State pack or artifacts could not be loaded. Run system.state_pack.",
+                "recommended_next_action": {"action": "system.state_pack", "read_only": True},
+            },
+        )
+    return AskResponse(
+        answer=result.get("answer", ""),
+        citations=citations,
+        recommended_next_action=result.get("recommended_next_action") or {"action": "system.state_pack", "read_only": True},
+        confidence=result.get("confidence", "LOW"),
+    )
 
 
 @app.get("/llm/status")

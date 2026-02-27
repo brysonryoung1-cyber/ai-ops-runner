@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OCL Task Request",
+  "description": "OpenClaw Communication Layer v1 — minimal task request schema. Used by /api/ask recommended_next_action and action execution.",
+  "type": "object",
+  "required": ["action"],
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Allowlisted action id (e.g. doctor, system.state_pack)"
+    },
+    "params": {
+      "type": "object",
+      "description": "Optional parameters for the action"
+    },
+    "read_only": {
+      "type": "boolean",
+      "default": true,
+      "description": "When true, action must not mutate system state"
+    }
+  }
+}

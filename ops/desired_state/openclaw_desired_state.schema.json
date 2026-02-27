@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OpenClaw Desired State",
+  "type": "object",
+  "required": ["version", "tailscale_serve", "frontdoor", "ports_services", "novnc", "invariants"],
+  "properties": {
+    "version": { "type": "string" },
+    "tailscale_serve": {
+      "type": "object",
+      "required": ["single_root", "target"],
+      "properties": {
+        "single_root": { "type": "boolean" },
+        "target": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "frontdoor": {
+      "type": "object",
+      "required": ["listen", "route_rules"],
+      "properties": {
+        "listen": { "type": "string" },
+        "route_rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string" },
+              "rewrite": { "type": "string" },
+              "upstream": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "ports_services": { "type": "object" },
+    "novnc": {
+      "type": "object",
+      "required": ["canonical_url_format", "http_path", "ws_paths"],
+      "properties": {
+        "canonical_url_format": { "type": "string" },
+        "http_path": { "type": "string" },
+        "ws_paths": { "type": "array", "items": { "type": "string" } },
+        "ws_probe_hold_sec": { "type": "integer" }
+      }
+    },
+    "invariants": { "type": "object" }
+  }
+}

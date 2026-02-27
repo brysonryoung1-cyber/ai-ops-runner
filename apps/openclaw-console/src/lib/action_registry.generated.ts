@@ -23,6 +23,9 @@ export const ACTION_TO_HOSTD: Record<string, string> = {
   "openclaw_novnc_shm_fix": "openclaw_novnc_shm_fix",
   "orb.backtest.bulk": "orb.backtest.bulk",
   "orb.backtest.confirm_nt8": "orb.backtest.confirm_nt8",
+  "playbook.reconcile_frontdoor_serve": "playbook.reconcile_frontdoor_serve",
+  "playbook.recover_hq_routing": "playbook.recover_hq_routing",
+  "playbook.recover_novnc_ws": "playbook.recover_novnc_ws",
   "port_audit": "port_audit",
   "ports": "port_audit",
   "pred_markets.mirror.backfill": "pred_markets.mirror.backfill",
@@ -58,6 +61,8 @@ export const ACTION_TO_HOSTD: Record<string, string> = {
   "soma_snapshot_practitioner": "soma_snapshot_practitioner",
   "soma_status": "soma_status",
   "soma_zane_finish_plan": "soma_zane_finish_plan",
+  "system.reconcile": "system.reconcile",
+  "system.state_pack": "system.state_pack",
   "tail_guard_log": "tail_guard_log",
   "timer": "timer",
 };
