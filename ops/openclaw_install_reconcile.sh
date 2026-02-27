@@ -13,4 +13,4 @@ sudo cp "$SCRIPT_DIR/systemd/openclaw-reconcile.timer" "$SYSTEMD_DIR/"
 sudo systemctl daemon-reload
 sudo systemctl enable openclaw-reconcile.timer
 sudo systemctl start openclaw-reconcile.timer
-echo "  Reconcile timer installed (every 10 min)"
+echo "  Reconcile timer installed (every 5-10 min with jitter)"

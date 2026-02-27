@@ -100,11 +100,20 @@ with open('$OUT_DIR/latest_runs_index.json', 'w') as f:
 " 2>/dev/null || echo '{"run_id":"'"$RUN_ID"'","projects":{}}' >"$OUT_DIR/latest_runs_index.json"
 evidence+=("{\"path\":\"artifacts/system/state_pack/$RUN_ID/latest_runs_index.json\",\"label\":\"latest_runs_index\"}")
 
-# --- 7. SUMMARY.md ---
+# --- 7. build_sha ---
+BUILD_SHA=""
+if [ -f "$ROOT_DIR/.git/HEAD" ]; then
+  BUILD_SHA="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+fi
+[ -z "$BUILD_SHA" ] && BUILD_SHA="unknown"
+echo "$BUILD_SHA" >"$OUT_DIR/build_sha.txt"
+
+# --- 8. SUMMARY.md ---
 cat >"$OUT_DIR/SUMMARY.md" <<EOF
 # State Pack: $RUN_ID
 
-Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+**build_sha:** $BUILD_SHA
+**Generated:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 ## Files
 - health_public.json

@@ -1,0 +1,10 @@
+[Unit]
+Description=OpenClaw HumanGateWatcher — poll for login, auto-resume Soma
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=90
+Persistent=true
+
+[Install]
+WantedBy=timers.target

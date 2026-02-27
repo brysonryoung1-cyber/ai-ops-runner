@@ -69,9 +69,11 @@ write_incident() {
   [ -f "$RECONCILE_DIR/actions_taken.json" ] && cp "$RECONCILE_DIR/actions_taken.json" "$inc_dir/" 2>/dev/null || true
   [ -d "$RECONCILE_DIR/state_pack_after" ] && cp -r "$RECONCILE_DIR/state_pack_after" "$inc_dir/" 2>/dev/null || true
   [ -f "$RECONCILE_DIR/invariants_after.json" ] && cp "$RECONCILE_DIR/invariants_after.json" "$inc_dir/" 2>/dev/null || true
+  BUILD_SHA="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
   cat > "$inc_dir/SUMMARY.md" << EOF
 # Incident: $incident_id
 
+**build_sha:** $BUILD_SHA
 **Status:** $status
 **Timestamp:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
 

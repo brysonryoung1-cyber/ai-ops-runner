@@ -1,0 +1,11 @@
+[Unit]
+Description=OpenClaw HumanGateWatcher — auto-resume after Kajabi login detected
+After=ai-ops-runner.service openclaw-hostd.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai-ops-runner
+ExecStart=/opt/ai-ops-runner/.venv-hostd/bin/python /opt/ai-ops-runner/ops/scripts/human_gate_watcher.py
+TimeoutStartSec=420
+Environment=OPENCLAW_ARTIFACTS_ROOT=/opt/ai-ops-runner/artifacts
+Environment=OPENCLAW_REPO_ROOT=/opt/ai-ops-runner

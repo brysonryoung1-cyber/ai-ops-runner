@@ -134,9 +134,9 @@ export default function GuidedHumanGateBanner() {
       >
         <h3 className="text-base font-semibold text-amber-200 mb-2">Soma needs you: Kajabi login</h3>
         <p className="text-sm text-white/80 mb-2">
-          After completing 2FA, stop touching the session. Autopilot will resume.
+          Login+2FA, then open Products→Courses and confirm both libraries. Autopilot will resume automatically.
         </p>
-        <p className="text-xs text-white/50 mb-4">Polling every 10 min · Click Resume after login</p>
+        <p className="text-xs text-white/50 mb-4">HumanGateWatcher polls every 90s · No manual resume required</p>
         <div className="flex flex-wrap gap-3">
           {status.novnc_url && (
             <button
@@ -153,7 +153,7 @@ export default function GuidedHumanGateBanner() {
             onClick={handleResume}
             disabled={resumeLoading || !status.resume_action_available}
           >
-            {resumeLoading ? "Checking…" : "Resume after login"}
+            {resumeLoading ? "Checking…" : "Check now (optional)"}
           </GlassButton>
           {framebufferUrl ? (
             <Link

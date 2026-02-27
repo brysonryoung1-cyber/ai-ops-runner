@@ -323,6 +323,37 @@ def _run_session_check(root: Path, venv_python: Path, use_exit_node: bool) -> tu
     return _run(cmd, timeout=timeout)
 
 
+def _ensure_novnc_audit_pass(root: Path, run_id: str, max_attempts: int = 3) -> tuple[bool, str]:
+    """Run novnc_connectivity_audit; if FAIL run reconcile + re-audit until PASS or max attempts.
+    Return (pass, canonical_novnc_url). Fail-closed: never emit READY unless audit PASS.
+    Set OPENCLAW_SKIP_NOVNC_AUDIT=1 to bypass (test/CI only)."""
+    if os.environ.get("OPENCLAW_SKIP_NOVNC_AUDIT") == "1":
+        ts_host = os.environ.get("OPENCLAW_TS_HOSTNAME", "aiops-1.tailc75c62.ts.net")
+        return True, f"https://{ts_host}/novnc/vnc.html?autoconnect=1&path=/websockify"
+    audit_script = root / "ops" / "scripts" / "novnc_connectivity_audit.py"
+    reconcile_script = root / "ops" / "scripts" / "reconcile.sh"
+    ts_host = os.environ.get("OPENCLAW_TS_HOSTNAME", "aiops-1.tailc75c62.ts.net")
+    canonical_url = f"https://{ts_host}/novnc/vnc.html?autoconnect=1&path=/websockify"
+    if not audit_script.exists():
+        return False, canonical_url
+    for attempt in range(1, max_attempts + 1):
+        rc, out = _run(
+            [sys.executable, str(audit_script), "--run-id", f"{run_id}_audit{attempt}", "--host", ts_host],
+            timeout=60,
+        )
+        if rc == 0:
+            return True, canonical_url
+        if attempt < max_attempts and reconcile_script.exists() and os.access(reconcile_script, os.X_OK):
+            subprocess.run(
+                ["/bin/bash", str(reconcile_script)],
+                capture_output=True,
+                timeout=600,
+                cwd=str(root),
+                env={**os.environ, "OPENCLAW_ARTIFACTS_ROOT": str(root / "artifacts")},
+            )
+    return False, canonical_url
+
+
 INSTRUCTION_LINE = (
     "Open the URL, complete Cloudflare/Kajabi login + 2FA, then go to Products → Courses "
     "and ensure Home User Library + Practitioner Library are visible; then stop touching the session."
@@ -571,6 +602,16 @@ def _run_main(root: Path, out_dir: Path, run_id: str, result_state: dict[str, ob
                     out_dir, run_id, KAJABI_UI_NOT_PRESENT,
                     "Kajabi UI not present on noVNC after 3 self-heal attempts. Check framebuffer.png in artifact_dir."
                 )
+            # READY_FOR_HUMAN gate: novnc_connectivity_audit must PASS before emitting
+            audit_ok, canonical_url = _ensure_novnc_audit_pass(root, run_id)
+            if not audit_ok:
+                write_stage(out_dir, "novnc_audit", "failed", last_error_class="NOVNC_AUDIT_FAILED")
+                set_result("FAILURE", stage="novnc_audit", error_class="NOVNC_AUDIT_FAILED", message="noVNC connectivity audit failed after reconcile attempts. Check artifacts/novnc_debug/ws_probe/")
+                return _fail_closed(
+                    out_dir, run_id, "NOVNC_AUDIT_FAILED",
+                    "noVNC connectivity audit failed. Run reconcile or doctor, then retry."
+                )
+            url = canonical_url
             instruction = INSTRUCTION_LINE
             set_result("WAITING_FOR_HUMAN", novnc_url=url, instruction_line=instruction)
             # Write RESULT.json immediately so if process dies during polling, HQ has terminal status
@@ -639,6 +680,13 @@ def _run_main(root: Path, out_dir: Path, run_id: str, result_state: dict[str, ob
                 write_stage(out_dir, "kajabi_ui_ensure", "failed", last_error_class=KAJABI_UI_NOT_PRESENT)
                 set_result("FAILURE", stage="kajabi_ui_ensure", error_class=KAJABI_UI_NOT_PRESENT, message="Kajabi UI not present on noVNC after 3 self-heal attempts.")
                 return _fail_closed(out_dir, run_id, KAJABI_UI_NOT_PRESENT, "Kajabi UI not present on noVNC after 3 self-heal attempts.")
+            # READY_FOR_HUMAN gate: novnc_connectivity_audit must PASS before emitting
+            audit_ok, canonical_url = _ensure_novnc_audit_pass(root, run_id)
+            if not audit_ok:
+                write_stage(out_dir, "novnc_audit", "failed", last_error_class="NOVNC_AUDIT_FAILED")
+                set_result("FAILURE", stage="novnc_audit", error_class="NOVNC_AUDIT_FAILED", message="noVNC connectivity audit failed.")
+                return _fail_closed(out_dir, run_id, "NOVNC_AUDIT_FAILED", "noVNC connectivity audit failed. Run reconcile or doctor.")
+            url = canonical_url
             instruction = INSTRUCTION_LINE
             set_result("WAITING_FOR_HUMAN", novnc_url=url, instruction_line=instruction)
             write_result_json(out_dir, "WAITING_FOR_HUMAN", run_id=run_id, novnc_url=url, instruction_line=instruction)

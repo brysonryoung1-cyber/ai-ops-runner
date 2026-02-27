@@ -303,7 +303,7 @@ def test_capture_interactive_failed_emits_waiting_and_resumes(tmp_path):
     mod._run_self_heal = lambda *a, **k: None
     mod._run_doctor_for_framebuffer = lambda *a: (True, "artifacts/novnc_debug/auto_finish_run")
 
-    with patch.dict(os.environ, {"SOMA_KAJABI_REAUTH_POLL_TIMEOUT": "15"}):
+    with patch.dict(os.environ, {"SOMA_KAJABI_REAUTH_POLL_TIMEOUT": "15", "OPENCLAW_SKIP_NOVNC_AUDIT": "1"}):
         rc = mod.main()
 
     assert rc == 0
@@ -390,7 +390,7 @@ def test_waiting_for_human_contract_includes_novnc_url_and_instruction(tmp_path)
     mod._run_self_heal = lambda *a, **k: None
     mod._run_doctor_for_framebuffer = lambda *a: (True, "artifacts/novnc_debug/auto_finish_run")
 
-    with patch.dict(os.environ, {"SOMA_KAJABI_REAUTH_POLL_TIMEOUT": "10"}):
+    with patch.dict(os.environ, {"SOMA_KAJABI_REAUTH_POLL_TIMEOUT": "10", "OPENCLAW_SKIP_NOVNC_AUDIT": "1"}):
         mod.main()
 
     out_dir = next((root / "artifacts" / "soma_kajabi" / "auto_finish").iterdir())
@@ -477,7 +477,7 @@ def test_is_auth_needed_error_expands_to_kajabi_not_logged_in(tmp_path):
     mod._run_self_heal = lambda *a, **k: None
     mod._run_doctor_for_framebuffer = lambda *a: (True, "artifacts/novnc_debug/auto_finish_run")
 
-    with patch.dict(os.environ, {"SOMA_KAJABI_REAUTH_POLL_TIMEOUT": "10"}):
+    with patch.dict(os.environ, {"SOMA_KAJABI_REAUTH_POLL_TIMEOUT": "10", "OPENCLAW_SKIP_NOVNC_AUDIT": "1"}):
         rc = mod.main()
 
     assert rc == 0
@@ -536,7 +536,7 @@ def test_reauth_timeout_emits_artifact_bundle(tmp_path):
     mod._run_self_heal = lambda *a, **k: None
     mod._run_doctor_for_framebuffer = lambda *a: (True, "artifacts/novnc_debug/auto_finish_run")
 
-    with patch.dict(os.environ, {"SOMA_KAJABI_REAUTH_POLL_TIMEOUT": "2"}):
+    with patch.dict(os.environ, {"SOMA_KAJABI_REAUTH_POLL_TIMEOUT": "2", "OPENCLAW_SKIP_NOVNC_AUDIT": "1"}):
         rc = mod.main()
 
     assert rc == 1
