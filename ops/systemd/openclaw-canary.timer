@@ -1,0 +1,11 @@
+[Unit]
+Description=OpenClaw canary timer (every 15 min with jitter)
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=15min
+RandomizedDelaySec=180
+Persistent=true
+
+[Install]
+WantedBy=timers.target

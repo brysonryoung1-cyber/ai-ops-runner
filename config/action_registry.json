@@ -372,6 +372,12 @@
       "cmd_template": "cd ${ROOT_DIR} && ./ops/scripts/reconcile.sh"
     },
     {
+      "id": "system.canary",
+      "label": "Canary (Reconcile + noVNC + Ask + Version)",
+      "timeout_sec": 420,
+      "cmd_template": "cd ${ROOT_DIR} && ./ops/scripts/canary.sh"
+    },
+    {
       "id": "playbook.reconcile_frontdoor_serve",
       "label": "Playbook: Reconcile Frontdoor Serve",
       "timeout_sec": 120,

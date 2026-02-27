@@ -166,5 +166,9 @@ SP_FINAL=$(ls -1dt "$ARTIFACTS/system/state_pack"/*/ 2>/dev/null | head -1)
 INC_ID="incident_${RUN_ID}"
 write_incident "$INC_ID" "WAITING_FOR_HUMAN" "Reconcile failed after $MAX_ATTEMPTS attempts. Single instruction: run doctor or openclaw_hq_audit, then retry reconcile."
 echo '{"status":"WAITING_FOR_HUMAN","reason":"Reconcile failed after '"$MAX_ATTEMPTS"' attempts","run_id":"'"$RUN_ID"'","incident_id":"'"$INC_ID"'","instruction":"Run doctor or openclaw_hq_audit, then retry reconcile"}' > "$RECONCILE_DIR/result.json"
+# Notify: WAITING_FOR_HUMAN (HQ banner)
+if [ -f "$ROOT_DIR/ops/scripts/notify_banner.sh" ]; then
+  "$ROOT_DIR/ops/scripts/notify_banner.sh" WAITING_FOR_HUMAN '{"instruction":"Run doctor or openclaw_hq_audit, then retry reconcile"}' 2>/dev/null || true
+fi
 cat "$RECONCILE_DIR/result.json"
 exit 1
