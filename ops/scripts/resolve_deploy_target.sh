@@ -13,7 +13,9 @@
 # Exits 1 with ONE human-only instruction if unresolved.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Use BASH_SOURCE so path is correct when script is sourced (e.g. from ship_deploy_verify.sh)
+_SCRIPT="${BASH_SOURCE[0]:-$0}"
+SCRIPT_DIR="$(cd "$(dirname "$_SCRIPT")" && pwd)"
 OPS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOT_DIR="$(cd "$OPS_DIR/.." && pwd)"
 
