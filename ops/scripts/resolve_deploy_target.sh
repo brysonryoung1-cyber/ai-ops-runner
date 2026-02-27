@@ -23,6 +23,39 @@ AIOPS_SSH=""
 HQ_BASE=""
 RESOLVED_VIA=""
 
+is_valid_ssh_target() {
+  local target="$1" port=""
+  # Reject whitespace/control chars that can bypass line-oriented regex checks.
+  if [[ "$target" =~ [[:space:]] ]] || [[ "$target" == *$'\r'* ]] || [[ "$target" == *$'\n'* ]]; then
+    return 1
+  fi
+  # Accept only user@host or user@host:port.
+  if ! [[ "$target" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?$ ]]; then
+    return 1
+  fi
+  if [[ "$target" == *:* ]]; then
+    port="${target##*:}"
+    if (( port < 1 || port > 65535 )); then
+      return 1
+    fi
+  fi
+  return 0
+}
+
+read_env_value() {
+  local file="$1" key="$2" line value
+  line="$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "$file" 2>/dev/null | tail -n 1 || true)"
+  line="${line#*=}"
+  # Trim leading/trailing whitespace
+  value="$(printf '%s' "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+  # Strip matching single or double quotes
+  case "$value" in
+    \"*\") value="${value#\"}"; value="${value%\"}" ;;
+    \'*\') value="${value#\'}"; value="${value%\'}" ;;
+  esac
+  printf '%s' "$value"
+}
+
 # 1) ops/config/deploy_targets.json
 CONFIG_JSON="$OPS_DIR/config/deploy_targets.json"
 if [ -f "$CONFIG_JSON" ]; then
@@ -53,12 +86,8 @@ fi
 
 # 2) /etc/ai-ops-runner/deploy_target.env
 if [ -z "$AIOPS_SSH" ] && [ -f /etc/ai-ops-runner/deploy_target.env ]; then
-  set -a
-  # shellcheck source=/dev/null
-  . /etc/ai-ops-runner/deploy_target.env 2>/dev/null || true
-  set +a
-  AIOPS_SSH="${OPENCLAW_AIOPS1_SSH:-}"
-  HQ_BASE="${OPENCLAW_HQ_BASE:-}"
+  AIOPS_SSH="$(read_env_value /etc/ai-ops-runner/deploy_target.env OPENCLAW_AIOPS1_SSH)"
+  HQ_BASE="$(read_env_value /etc/ai-ops-runner/deploy_target.env OPENCLAW_HQ_BASE)"
   if [ -n "$AIOPS_SSH" ]; then
     RESOLVED_VIA="/etc/ai-ops-runner/deploy_target.env"
   fi
@@ -89,6 +118,12 @@ if [ -z "$AIOPS_SSH" ]; then
   echo "  OPENCLAW_HQ_BASE=https://aiops-1.tailc75c62.ts.net" >&2
   echo "" >&2
   echo "Then rerun." >&2
+  exit 1
+fi
+
+# Fail-closed on malformed SSH target to prevent ssh option/command injection.
+if ! is_valid_ssh_target "$AIOPS_SSH"; then
+  echo "ERROR: Invalid OPENCLAW_AIOPS1_SSH target format: $AIOPS_SSH" >&2
   exit 1
 fi
 
