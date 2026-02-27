@@ -211,6 +211,10 @@ for line in sys.stdin:
     if proc == 'websockify' and port == '6080':
         continue
 
+    # caddy (openclaw-frontdoor): Caddyfile.frontdoor binds 127.0.0.1:8788; Caddy 2.6 bind quirk may show *:8788
+    if proc == 'caddy' and port == '8788':
+        continue
+
     # Any remaining address is a violation (wildcard 0.0.0.0/:: or specific public IP)
     violations.append(proc + ' on ' + addr + ':' + port)
     if proc == 'sshd' and addr in ('0.0.0.0', '::', '*'):

@@ -18,6 +18,8 @@ UNIT_DST="/etc/systemd/system/openclaw-frontdoor.service"
 systemctl stop caddy.service 2>/dev/null || true
 systemctl disable caddy.service 2>/dev/null || true
 systemctl mask caddy.service 2>/dev/null || true
+# Prevent Caddy from loading default /etc/caddy/Caddyfile (which binds :80)
+[ -f /etc/caddy/Caddyfile ] && mv /etc/caddy/Caddyfile /etc/caddy/Caddyfile.disabled 2>/dev/null || true
 
 # Ensure Caddy is installed
 if ! command -v caddy >/dev/null 2>&1; then
