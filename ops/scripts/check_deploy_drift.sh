@@ -21,6 +21,7 @@ is_allowed() {
 # Modified tracked files (diff from HEAD)
 DRIFT_FILES=""
 while IFS= read -r path; do
+  path="$(echo "$path" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
   [ -z "$path" ] && continue
   is_allowed "$path" && continue
   DRIFT_FILES="${DRIFT_FILES}${path}"$'\n'
