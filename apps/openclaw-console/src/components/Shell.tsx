@@ -7,6 +7,7 @@ import { useTarget } from "@/lib/target-context";
 import StatusDot from "./glass/StatusDot";
 import HydrationBadge from "./HydrationBadge";
 import GuidedHumanGateBanner from "./GuidedHumanGateBanner";
+import NotificationBanner from "./NotificationBanner";
 
 const NAV_ITEMS = [
   { href: "/", label: "Overview" },
@@ -189,6 +190,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             </div>
           )}
           <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 md:py-8">
+            <NotificationBanner />
             <GuidedHumanGateBanner />
             {children}
           </div>

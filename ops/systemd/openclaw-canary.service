@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenClaw canary (reconcile + novnc audit + ask smoke + version drift)
+After=network-online.target openclaw-frontdoor.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai-ops-runner
+ExecStart=/bin/bash /opt/ai-ops-runner/ops/scripts/canary.sh
+Environment=OPENCLAW_ARTIFACTS_ROOT=/opt/ai-ops-runner/artifacts
+Environment=OPENCLAW_REPO_ROOT=/opt/ai-ops-runner
+Environment=OPENCLAW_VERIFY_BASE_URL=http://127.0.0.1:8787
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

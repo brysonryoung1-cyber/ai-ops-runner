@@ -134,6 +134,7 @@ fi
 git reset --hard origin/main 2>&1 | tee -a "$DEPLOY_ARTIFACT_DIR/git_fetch.log"
 GIT_HEAD="$(git rev-parse --short HEAD)"
 GIT_HEAD_FULL="$(git rev-parse HEAD)"
+GIT_TREE_FULL="$(git rev-parse HEAD^{tree} 2>/dev/null || echo "")"
 echo "  HEAD: $GIT_HEAD"
 export OPENCLAW_BUILD_SHA="$GIT_HEAD"
 echo ""
@@ -225,6 +226,19 @@ if [ -f "$SCRIPT_DIR/openclaw_install_reconcile.sh" ]; then
   fi
 else
   echo "  (openclaw_install_reconcile.sh not found — skip)"
+fi
+echo ""
+
+# --- Step 2c4c: Install openclaw-canary timer (idempotent) ---
+echo "==> Step 2c4c: Install openclaw-canary timer"
+if [ -f "$SCRIPT_DIR/openclaw_install_canary.sh" ]; then
+  if ! sudo bash "$SCRIPT_DIR/openclaw_install_canary.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/canary_install.log"; then
+    echo "  WARNING: canary timer install failed (non-fatal)" >&2
+  else
+    echo "  openclaw-canary: installed (every 15 min)"
+  fi
+else
+  echo "  (openclaw_install_canary.sh not found — skip)"
 fi
 echo ""
 
@@ -466,21 +480,14 @@ with open('$DEPLOY_ARTIFACT_DIR/deploy_receipt.json', 'w') as f:
     json.dump(receipt, f, indent=2)
 "
 
-# --- deploy_info.json for /api/ui/version (drift-proof) ---
+# --- deploy_info.json for /api/ui/version (drift-proof; head+tree) ---
 python3 -c "
 import json
-import subprocess
 from datetime import datetime, timezone
-tree_sha = None
-try:
-    out = subprocess.run(['git', 'rev-parse', 'HEAD^{tree}'], capture_output=True, text=True, timeout=5, cwd='$ROOT_DIR')
-    if out.returncode == 0 and out.stdout:
-        tree_sha = out.stdout.strip()[:40]
-except: pass
 info = {
   'deploy_sha': '$GIT_HEAD',
-  'deployed_head_sha': '$GIT_HEAD',
-  'deployed_tree_sha': tree_sha,
+  'deployed_head_sha': '${GIT_HEAD_FULL}',
+  'deployed_tree_sha': '${GIT_TREE_FULL:-}' or None,
   'run_id': '$RUN_ID',
   'last_deploy_time': datetime.now(timezone.utc).isoformat(),
   'deployed_at': datetime.now(timezone.utc).isoformat(),
