@@ -51,6 +51,34 @@ else
   echo "  SKIP: Sourcing from different cwd (no config)"
 fi
 
+# Test 3: Validation helper rejects newline injection
+if (
+  cd "$TMP_DIR"
+  # shellcheck source=/dev/null
+  source "$OPS_DIR/scripts/resolve_deploy_target.sh" >/dev/null 2>&1
+  is_valid_ssh_target $'root@aiops-1.tailc75c62.ts.net\n-oProxyCommand=evil'
+); then
+  echo "  FAIL: Newline-injected OPENCLAW_AIOPS1_SSH should be rejected" >&2
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: Newline-injected OPENCLAW_AIOPS1_SSH rejected"
+  PASS=$((PASS + 1))
+fi
+
+# Test 4: Validation helper rejects out-of-range port
+if (
+  cd "$TMP_DIR"
+  # shellcheck source=/dev/null
+  source "$OPS_DIR/scripts/resolve_deploy_target.sh" >/dev/null 2>&1
+  is_valid_ssh_target 'root@aiops-1.tailc75c62.ts.net:70000'
+); then
+  echo "  FAIL: Out-of-range OPENCLAW_AIOPS1_SSH port should be rejected" >&2
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: Out-of-range OPENCLAW_AIOPS1_SSH port rejected"
+  PASS=$((PASS + 1))
+fi
+
 echo ""
 echo "  Result: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

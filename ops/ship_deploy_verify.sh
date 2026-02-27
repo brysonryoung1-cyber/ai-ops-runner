@@ -46,11 +46,29 @@ fi
 AIOPS_SSH="${OPENCLAW_AIOPS1_SSH:-}"
 HQ_BASE="${OPENCLAW_HQ_BASE:-https://aiops-1.tailc75c62.ts.net}"
 
+is_valid_ssh_target() {
+  local target="$1" port=""
+  # Reject whitespace/control chars that can bypass line-oriented regex checks.
+  if [[ "$target" =~ [[:space:]] ]] || [[ "$target" == *$'\r'* ]] || [[ "$target" == *$'\n'* ]]; then
+    return 1
+  fi
+  # Accept only user@host or user@host:port.
+  if ! [[ "$target" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?$ ]]; then
+    return 1
+  fi
+  if [[ "$target" == *:* ]]; then
+    port="${target##*:}"
+    if (( port < 1 || port > 65535 )); then
+      return 1
+    fi
+  fi
+  return 0
+}
+
 # Fail-closed on malformed SSH target to prevent option/command injection
 # via externally sourced OPENCLAW_AIOPS1_SSH values.
 if [ "$SKIP_DEPLOY" -eq 0 ] && [ -n "$AIOPS_SSH" ]; then
-  # Accept only user@host or user@host:port; reject leading "-" and shell metacharacters.
-  if ! printf '%s' "$AIOPS_SSH" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?$'; then
+  if ! is_valid_ssh_target "$AIOPS_SSH"; then
     echo "ERROR: Invalid OPENCLAW_AIOPS1_SSH target format: $AIOPS_SSH" >&2
     echo '{"overall":"FAIL","phase":"deploy_target_validation","run_id":"'"$RUN_ID"'"}' > "$PROOF_DIR/result.json"
     exit 1
