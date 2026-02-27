@@ -1,0 +1,33 @@
+# OpenClaw frontdoor — single local reverse proxy for Tailscale Serve.
+# Bind ONLY to 127.0.0.1. Tailscale Serve forwards https://* -> http://127.0.0.1:8788
+#
+# Routes:
+#   /api/*, /_next/*, etc -> 127.0.0.1:8787 (HQ Console)
+#   /novnc/* -> 127.0.0.1:6080 (noVNC web + websockify)
+#   /websockify, /websockify/* -> 127.0.0.1:6080 (websocket upgrade)
+#   /novnc/websockify -> rewrite to /websockify -> 127.0.0.1:6080 (alias)
+#   * -> 127.0.0.1:8787 (HQ default)
+
+127.0.0.1:8788 {
+	# /novnc/websockify alias: rewrite to /websockify for websockify server
+	handle_path /novnc/websockify* {
+		rewrite * /websockify
+		reverse_proxy 127.0.0.1:6080
+	}
+	# /websockify — websocket upgrade (Caddy handles Upgrade header)
+	handle /websockify* {
+		reverse_proxy 127.0.0.1:6080
+	}
+
+	# /novnc/* — noVNC web UI (vnc.html, app/, etc.)
+	handle_path /novnc/* {
+		reverse_proxy 127.0.0.1:6080
+	}
+
+	# /api/* and all other HQ paths
+	handle /api/*
+	handle /_next/*
+	handle /favicon.ico
+	handle /
+	reverse_proxy 127.0.0.1:8787
+}

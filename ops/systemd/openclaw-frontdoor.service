@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenClaw frontdoor — Caddy reverse proxy (127.0.0.1:8788)
+After=network.target docker.service
+# Start after noVNC and console are up
+After=openclaw-novnc.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ai-ops-runner
+ExecStart=/usr/bin/caddy run --config /opt/ai-ops-runner/ops/caddy/Caddyfile.frontdoor --adapter caddyfile
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=3
+TimeoutStartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openclaw-frontdoor
+
+[Install]
+WantedBy=multi-user.target
