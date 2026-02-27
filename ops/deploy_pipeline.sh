@@ -215,6 +215,19 @@ else
 fi
 echo ""
 
+# --- Step 2c4b: Install openclaw-reconcile timer (idempotent) ---
+echo "==> Step 2c4b: Install openclaw-reconcile timer"
+if [ -f "$SCRIPT_DIR/openclaw_install_reconcile.sh" ]; then
+  if ! sudo bash "$SCRIPT_DIR/openclaw_install_reconcile.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/reconcile_install.log"; then
+    echo "  WARNING: reconcile timer install failed (non-fatal)" >&2
+  else
+    echo "  openclaw-reconcile: installed (every 5-10 min)"
+  fi
+else
+  echo "  (openclaw_install_reconcile.sh not found — skip)"
+fi
+echo ""
+
 # --- Step 2d: noVNC firewall (port 6080 Tailscale-only) ---
 echo "==> Step 2d: noVNC firewall (Tailscale-only)"
 if [ -f "$SCRIPT_DIR/ufw_novnc_tailscale_only.sh" ]; then
@@ -452,6 +465,32 @@ receipt = {
 with open('$DEPLOY_ARTIFACT_DIR/deploy_receipt.json', 'w') as f:
     json.dump(receipt, f, indent=2)
 "
+
+# --- deploy_info.json for /api/ui/version (drift-proof) ---
+python3 -c "
+import json
+import subprocess
+from datetime import datetime, timezone
+tree_sha = None
+try:
+    out = subprocess.run(['git', 'rev-parse', 'HEAD^{tree}'], capture_output=True, text=True, timeout=5, cwd='$ROOT_DIR')
+    if out.returncode == 0 and out.stdout:
+        tree_sha = out.stdout.strip()[:40]
+except: pass
+info = {
+  'deploy_sha': '$GIT_HEAD',
+  'deployed_head_sha': '$GIT_HEAD',
+  'deployed_tree_sha': tree_sha,
+  'run_id': '$RUN_ID',
+  'last_deploy_time': datetime.now(timezone.utc).isoformat(),
+  'deployed_at': datetime.now(timezone.utc).isoformat(),
+}
+with open('$DEPLOY_ARTIFACT_DIR/deploy_info.json', 'w') as f:
+    json.dump(info, f, indent=2)
+"
+# Copy to /etc/ai-ops-runner for /api/ui/version (idempotent)
+sudo mkdir -p /etc/ai-ops-runner
+sudo cp \"$DEPLOY_ARTIFACT_DIR/deploy_info.json\" /etc/ai-ops-runner/deploy_info.json 2>/dev/null || true
 
 echo "=== deploy_pipeline.sh COMPLETE ==="
 echo "  Run ID: $RUN_ID"
