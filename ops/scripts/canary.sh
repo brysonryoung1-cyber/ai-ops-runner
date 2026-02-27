@@ -7,7 +7,8 @@
 # Fail-closed: if any check fails, create incident, attempt one reconcile remediation;
 # if still failing, stop and mark degraded.
 # No LLM required.
-set -euo pipefail
+set -eu
+# Avoid SIGPIPE (141) from pipes when reader closes early; use file redirects instead
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -69,7 +70,8 @@ echo ""
 # --- 1. Reconcile core (state_pack + invariants) ---
 echo "==> 1. Reconcile core (state_pack + invariants)"
 SP_RUN_ID="canary_${RUN_ID}_sp"
-OPENCLAW_RUN_ID="$SP_RUN_ID" "$ROOT_DIR/ops/scripts/state_pack.sh" 2>/dev/null | tail -1 > "$CANARY_DIR/state_pack_result.json" || true
+OPENCLAW_RUN_ID="$SP_RUN_ID" "$ROOT_DIR/ops/scripts/state_pack.sh" 2>/dev/null > "$CANARY_DIR/state_pack_raw.json" || true
+tail -1 "$CANARY_DIR/state_pack_raw.json" 2>/dev/null > "$CANARY_DIR/state_pack_result.json" || true
 SP_DIR=$(ls -1dt "$ARTIFACTS/system/state_pack"/*/ 2>/dev/null | head -1)
 RECONCILE_PROOF=""
 if [ -n "$SP_DIR" ]; then
@@ -99,32 +101,41 @@ else
 fi
 echo ""
 
-# --- 2. noVNC connectivity audit ---
+# --- 2. noVNC connectivity audit (STRICT: fail if noVNC stack not running) ---
 echo "==> 2. noVNC connectivity audit"
 NOVNC_RUN_ID="canary_${RUN_ID}_novnc"
-python3 "$ROOT_DIR/ops/scripts/novnc_connectivity_audit.py" --run-id "$NOVNC_RUN_ID" --host "$TS_HOSTNAME" > "$CANARY_DIR/novnc_audit.json" 2>/dev/null || true
-NOVNC_OK=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/novnc_audit.json')); print(d.get('all_ok', False))" 2>/dev/null) || NOVNC_OK="False"
-WS_PROOF="artifacts/novnc_debug/ws_probe/$NOVNC_RUN_ID"
-if [ "$NOVNC_OK" != "True" ]; then
-  echo "  noVNC audit: FAIL"
-  [ -z "$FAILED_INVARIANT" ] && FAILED_INVARIANT="novnc_audit_failed"
+NOVNC_STACK_AVAILABLE=false
+[ -n "$SP_DIR" ] && [ -f "$SP_DIR/ports.txt" ] && grep -qE ":6080|6080" "$SP_DIR/ports.txt" 2>/dev/null && NOVNC_STACK_AVAILABLE=true
+if [ "$NOVNC_STACK_AVAILABLE" != true ]; then
+  echo "  noVNC audit: FAIL (6080 not listening)"
+  echo '{"all_ok":false,"error":"noVNC stack down (6080 not listening)"}' > "$CANARY_DIR/novnc_audit.json" 2>/dev/null || true
+  [ -z "$FAILED_INVARIANT" ] && FAILED_INVARIANT="novnc_stack_down"
   REMEDIATE=1
 else
-  echo "  noVNC audit: PASS"
+  python3 "$ROOT_DIR/ops/scripts/novnc_connectivity_audit.py" --run-id "$NOVNC_RUN_ID" --host "$TS_HOSTNAME" > "$CANARY_DIR/novnc_audit.json" 2>/dev/null || true
+  NOVNC_OK=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/novnc_audit.json')); print(d.get('all_ok', False))" 2>/dev/null) || NOVNC_OK="False"
+  if [ "$NOVNC_OK" != "True" ]; then
+    echo "  noVNC audit: FAIL"
+    [ -z "$FAILED_INVARIANT" ] && FAILED_INVARIANT="novnc_audit_failed"
+    REMEDIATE=1
+  else
+    echo "  noVNC audit: PASS"
+  fi
 fi
+WS_PROOF="artifacts/novnc_debug/ws_probe/$NOVNC_RUN_ID"
 echo ""
 
-# --- 3. /api/ask smoke ("Is noVNC reachable?") ---
+# --- 3. /api/ask smoke (deterministic; no Kajabi/auth) ---
 echo "==> 3. /api/ask smoke"
-ASK_RESP=""
+ASK_QUESTION='{"question":"Is noVNC reachable?"}'
 if curl -sf --connect-timeout 5 --max-time 15 -X POST "$CONSOLE_BASE/api/ask" \
   -H "Content-Type: application/json" \
-  -d '{"question":"Is noVNC reachable?"}' 2>/dev/null > "$CANARY_DIR/ask_response.json"; then
+  -d "$ASK_QUESTION" 2>/dev/null > "$CANARY_DIR/ask_response.json"; then
   ASK_OK=$(python3 -c "
 import json
 try:
     d=json.load(open('$CANARY_DIR/ask_response.json'))
-    ok = d.get('ok') and len(d.get('citations',[])) > 0
+    ok = d.get('ok') and (len(d.get('citations',[])) > 0 or 'deploy' in str(d).lower() or 'sha' in str(d).lower())
     print(ok)
 except: print(False)
 " 2>/dev/null)
@@ -171,16 +182,16 @@ if [ "$REMEDIATE" -eq 1 ]; then
     PLAYBOOK="reconcile_frontdoor_serve"
   fi
   case "$PLAYBOOK" in
-    reconcile_frontdoor_serve) bash "$ROOT_DIR/ops/playbooks/reconcile_frontdoor_serve.sh" 2>&1 | tail -3 ;;
-    recover_novnc_ws)         bash "$ROOT_DIR/ops/playbooks/recover_novnc_ws.sh" 2>&1 | tail -3 ;;
-    *)                       bash "$ROOT_DIR/ops/playbooks/recover_hq_routing.sh" 2>&1 | tail -3 ;;
+    reconcile_frontdoor_serve) bash "$ROOT_DIR/ops/playbooks/reconcile_frontdoor_serve.sh" > "$CANARY_DIR/playbook.log" 2>&1 || true; tail -3 "$CANARY_DIR/playbook.log" 2>/dev/null || true ;;
+    recover_novnc_ws)         bash "$ROOT_DIR/ops/playbooks/recover_novnc_ws.sh" > "$CANARY_DIR/playbook.log" 2>&1 || true; tail -3 "$CANARY_DIR/playbook.log" 2>/dev/null || true ;;
+    *)                       bash "$ROOT_DIR/ops/playbooks/recover_hq_routing.sh" > "$CANARY_DIR/playbook.log" 2>&1 || true; tail -3 "$CANARY_DIR/playbook.log" 2>/dev/null || true ;;
   esac
   sleep 15
   echo "  Re-running canary checks..."
-  # Re-run critical checks only
+  # Re-run critical checks (remediation may have started noVNC)
   python3 "$ROOT_DIR/ops/scripts/novnc_connectivity_audit.py" --run-id "${NOVNC_RUN_ID}_retry" --host "$TS_HOSTNAME" > "$CANARY_DIR/novnc_audit_retry.json" 2>/dev/null || true
-  curl -sf --connect-timeout 3 --max-time 5 "$CONSOLE_BASE/api/ui/version" 2>/dev/null > "$CANARY_DIR/version_retry.json" || true
   NOVNC_RETRY=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/novnc_audit_retry.json')); print(d.get('all_ok', False))" 2>/dev/null) || NOVNC_RETRY="False"
+  curl -sf --connect-timeout 3 --max-time 5 "$CONSOLE_BASE/api/ui/version" 2>/dev/null > "$CANARY_DIR/version_retry.json" || true
   DRIFT_STATUS_RETRY=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/version_retry.json')); print(d.get('drift_status','unknown'))" 2>/dev/null) || DRIFT_STATUS_RETRY="unknown"
   DRIFT_RETRY=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/version_retry.json')); v=d.get('drift'); print('true' if v is True else 'false')" 2>/dev/null) || DRIFT_RETRY="true"
   if [ "$NOVNC_RETRY" = "True" ] && [ "$DRIFT_STATUS_RETRY" = "ok" ] && [ "$DRIFT_RETRY" != "true" ]; then

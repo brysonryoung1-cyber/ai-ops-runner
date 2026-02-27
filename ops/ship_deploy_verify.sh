@@ -112,6 +112,17 @@ if [ "$SKIP_DEPLOY" -eq 0 ] && [ -n "$AIOPS_SSH" ]; then
     exit 2
   fi
   echo ""
+  # --- Phase 2b: Force-run strict canary (require PASS with noVNC up) ---
+  echo "==> Phase 2b: Strict canary (noVNC 6080 + WSS >=10s)"
+  if ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$AIOPS_SSH" \
+    "cd /opt/ai-ops-runner && ./ops/scripts/canary.sh" 2>&1 | tee "$PROOF_DIR/canary.log"; then
+    echo "  Canary: PASS"
+  else
+    echo "ERROR: Strict canary failed (noVNC must be up)" >&2
+    echo '{"overall":"FAIL","phase":"canary","run_id":"'"$RUN_ID"'"}' > "$PROOF_DIR/result.json"
+    exit 2
+  fi
+  echo ""
 elif [ "$SKIP_DEPLOY" -eq 0 ] && [ -z "$AIOPS_SSH" ]; then
   echo "==> Phase 2: Deploy (SKIP — set OPENCLAW_AIOPS1_SSH to run deploy)"
   echo ""

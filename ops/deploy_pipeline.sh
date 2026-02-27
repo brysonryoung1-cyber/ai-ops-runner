@@ -124,7 +124,7 @@ fi
 echo "  Pull-only: PASS"
 echo ""
 
-# --- Step 2: git fetch + reset ---
+# --- Step 2: git fetch + reset (drift scrub: production must match origin/main) ---
 STEP="git_sync"
 echo "==> Step 2: git fetch origin && git reset --hard origin/main"
 if ! git fetch origin main 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/git_fetch.log"; then
@@ -164,13 +164,19 @@ else
 fi
 echo ""
 
-# --- Step 2c2: Install openclaw-novnc systemd unit (on-demand noVNC) ---
+# --- Step 2c2: Install openclaw-novnc systemd unit + start (canary requires 6080 up) ---
 echo "==> Step 2c2: Install openclaw-novnc"
 if [ -f "$SCRIPT_DIR/install_openclaw_novnc.sh" ]; then
   if ! bash "$SCRIPT_DIR/install_openclaw_novnc.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/novnc_install.log"; then
     echo "  WARNING: openclaw-novnc install failed (non-fatal; capture may fall back to legacy mode)" >&2
   else
     echo "  openclaw-novnc: installed"
+    # Start noVNC so canary can PASS (strict invariants require 6080 listening)
+    if systemctl start openclaw-novnc 2>/dev/null; then
+      echo "  openclaw-novnc: started (6080 required for canary)"
+    else
+      echo "  WARNING: systemctl start openclaw-novnc failed (Xvfb/deps may need install_kajabi_interactive_deps)" >&2
+    fi
   fi
 else
   echo "  (install_openclaw_novnc.sh not found — skip)"
@@ -411,6 +417,16 @@ if [ -f "$SCRIPT_DIR/update_project_state.py" ]; then
   OPS_DIR="$SCRIPT_DIR" python3 "$SCRIPT_DIR/update_project_state.py" 2>&1 | tee -a "$DEPLOY_ARTIFACT_DIR/update_state.log" || true
 fi
 echo "  Project state refreshed"
+echo ""
+
+# --- Step 6b: Drift guard (fail if unexpected modified files; detect SCP/out-of-band) ---
+STEP="drift_check"
+echo "==> Step 6b: Drift check (no out-of-band modifications)"
+if ! bash "$SCRIPT_DIR/scripts/check_deploy_drift.sh" > "$DEPLOY_ARTIFACT_DIR/drift_check.json" 2>"$DEPLOY_ARTIFACT_DIR/drift_check.log"; then
+  write_fail "$STEP" "deploy_drift_detected" "Unexpected modified files; run git reset --hard origin/main; see artifacts/incidents/" "artifacts/deploy/$RUN_ID/drift_check.log"
+  exit 2
+fi
+echo "  Drift check: ok (no unexpected modifications)"
 echo ""
 
 # --- Doctor/guard and DoD artifact pointers (latest) ---
