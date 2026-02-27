@@ -50,50 +50,117 @@ function isStatePackFresh(runId: string): boolean {
   return false;
 }
 
-function buildFallbackAnswer(statePackDir: string, question: string): { answer: string; citations: string[] } {
+function getLatestInvariantsPath(): string | null {
+  const artifactsRoot = getArtifactsRoot();
+  const reconcileBase = join(artifactsRoot, "system", "reconcile");
+  if (!existsSync(reconcileBase)) return null;
+  const dirs = readdirSync(reconcileBase, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort()
+    .reverse();
+  for (const d of dirs) {
+    const invPath = join(reconcileBase, d, "invariants_after.json");
+    if (existsSync(invPath)) return `artifacts/system/reconcile/${d}/invariants_after.json`;
+    const invBefore = join(reconcileBase, d, "invariants_before.json");
+    if (existsSync(invBefore)) return `artifacts/system/reconcile/${d}/invariants_before.json`;
+  }
+  const incidentsBase = join(artifactsRoot, "incidents");
+  if (!existsSync(incidentsBase)) return null;
+  const incDirs = readdirSync(incidentsBase, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort()
+    .reverse();
+  for (const id of incDirs.slice(0, 5)) {
+    const invPath = join(incidentsBase, id, "invariants_after.json");
+    if (existsSync(invPath)) return `artifacts/incidents/${id}/invariants_after.json`;
+    const invBefore = join(incidentsBase, id, "invariants_before.json");
+    if (existsSync(invBefore)) return `artifacts/incidents/${id}/invariants_before.json`;
+  }
+  return null;
+}
+
+function getLatestIncidentId(): string | null {
+  const incidentsBase = join(getArtifactsRoot(), "incidents");
+  if (!existsSync(incidentsBase)) return null;
+  const dirs = readdirSync(incidentsBase, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort()
+    .reverse();
+  return dirs[0] ?? null;
+}
+
+function buildFallbackAnswer(statePackDir: string, question: string): { answer: string; citations: string[]; recommended_next_action?: { action: string; read_only: boolean } } {
   const base = join(getArtifactsRoot(), "system", "state_pack", statePackDir);
   const citations: string[] = [];
-  let summary = "";
   for (const name of ["health_public.json", "autopilot_status.json", "SUMMARY.md"]) {
     const path = join(base, name);
     if (existsSync(path)) {
-      try {
-        const content = readFileSync(path, "utf-8").slice(0, 2000);
-        summary += `\n--- ${name} ---\n${content}`;
-        citations.push(`artifacts/system/state_pack/${statePackDir}/${name}`);
-      } catch {
-        // skip
-      }
+      citations.push(`artifacts/system/state_pack/${statePackDir}/${name}`);
     }
   }
+  const invPath = getLatestInvariantsPath();
+  if (invPath) citations.push(invPath);
+  const latestIncident = getLatestIncidentId();
+  if (latestIncident) citations.push(`artifacts/incidents/${latestIncident}/SUMMARY.md`);
+
   if (citations.length === 0) {
     return {
       answer: "State pack not loaded. Run system.state_pack action first.",
       citations: [],
+      recommended_next_action: { action: "system.state_pack", read_only: true },
     };
   }
+
   const q = question.toLowerCase();
+  if (q.includes("drifted") || q.includes("drift")) {
+    let driftAnswer = "Drift status: check invariants. ";
+    if (invPath) {
+      try {
+        const invFull = join(getArtifactsRoot(), invPath.replace(/^artifacts\//, ""));
+        const inv = JSON.parse(readFileSync(invFull, "utf-8"));
+        const allPass = inv.all_pass === true;
+        driftAnswer = allPass
+          ? "No drift detected. All invariants pass. "
+          : `Drift detected. Invariants: ${(inv.invariants || []).filter((i: { pass?: boolean }) => !i.pass).map((i: { id?: string }) => i.id).join(", ")} failed. `;
+      } catch {
+        driftAnswer += "Could not parse invariants. ";
+      }
+    }
+    driftAnswer += `Cited: ${invPath || "invariants_after.json"}. Run system.reconcile to heal.`;
+    return {
+      answer: driftAnswer,
+      citations,
+      recommended_next_action: { action: "system.reconcile", read_only: false },
+    };
+  }
   if (q.includes("broken") || q.includes("fail")) {
     return {
-      answer: `State pack loaded. Check artifacts: ${citations.slice(0, 3).join(", ")}. For failures, run doctor or openclaw_hq_audit.`,
+      answer: `State pack loaded. Check artifacts: ${citations.slice(0, 3).join(", ")}. For failures, run doctor or openclaw_hq_audit. Recent incidents: ${latestIncident ? `artifacts/incidents/${latestIncident}` : "none"}.`,
       citations,
+      recommended_next_action: { action: "system.reconcile", read_only: false },
     };
   }
   if (q.includes("novnc") || q.includes("reachable")) {
     return {
-      answer: `State pack loaded. Check tailscale_serve.txt and ports.txt in ${statePackDir}. noVNC typically on port 6080.`,
+      answer: `State pack loaded. Check tailscale_serve.txt and ports.txt in ${statePackDir}. noVNC typically on port 6080. Canonical URL: https://<host>/novnc/vnc.html?autoconnect=1&path=/websockify`,
       citations,
+      recommended_next_action: { action: "playbook.recover_novnc_ws", read_only: false },
     };
   }
   if (q.includes("soma") && q.includes("waiting")) {
     return {
       answer: `State pack loaded. Check autopilot_status.json and latest_runs_index.json for Soma status.`,
       citations,
+      recommended_next_action: { action: "system.state_pack", read_only: true },
     };
   }
   return {
     answer: `State pack loaded (${statePackDir}). Files: ${citations.join(", ")}. LLM not available — run system.state_pack and check RUNNER_API_URL.`,
     citations,
+    recommended_next_action: { action: "system.state_pack", read_only: true },
   };
 }
 
@@ -237,7 +304,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         ok: false,
-        error: "No citations available. State pack could not be loaded.",
+        error: "No citations available. State pack could not be loaded. Refusing answer without citations.",
         error_class: "NO_CITATIONS",
         recommended_next_action: { action: "system.state_pack", read_only: true },
       },
@@ -249,7 +316,7 @@ export async function POST(req: NextRequest) {
     ok: true,
     answer: fallback.answer,
     citations: fallback.citations,
-    recommended_next_action: { action: "system.state_pack", read_only: true },
+    recommended_next_action: fallback.recommended_next_action ?? { action: "system.state_pack", read_only: true },
     confidence: "LOW",
     state_pack_run_id: runIdPart,
   });

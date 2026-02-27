@@ -23,6 +23,7 @@ export const LONG_RUNNING_ACTIONS = new Set([
   "soma_kajabi_session_check",
   "soma_kajabi_unblock_and_run",
   "deploy_and_verify",
+  "system.reconcile",
 ]);
 
 export interface HostdResult {

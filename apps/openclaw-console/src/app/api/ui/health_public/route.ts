@@ -62,6 +62,7 @@ const CONSOLE_ROUTES = [
   "/artifacts",
   "/artifacts/[...path]",
   "/actions",
+  "/incidents",
   "/settings",
   "/soma",
 ];

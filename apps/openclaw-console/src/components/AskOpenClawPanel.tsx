@@ -5,6 +5,7 @@ import Link from "next/link";
 import { GlassCard, GlassButton } from "@/components/glass";
 
 const QUICK_PROMPTS = [
+  "Are we drifted?",
   "What's broken?",
   "Why is Soma waiting?",
   "Is noVNC reachable?",
