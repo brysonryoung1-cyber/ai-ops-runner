@@ -58,6 +58,7 @@ export const ACTION_TO_HOSTD: Record<string, string> = {
   "soma_snapshot_practitioner": "soma_snapshot_practitioner",
   "soma_status": "soma_status",
   "soma_zane_finish_plan": "soma_zane_finish_plan",
+  "system.state_pack": "system.state_pack",
   "tail_guard_log": "tail_guard_log",
   "timer": "timer",
 };

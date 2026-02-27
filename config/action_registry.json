@@ -358,6 +358,12 @@
       "label": "Run HQ Audit",
       "timeout_sec": 120,
       "cmd_template": "cd ${ROOT_DIR} && ./ops/openclaw_hq_audit.sh"
+    },
+    {
+      "id": "system.state_pack",
+      "label": "State Pack",
+      "timeout_sec": 60,
+      "cmd_template": "cd ${ROOT_DIR} && ./ops/scripts/state_pack.sh"
     }
   ]
 }
