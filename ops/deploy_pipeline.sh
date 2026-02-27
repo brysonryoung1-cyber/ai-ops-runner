@@ -495,9 +495,27 @@ info = {
 with open('$DEPLOY_ARTIFACT_DIR/deploy_info.json', 'w') as f:
     json.dump(info, f, indent=2)
 "
+
+# --- ship_info.json for /api/ui/version (canonical main truth; no git in container) ---
+# At deploy time origin/main == deployed; bake SHAs for fail-closed drift comparison.
+python3 -c "
+import json
+from datetime import datetime, timezone
+ship_info = {
+  'shipped_head_sha': '${GIT_HEAD_FULL}',
+  'shipped_tree_sha': '${GIT_TREE_FULL:-}' or None,
+  'shipped_at': datetime.now(timezone.utc).isoformat(),
+  'source': 'deploy_pipeline.sh',
+  'run_id': '$RUN_ID',
+}
+with open('$DEPLOY_ARTIFACT_DIR/ship_info.json', 'w') as f:
+    json.dump(ship_info, f, indent=2)
+"
+
 # Copy to /etc/ai-ops-runner for /api/ui/version (idempotent)
 sudo mkdir -p /etc/ai-ops-runner
 sudo cp \"$DEPLOY_ARTIFACT_DIR/deploy_info.json\" /etc/ai-ops-runner/deploy_info.json 2>/dev/null || true
+sudo cp \"$DEPLOY_ARTIFACT_DIR/ship_info.json\" /etc/ai-ops-runner/ship_info.json 2>/dev/null || true
 
 echo "=== deploy_pipeline.sh COMPLETE ==="
 echo "  Run ID: $RUN_ID"

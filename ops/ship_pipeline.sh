@@ -244,6 +244,27 @@ echo ""
 # Aggregate logs pointer
 echo "tests review_auto check_push review_finish" | tr ' ' '\n' | while read -r name; do echo "artifacts/ship/$RUN_ID/${name}.log"; done >"$SHIP_ARTIFACT_DIR/logs.txt" 2>/dev/null || true
 
+# --- ship_info.json for provenance (canonical shipped SHAs; deploy_pipeline writes on VPS) ---
+SHIP_HEAD_FULL="$(git rev-parse HEAD 2>/dev/null | head -c 40)" || SHIP_HEAD_FULL=""
+SHIP_TREE_FULL="$(git rev-parse HEAD^{tree} 2>/dev/null | head -c 40)" || SHIP_TREE_FULL=""
+if [ -n "$SHIP_HEAD_FULL" ]; then
+  python3 -c "
+import json, os
+from datetime import datetime, timezone
+p = os.environ.get('SHIP_ARTIFACT_DIR', '')
+if p:
+    ship_info = {
+        'shipped_head_sha': os.environ.get('SHIP_HEAD_FULL', ''),
+        'shipped_tree_sha': os.environ.get('SHIP_TREE_FULL', '') or None,
+        'shipped_at': datetime.now(timezone.utc).isoformat(),
+        'source': 'ship_pipeline.sh',
+        'run_id': os.environ.get('SHIP_RUN_ID', ''),
+    }
+    with open(p + '/ship_info.json', 'w') as f:
+        json.dump(ship_info, f, indent=2)
+" SHIP_ARTIFACT_DIR="$SHIP_ARTIFACT_DIR" SHIP_HEAD_FULL="$SHIP_HEAD_FULL" SHIP_TREE_FULL="$SHIP_TREE_FULL" SHIP_RUN_ID="$SHIP_RUN_ID"
+fi
+
 write_pass
 echo "=== ship_pipeline.sh COMPLETE ==="
 echo "  Run ID: $RUN_ID"

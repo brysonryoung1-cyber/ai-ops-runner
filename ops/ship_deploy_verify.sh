@@ -117,12 +117,20 @@ if [ -z "$VERSION_JSON" ]; then
   exit 2
 fi
 
-DRIFT="$(echo "$VERSION_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('drift', True))" 2>/dev/null)" || DRIFT="true"
+# Fail-closed: drift_status=unknown or drift=true -> FAIL
+DRIFT_STATUS="$(echo "$VERSION_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('drift_status','unknown'))" 2>/dev/null)" || DRIFT_STATUS="unknown"
+DRIFT="$(echo "$VERSION_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('drift'); print('true' if v is True else 'false' if v is False else 'unknown')" 2>/dev/null)" || DRIFT="unknown"
 DEPLOYED_HEAD="$(echo "$VERSION_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('deployed_head_sha','') or '')" 2>/dev/null)" || DEPLOYED_HEAD=""
 DEPLOYED_TREE="$(echo "$VERSION_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('deployed_tree_sha','') or '')" 2>/dev/null)" || DEPLOYED_TREE=""
 ORIGIN_TREE="$(echo "$VERSION_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('origin_main_tree_sha','') or '')" 2>/dev/null)" || ORIGIN_TREE=""
 
-if [ "$DRIFT" = "True" ] || [ "$DRIFT" = "true" ]; then
+if [ "$DRIFT_STATUS" = "unknown" ]; then
+  echo "ERROR: Drift status unknown (origin_main_tree_sha unavailable or ship_info stale). deployed_tree_sha=$DEPLOYED_TREE origin_main_tree_sha=$ORIGIN_TREE" >&2
+  echo '{"overall":"FAIL","phase":"tree_verify","drift_status":"unknown","run_id":"'"$RUN_ID"'"}' > "$PROOF_DIR/result.json"
+  exit 2
+fi
+
+if [ "$DRIFT" = "true" ] || [ "$DRIFT" = "True" ]; then
   echo "ERROR: Drift detected. deployed_tree_sha=$DEPLOYED_TREE origin_main_tree_sha=$ORIGIN_TREE" >&2
   echo '{"overall":"FAIL","phase":"tree_verify","drift":true,"run_id":"'"$RUN_ID"'"}' > "$PROOF_DIR/result.json"
   exit 2

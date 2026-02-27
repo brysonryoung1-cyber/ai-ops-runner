@@ -161,15 +161,16 @@ function buildDeterministicAnswer(
     if (existsSync(versionPath)) {
       try {
         const v = JSON.parse(readFileSync(versionPath, "utf-8"));
+        const driftStatus = v.drift_status;
         const drift = v.drift;
-        if (drift === false) {
+        if (driftStatus === "ok" && drift === false) {
           driftAnswer = "Up to date. Deployed matches origin/main. ";
           checks.push({ name: "drift", pass: true, detail: "No drift", citation: `artifacts/system/state_pack/${statePackDir}/version.json` });
-        } else if (drift === true) {
+        } else if (driftStatus === "ok" && drift === true) {
           driftAnswer = "DRIFT detected. Deployed != origin/main. Run deploy or reconcile. ";
           checks.push({ name: "drift", pass: false, detail: "Drift", citation: `artifacts/system/state_pack/${statePackDir}/version.json` });
         } else {
-          driftAnswer += "Unknown (deploy_info may be missing). ";
+          driftAnswer += "Unknown (origin_main_tree_sha unavailable or ship_info stale). ";
         }
       } catch {
         driftAnswer += "Could not parse version. ";
