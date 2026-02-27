@@ -24,6 +24,8 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   const [buildSha, setBuildSha] = useState<string | null>(null);
   const [deploySha, setDeploySha] = useState<string | null>(null);
   const [canonicalUrl, setCanonicalUrl] = useState<string | null>(null);
+  const [versionDrift, setVersionDrift] = useState<boolean | null>(null);
+  const [versionJson, setVersionJson] = useState<Record<string, unknown> | null>(null);
 
   useEffect(() => {
     fetch("/api/ui/health_public")
@@ -32,6 +34,16 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         if (d.build_sha) setBuildSha(d.build_sha);
         if (d.deploy_sha) setDeploySha(d.deploy_sha);
         if (d.canonical_url) setCanonicalUrl(d.canonical_url);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/ui/version")
+      .then((r) => r.json())
+      .then((d) => {
+        setVersionDrift(d.drift === true);
+        setVersionJson(d);
       })
       .catch(() => {});
   }, []);
@@ -76,6 +88,21 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           </span>
         )}
         <div className="hidden md:flex items-center gap-2 ml-auto">
+          {versionDrift !== null && (
+            <a
+              href="/api/ui/version"
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`px-2 py-0.5 rounded text-[10px] font-medium ${
+                versionDrift
+                  ? "bg-amber-500/20 text-amber-300 hover:bg-amber-500/30"
+                  : "bg-green-500/20 text-green-300 hover:bg-green-500/30"
+              }`}
+              title={versionJson ? JSON.stringify(versionJson, null, 2) : undefined}
+            >
+              {versionDrift ? "DRIFT" : "Up to date"}
+            </a>
+          )}
           {buildSha && (
             <span className="text-[10px] font-mono text-white/40" title={`Build: ${buildSha}${deploySha ? ` Deploy: ${deploySha}` : ""}`}>
               {buildSha}

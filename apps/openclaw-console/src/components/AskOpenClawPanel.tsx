@@ -12,10 +12,18 @@ const QUICK_PROMPTS = [
   "What changed since last deploy?",
 ];
 
+interface AskCheck {
+  name: string;
+  pass: boolean;
+  detail: string;
+  citation?: string;
+}
+
 interface AskResponse {
   ok: boolean;
   answer?: string;
   citations?: string[];
+  checks?: AskCheck[];
   recommended_next_action?: { action: string; read_only?: boolean };
   confidence?: string;
   state_pack_run_id?: string;
@@ -108,6 +116,30 @@ export default function AskOpenClawPanel({ token, statePackRunId }: AskOpenClawP
             {response.ok ? (
               <>
                 <p className="text-sm text-white/90 whitespace-pre-wrap">{response.answer}</p>
+                {response.checks && response.checks.length > 0 && (
+                  <div>
+                    <p className="text-xs text-white/50 uppercase tracking-wider mb-1">Checks</p>
+                    <ul className="space-y-1">
+                      {response.checks.map((c) => (
+                        <li key={c.name} className="flex items-center gap-2 text-xs">
+                          <span className={c.pass ? "text-green-400" : "text-amber-400"}>
+                            {c.pass ? "✓" : "✗"}
+                          </span>
+                          <span className="text-white/80">{c.name}</span>
+                          <span className="text-white/50">— {c.detail}</span>
+                          {c.citation && (
+                            <Link
+                              href={`/artifacts/${c.citation.replace(/^artifacts\//, "")}`}
+                              className="text-blue-300 hover:text-blue-200 font-mono truncate max-w-[120px]"
+                            >
+                              {c.citation.split("/").pop()}
+                            </Link>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 {response.citations && response.citations.length > 0 && (
                   <div>
                     <p className="text-xs text-white/50 uppercase tracking-wider mb-1">Citations</p>
