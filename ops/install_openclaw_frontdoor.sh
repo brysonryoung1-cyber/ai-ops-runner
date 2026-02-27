@@ -14,6 +14,10 @@ CADDYFILE="$ROOT_DIR/ops/caddy/Caddyfile.frontdoor"
 UNIT_SRC="$ROOT_DIR/ops/systemd/openclaw-frontdoor.service"
 UNIT_DST="/etc/systemd/system/openclaw-frontdoor.service"
 
+# Disable default caddy.service (binds *:80; we use openclaw-frontdoor on 127.0.0.1:8788)
+systemctl stop caddy.service 2>/dev/null || true
+systemctl disable caddy.service 2>/dev/null || true
+
 # Ensure Caddy is installed
 if ! command -v caddy >/dev/null 2>&1; then
   echo "Installing Caddy..."
