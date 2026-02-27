@@ -46,6 +46,16 @@ fi
 AIOPS_SSH="${OPENCLAW_AIOPS1_SSH:-}"
 HQ_BASE="${OPENCLAW_HQ_BASE:-https://aiops-1.tailc75c62.ts.net}"
 
+# Fail-closed on malformed SSH target to prevent option/command injection
+# via externally sourced OPENCLAW_AIOPS1_SSH values.
+if [ "$SKIP_DEPLOY" -eq 0 ] && [ -n "$AIOPS_SSH" ]; then
+  if ! printf '%s' "$AIOPS_SSH" | grep -Eq '^[A-Za-z0-9._-]+@[A-Za-z0-9._:-]+$'; then
+    echo "ERROR: Invalid OPENCLAW_AIOPS1_SSH target format: $AIOPS_SSH" >&2
+    echo '{"overall":"FAIL","phase":"deploy_target_validation","run_id":"'"$RUN_ID"'"}' > "$PROOF_DIR/result.json"
+    exit 1
+  fi
+fi
+
 echo "=== ship_deploy_verify.sh ==="
 echo "  Run ID: $RUN_ID"
 echo "  Proof:  $PROOF_DIR"
@@ -102,9 +112,12 @@ echo ""
 # --- Phase 2: Deploy (on aiops-1) ---
 if [ "$SKIP_DEPLOY" -eq 0 ] && [ -n "$AIOPS_SSH" ]; then
   echo "==> Phase 2: Deploy on aiops-1"
-  if ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$AIOPS_SSH" \
-    "cd /opt/ai-ops-runner && git fetch origin main && git reset --hard origin/main && \
-     (sudo ./ops/deploy_until_green.sh 2>/dev/null || sudo ./ops/deploy_pipeline.sh)" 2>&1 | tee "$PROOF_DIR/deploy.log"; then
+  if ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$AIOPS_SSH" bash -se <<'REMOTE_DEPLOY' 2>&1 | tee "$PROOF_DIR/deploy.log"; then
+cd /opt/ai-ops-runner
+git fetch origin main
+git reset --hard origin/main
+sudo ./ops/deploy_until_green.sh 2>/dev/null || sudo ./ops/deploy_pipeline.sh
+REMOTE_DEPLOY
     echo "  Deploy: PASS"
   else
     echo "ERROR: Deploy failed on aiops-1" >&2
@@ -114,14 +127,25 @@ if [ "$SKIP_DEPLOY" -eq 0 ] && [ -n "$AIOPS_SSH" ]; then
   echo ""
   # --- Phase 2a: Ensure noVNC readiness (shm_fix if needed, wait for 6080) ---
   echo "==> Phase 2a: Ensure noVNC readiness (shm_fix + 6080 wait)"
-  ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$AIOPS_SSH" \
-    "cd /opt/ai-ops-runner && (ss -tln 2>/dev/null | grep -qE ':6080[^0-9]|6080 ' || (sudo bash ./ops/scripts/novnc_shm_fix.sh 2>&1 | tail -5; for i in \$(seq 1 30); do ss -tln 2>/dev/null | grep -qE ':6080[^0-9]|6080 ' && break; systemctl start openclaw-novnc 2>/dev/null || true; sleep 2; done))" 2>&1 | tail -8 || true
+  ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$AIOPS_SSH" bash -se <<'REMOTE_NOVNC' 2>&1 | tail -8 || true
+cd /opt/ai-ops-runner
+if ! ss -tln 2>/dev/null | grep -qE ':6080[^0-9]|6080 '; then
+  sudo bash ./ops/scripts/novnc_shm_fix.sh 2>&1 | tail -5
+  for _i in $(seq 1 30); do
+    ss -tln 2>/dev/null | grep -qE ':6080[^0-9]|6080 ' && break
+    systemctl start openclaw-novnc 2>/dev/null || true
+    sleep 2
+  done
+fi
+REMOTE_NOVNC
   sleep 5
   echo ""
   # --- Phase 2b: Force-run strict canary (require PASS with noVNC up) ---
   echo "==> Phase 2b: Strict canary (noVNC 6080 + WSS >=10s)"
-  if ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$AIOPS_SSH" \
-    "cd /opt/ai-ops-runner && ./ops/scripts/canary.sh" 2>&1 | tee "$PROOF_DIR/canary.log"; then
+  if ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$AIOPS_SSH" bash -se <<'REMOTE_CANARY' 2>&1 | tee "$PROOF_DIR/canary.log"; then
+cd /opt/ai-ops-runner
+./ops/scripts/canary.sh
+REMOTE_CANARY
     echo "  Canary: PASS"
   else
     echo "ERROR: Strict canary failed (noVNC must be up)" >&2
