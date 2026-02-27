@@ -385,7 +385,8 @@ if [ -z "$HEALTH_JSON" ]; then
   exit 2
 fi
 BUILD_SHA="$(echo "$HEALTH_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('build_sha',''))" 2>/dev/null)" || BUILD_SHA=""
-if [ "$BUILD_SHA" != "$GIT_HEAD" ]; then
+# Accept long-form build_sha that starts with short git HEAD.
+if [ -z "$BUILD_SHA" ] || [[ "$BUILD_SHA" != "$GIT_HEAD"* ]]; then
   echo "  FAIL: build_sha=$BUILD_SHA != GIT_HEAD=$GIT_HEAD (console image not rebuilt)" >&2
   write_fail "$STEP" "build_sha_mismatch" "Console build_sha ($BUILD_SHA) != deploy SHA ($GIT_HEAD). Rebuild console: docker compose -f docker-compose.yml -f docker-compose.console.yml build --no-cache openclaw_console" "artifacts/deploy/$RUN_ID/verify.log"
   exit 2
