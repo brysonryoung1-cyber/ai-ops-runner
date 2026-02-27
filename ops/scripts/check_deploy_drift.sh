@@ -10,16 +10,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$ROOT_DIR"
 
-# Paths that deploy is allowed to modify (project state, templates)
-ALLOWED_PATTERNS="config/project_state.json|docs/OPENCLAW_CURRENT.md|docs/OPENCLAW_NEXT.md"
+# Paths that deploy is allowed to modify (project state, templates from update_project_state.py)
+is_allowed() {
+  case "$1" in
+    config/project_state.json|docs/OPENCLAW_CURRENT.md|docs/OPENCLAW_NEXT.md) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 # Modified tracked files (diff from HEAD)
 DRIFT_FILES=""
 while IFS= read -r path; do
   [ -z "$path" ] && continue
-  if echo "$path" | grep -qE "^($ALLOWED_PATTERNS)$"; then
-    continue
-  fi
+  is_allowed "$path" && continue
   DRIFT_FILES="${DRIFT_FILES}${path}"$'\n'
 done <<< "$(git diff --name-only HEAD 2>/dev/null || true)"
 
