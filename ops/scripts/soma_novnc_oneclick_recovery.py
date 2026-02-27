@@ -81,7 +81,7 @@ def main() -> int:
                 break
 
     if not novnc_url:
-        novnc_url = "https://aiops-1.tailc75c62.ts.net/novnc/vnc.html?autoconnect=1&path=websockify"
+        novnc_url = "https://aiops-1.tailc75c62.ts.net/novnc/vnc.html?autoconnect=1&path=/websockify"
 
     if state == "WAITING_FOR_HUMAN":
         print("READY_FOR_HUMAN: login/2FA can now be completed")

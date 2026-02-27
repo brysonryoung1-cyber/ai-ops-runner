@@ -79,7 +79,7 @@ NOVNC_URL=""
 if [ -f "$PROOF_DIR/doctor.json" ]; then
   NOVNC_URL="$(python3 -c "import json; d=json.load(open('$PROOF_DIR/doctor.json')); print(d.get('novnc_url','') or '')" 2>/dev/null)" || true
 fi
-[ -z "$NOVNC_URL" ] && NOVNC_URL="https://${TS_HOSTNAME}/novnc/vnc.html?autoconnect=1&path=websockify"
+[ -z "$NOVNC_URL" ] && NOVNC_URL="https://${TS_HOSTNAME}/novnc/vnc.html?autoconnect=1&path=/websockify"
 
 # HTTP checks
 NOVNC_HTTP_200="false"
