@@ -112,6 +112,12 @@ if [ "$SKIP_DEPLOY" -eq 0 ] && [ -n "$AIOPS_SSH" ]; then
     exit 2
   fi
   echo ""
+  # --- Phase 2a: Ensure noVNC readiness (shm_fix if needed, wait for 6080) ---
+  echo "==> Phase 2a: Ensure noVNC readiness (shm_fix + 6080 wait)"
+  ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$AIOPS_SSH" \
+    "cd /opt/ai-ops-runner && (ss -tln 2>/dev/null | grep -qE ':6080[^0-9]|6080 ' || (sudo bash ./ops/scripts/novnc_shm_fix.sh 2>&1 | tail -5; for i in \$(seq 1 30); do ss -tln 2>/dev/null | grep -qE ':6080[^0-9]|6080 ' && break; systemctl start openclaw-novnc 2>/dev/null || true; sleep 2; done))" 2>&1 | tail -8 || true
+  sleep 5
+  echo ""
   # --- Phase 2b: Force-run strict canary (require PASS with noVNC up) ---
   echo "==> Phase 2b: Strict canary (noVNC 6080 + WSS >=10s)"
   if ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$AIOPS_SSH" \
