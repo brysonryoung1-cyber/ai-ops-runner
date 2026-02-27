@@ -9,6 +9,7 @@
 #   * -> 127.0.0.1:8787 (HQ default)
 
 127.0.0.1:8788 {
+	bind 127.0.0.1
 	# /novnc/websockify alias: rewrite to /websockify for websockify server
 	handle_path /novnc/websockify* {
 		rewrite * /websockify
