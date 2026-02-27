@@ -56,6 +56,7 @@ function getCanonicalUrl(): string | null {
 
 const CONSOLE_ROUTES = [
   "/",
+  "/inbox",
   "/projects",
   "/projects/[projectId]",
   "/runs",

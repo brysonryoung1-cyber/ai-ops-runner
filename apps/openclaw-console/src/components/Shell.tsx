@@ -11,6 +11,7 @@ import NotificationBanner from "./NotificationBanner";
 
 const NAV_ITEMS = [
   { href: "/", label: "Overview" },
+  { href: "/inbox", label: "Inbox" },
   { href: "/projects", label: "Projects" },
   { href: "/runs", label: "Runs" },
   { href: "/artifacts", label: "Artifacts" },
@@ -27,6 +28,13 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   const [canonicalUrl, setCanonicalUrl] = useState<string | null>(null);
   const [versionDrift, setVersionDrift] = useState<boolean | null>(null);
   const [versionJson, setVersionJson] = useState<Record<string, unknown> | null>(null);
+  const [proofStatus, setProofStatus] = useState<{
+    proof_status: string;
+    last_canary_status: string | null;
+    last_ship_proof_run: string | null;
+    last_reconcile_run: string | null;
+    artifact_paths: { ship_proof?: string; canary?: string; deploy?: string };
+  } | null>(null);
 
   useEffect(() => {
     fetch("/api/ui/health_public")
@@ -46,6 +54,13 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         setVersionDrift(d.drift === true || d.drift_status === "unknown");
         setVersionJson(d);
       })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/proof-status")
+      .then((r) => r.json())
+      .then(setProofStatus)
       .catch(() => {});
   }, []);
 
@@ -89,6 +104,21 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           </span>
         )}
         <div className="hidden md:flex items-center gap-2 ml-auto">
+          {proofStatus && (
+            <a
+              href={proofStatus.artifact_paths?.ship_proof ? `/artifacts/${proofStatus.artifact_paths.ship_proof.split("/").map(encodeURIComponent).join("/")}` : "#"}
+              className={`px-2 py-0.5 rounded text-[10px] font-medium ${
+                proofStatus.proof_status === "drift"
+                  ? "bg-amber-500/20 text-amber-300 hover:bg-amber-500/30"
+                  : proofStatus.proof_status === "up_to_date"
+                    ? "bg-green-500/20 text-green-300 hover:bg-green-500/30"
+                    : "bg-white/10 text-white/70 hover:bg-white/15"
+              }`}
+              title={`Proof: ${proofStatus.proof_status} | Ship: ${proofStatus.last_ship_proof_run ?? "—"} | Canary: ${proofStatus.last_canary_status ?? "—"} | Reconcile: ${proofStatus.last_reconcile_run ?? "—"}`}
+            >
+              Proof: {proofStatus.proof_status === "drift" ? "drift" : proofStatus.proof_status === "up_to_date" ? "Up to date" : "—"}
+            </a>
+          )}
           {versionDrift !== null && (
             <a
               href="/api/ui/version"
