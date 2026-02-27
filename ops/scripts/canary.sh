@@ -142,12 +142,13 @@ else
 fi
 echo ""
 
-# --- 4. /api/ui/version drift check ---
+# --- 4. /api/ui/version drift check (fail-closed: unknown or true = FAIL) ---
 echo "==> 4. Version drift check"
 if curl -sf --connect-timeout 3 --max-time 5 "$CONSOLE_BASE/api/ui/version" 2>/dev/null > "$CANARY_DIR/version.json"; then
-  DRIFT=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/version.json')); print(d.get('drift', True))" 2>/dev/null) || DRIFT="True"
-  if [ "$DRIFT" = "True" ]; then
-    echo "  Version drift: FAIL (drift=true)"
+  DRIFT_STATUS=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/version.json')); print(d.get('drift_status','unknown'))" 2>/dev/null) || DRIFT_STATUS="unknown"
+  DRIFT=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/version.json')); v=d.get('drift'); print('true' if v is True else 'false')" 2>/dev/null) || DRIFT="true"
+  if [ "$DRIFT_STATUS" = "unknown" ] || [ "$DRIFT" = "true" ]; then
+    echo "  Version drift: FAIL (drift_status=$DRIFT_STATUS drift=$DRIFT)"
     [ -z "$FAILED_INVARIANT" ] && FAILED_INVARIANT="version_drift"
     REMEDIATE=1
   else
@@ -180,8 +181,9 @@ if [ "$REMEDIATE" -eq 1 ]; then
   python3 "$ROOT_DIR/ops/scripts/novnc_connectivity_audit.py" --run-id "${NOVNC_RUN_ID}_retry" --host "$TS_HOSTNAME" > "$CANARY_DIR/novnc_audit_retry.json" 2>/dev/null || true
   curl -sf --connect-timeout 3 --max-time 5 "$CONSOLE_BASE/api/ui/version" 2>/dev/null > "$CANARY_DIR/version_retry.json" || true
   NOVNC_RETRY=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/novnc_audit_retry.json')); print(d.get('all_ok', False))" 2>/dev/null) || NOVNC_RETRY="False"
-  DRIFT_RETRY=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/version_retry.json')); print(d.get('drift', True))" 2>/dev/null) || DRIFT_RETRY="True"
-  if [ "$NOVNC_RETRY" = "True" ] && [ "$DRIFT_RETRY" != "True" ]; then
+  DRIFT_STATUS_RETRY=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/version_retry.json')); print(d.get('drift_status','unknown'))" 2>/dev/null) || DRIFT_STATUS_RETRY="unknown"
+  DRIFT_RETRY=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/version_retry.json')); v=d.get('drift'); print('true' if v is True else 'false')" 2>/dev/null) || DRIFT_RETRY="true"
+  if [ "$NOVNC_RETRY" = "True" ] && [ "$DRIFT_STATUS_RETRY" = "ok" ] && [ "$DRIFT_RETRY" != "true" ]; then
     echo "  Remediation: PASS (checks recovered)"
     REMEDIATE=0
   else

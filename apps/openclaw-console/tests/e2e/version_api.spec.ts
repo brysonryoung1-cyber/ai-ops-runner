@@ -1,10 +1,10 @@
 /**
- * E2E tests for /api/ui/version: correct fields, tree-to-tree drift, drift_reason.
+ * E2E tests for /api/ui/version: correct fields, tree-to-tree drift, drift_reason, fail-closed.
  */
 import { test, expect } from "@playwright/test";
 
 test.describe("GET /api/ui/version", () => {
-  test("returns required fields: build_sha, deployed_head_sha, deployed_tree_sha, origin_main_*, drift, drift_reason, last_deploy_time", async ({
+  test("returns required fields: build_sha, deployed_*, origin_main_*, drift_status, drift, drift_reason, last_deploy_time", async ({
     request,
   }) => {
     const res = await request.get("/api/ui/version");
@@ -26,8 +26,11 @@ test.describe("GET /api/ui/version", () => {
     expect(data).toHaveProperty("origin_main_tree_sha");
     expect(data.origin_main_tree_sha === null || typeof data.origin_main_tree_sha === "string").toBe(true);
 
+    expect(data).toHaveProperty("drift_status");
+    expect(["ok", "unknown"]).toContain(data.drift_status);
+
     expect(data).toHaveProperty("drift");
-    expect(typeof data.drift).toBe("boolean");
+    expect(data.drift === null || typeof data.drift === "boolean").toBe(true);
 
     expect(data).toHaveProperty("drift_reason");
     expect(data.drift_reason === null || typeof data.drift_reason === "string").toBe(true);
@@ -36,19 +39,48 @@ test.describe("GET /api/ui/version", () => {
     expect(data.last_deploy_time === null || typeof data.last_deploy_time === "string").toBe(true);
   });
 
-  test("drift is tree-true: when both trees present, drift compares deployed_tree_sha vs origin_main_tree_sha", async ({
+  test("when origin_main_tree_sha missing, drift_status is unknown and drift is null (fail-closed)", async ({
     request,
   }) => {
     const res = await request.get("/api/ui/version");
     expect(res.status()).toBe(200);
     const data = await res.json();
 
-    if (data.deployed_tree_sha && data.origin_main_tree_sha) {
+    if (!data.origin_main_tree_sha && !data.origin_main_head_sha) {
+      expect(data.drift_status).toBe("unknown");
+      expect(data.drift).toBeNull();
+      expect(data.drift_reason).toBeTruthy();
+    }
+  });
+
+  test("when both trees present and drift_status=ok, drift compares deployed_tree_sha vs origin_main_tree_sha", async ({
+    request,
+  }) => {
+    const res = await request.get("/api/ui/version");
+    expect(res.status()).toBe(200);
+    const data = await res.json();
+
+    if (data.deployed_tree_sha && data.origin_main_tree_sha && data.drift_status === "ok") {
       const expectedDrift = data.deployed_tree_sha !== data.origin_main_tree_sha;
       expect(data.drift).toBe(expectedDrift);
       if (data.drift) {
         expect(data.drift_reason).toContain("tree");
       }
+    }
+  });
+
+  test("when drift_status=ok and trees match, drift is false", async ({ request }) => {
+    const res = await request.get("/api/ui/version");
+    expect(res.status()).toBe(200);
+    const data = await res.json();
+
+    if (
+      data.deployed_tree_sha &&
+      data.origin_main_tree_sha &&
+      data.deployed_tree_sha === data.origin_main_tree_sha &&
+      data.drift_status === "ok"
+    ) {
+      expect(data.drift).toBe(false);
     }
   });
 });

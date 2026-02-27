@@ -142,8 +142,11 @@ if curl -sf --connect-timeout 2 --max-time 4 "$CONSOLE_BASE/api/ui/version" >"$O
 import json
 try:
     d = json.load(open('$OUT_DIR/version.json'))
+    status = d.get('drift_status', 'unknown')
     drift = d.get('drift')
-    if drift is True:
+    if status == 'unknown':
+        print('unknown')
+    elif drift is True:
         print('DRIFT: deployed != origin/main')
     elif drift is False:
         print('Up to date')

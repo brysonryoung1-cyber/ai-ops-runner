@@ -43,7 +43,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     fetch("/api/ui/version")
       .then((r) => r.json())
       .then((d) => {
-        setVersionDrift(d.drift === true);
+        setVersionDrift(d.drift === true || d.drift_status === "unknown");
         setVersionJson(d);
       })
       .catch(() => {});

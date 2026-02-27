@@ -42,6 +42,7 @@ services:
       - ./config:/app/config:ro
       - ./docs:/app/docs:ro
       - ./artifacts:/app/artifacts:rw
+      - /etc/ai-ops-runner:/etc/ai-ops-runner:ro
       - /var/lib/ai-ops-runner/autopilot:/var/lib/ai-ops-runner/autopilot:ro
       - /var/lib/ai-ops-runner/soma_autopilot:/var/lib/ai-ops-runner/soma_autopilot:ro
     healthcheck:
