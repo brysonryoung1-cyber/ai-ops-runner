@@ -103,9 +103,10 @@ if [ "$DRY_RUN" -eq 1 ]; then
   echo "  5. sudo ./ops/openclaw_install_guard.sh"
   echo "  6. docker compose -f docker-compose.yml -f docker-compose.console.yml up -d --build"
   echo "  7. Verify console bind on 127.0.0.1:$CONSOLE_PORT"
-  echo "  8. tailscale serve --bg --https=443 http://127.0.0.1:$CONSOLE_PORT"
-  echo "  9. Print phone URL + validate tailnet-only"
-  echo " 10. Write deploy receipt to $RECEIPT_DIR"
+  echo "  8a. Install openclaw-frontdoor (Caddy 127.0.0.1:8788)"
+  echo "  9. tailscale serve --bg --https=443 http://127.0.0.1:8788 (single-root)"
+  echo " 10. Print phone URL + validate tailnet-only"
+  echo " 11. Write deploy receipt to $RECEIPT_DIR"
   exit 0
 fi
 
@@ -293,14 +294,37 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 9: Tailscale serve mapping (idempotent)
+# Step 8a: Install frontdoor (Caddy reverse proxy) — single-root for reliable noVNC
 # ─────────────────────────────────────────────────────────────────────────────
-step "Set up tailscale serve (HTTPS /novnc → 6080, / → $CONSOLE_PORT)"
+step "Install openclaw-frontdoor (single-root for noVNC routing)"
+FRONTDOOR_RC=0
+_ssh_script <<REMOTE_FRONTDOOR || FRONTDOOR_RC=$?
+set -euo pipefail
+cd '${VPS_DIR}'
+if [ -f ops/install_openclaw_frontdoor.sh ]; then
+  sudo ./ops/install_openclaw_frontdoor.sh 2>&1 | tail -5
+else
+  echo "  WARNING: install_openclaw_frontdoor.sh not found"
+  exit 1
+fi
+REMOTE_FRONTDOOR
+
+if [ "$FRONTDOOR_RC" -eq 0 ]; then
+  pass "Frontdoor installed (127.0.0.1:8788)"
+  sleep 2
+else
+  fail "Frontdoor install FAILED (rc=$FRONTDOOR_RC)"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 9: Tailscale serve — single-root to frontdoor (NOT per-path)
+# ─────────────────────────────────────────────────────────────────────────────
+step "Set up tailscale serve (single-root -> frontdoor 8788)"
 TS_SERVE_RC=0
-_ssh_cmd "sudo tailscale serve reset 2>/dev/null; sudo tailscale serve --bg --https=443 --set-path=/novnc http://127.0.0.1:6080 2>/dev/null; sudo tailscale serve --bg --https=443 --set-path=/websockify http://127.0.0.1:6080 2>/dev/null; sudo tailscale serve --bg --https=443 http://127.0.0.1:${CONSOLE_PORT}" || TS_SERVE_RC=$?
+_ssh_cmd "sudo tailscale serve reset 2>/dev/null; sudo tailscale serve --bg --https=443 'http://127.0.0.1:8788'" || TS_SERVE_RC=$?
 
 if [ "$TS_SERVE_RC" -eq 0 ]; then
-  pass "Tailscale serve configured"
+  pass "Tailscale serve configured (single-root -> frontdoor)"
 else
   fail "Tailscale serve FAILED (rc=$TS_SERVE_RC)"
 fi
@@ -351,7 +375,7 @@ receipt = {
     'console_build_sha': '${VPS_HEAD}',
     'phone_url': '${PHONE_URL}',
     'console_bind': '127.0.0.1:${CONSOLE_PORT}',
-    'tailscale_serve': 'HTTPS:443 -> http://127.0.0.1:${CONSOLE_PORT}',
+    'tailscale_serve': 'HTTPS:443 -> http://127.0.0.1:8788 (frontdoor)',
     'steps_total': ${STEP},
     'failures': ${FAILURES},
     'result': 'PASS' if ${FAILURES} == 0 else 'FAIL',
@@ -372,7 +396,7 @@ Result:   $([ "$FAILURES" -eq 0 ] && echo "ALL PASSED" || echo "FAILURES: $FAILU
 
 Phone URL:    $PHONE_URL
 Console Bind: 127.0.0.1:$CONSOLE_PORT
-TS Serve:     HTTPS:443 → http://127.0.0.1:$CONSOLE_PORT
+TS Serve:     HTTPS:443 → http://127.0.0.1:8788 (frontdoor, single-root)
 
 Guard Timer:  $VPS_GUARD_STATUS
 Key Status:   $(echo "$VPS_KEY_STATUS" | head -1)

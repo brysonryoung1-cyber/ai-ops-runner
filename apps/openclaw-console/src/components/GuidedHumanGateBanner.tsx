@@ -115,6 +115,7 @@ export default function GuidedHumanGateBanner() {
   const handleCopyLinks = useCallback(() => {
     const origin = typeof window !== "undefined" ? window.location.origin : "";
     const lines: string[] = [];
+    if (status?.novnc_url) lines.push(`noVNC (primary): ${status.novnc_url}`);
     if (status?.framebuffer_url) lines.push(`framebuffer: ${origin}${status.framebuffer_url}`);
     if (status?.doctor_framebuffer_url) lines.push(`framebuffer (doctor fallback): ${origin}${status.doctor_framebuffer_url}`);
     if (status?.artifact_dir_url) lines.push(`artifact_dir: ${origin}${status.artifact_dir_url}`);
@@ -184,7 +185,7 @@ export default function GuidedHumanGateBanner() {
               Open artifacts
             </span>
           )}
-          {(framebufferUrl || artifactDirUrl) && (
+          {(status?.novnc_url || framebufferUrl || artifactDirUrl) && (
             <GlassButton variant="secondary" size="sm" onClick={handleCopyLinks}>
               Copy links
             </GlassButton>

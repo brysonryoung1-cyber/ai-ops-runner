@@ -58,6 +58,7 @@ def probe_wss(
         "hold_sec": hold_sec,
         "close_code": None,
         "close_reason": None,
+        "exception": None,
         "elapsed_sec": None,
     }
     sock = None
@@ -107,6 +108,7 @@ def probe_wss(
         return result
     except (socket.timeout, ssl.SSLError, ConnectionRefusedError, OSError) as e:
         result["close_reason"] = str(e)[:150]
+        result["exception"] = type(e).__name__
         return result
     finally:
         if sock:
