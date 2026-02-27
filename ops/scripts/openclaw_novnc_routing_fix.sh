@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
-# openclaw_novnc_routing_fix.sh — One-click fix for noVNC routing (Tailscale Serve + doctor).
+# openclaw_novnc_routing_fix.sh — One-click fix for noVNC routing (frontdoor + single-root Serve).
 #
-# 1. Runs serve remediation: /novnc + /websockify -> 6080, / -> 8787
-# 2. Runs openclaw_novnc_doctor (--fast then full)
-# 3. Writes proof artifact to artifacts/hq_proofs/novnc_canonical/<run_id>/
+# 1. Installs frontdoor if missing (Caddy on 127.0.0.1:8788)
+# 2. Restarts: openclaw-novnc, openclaw-frontdoor (correct order)
+# 3. Tailscale Serve: single-root to http://127.0.0.1:8788 (NO per-path handlers)
+# 4. Runs openclaw_novnc_doctor + novnc_ws_probe (WSS over 443)
+# 5. Writes proof to artifacts/hq_proofs/frontdoor_fix/<run_id>/
 #
-# Proof artifact includes: novnc_url_canonical, ws_upgrade_ok, framebuffer_non_black.
-# Run on aiops-1. Never prints secrets.
+# Fail-closed: exits nonzero if ws_probe or doctor fails.
+# Run on aiops-1. No secrets.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-RUN_ID="${OPENCLAW_RUN_ID:-$(date -u +%Y%m%d_%H%M%SZ)_novnc_routing}"
-PROOF_DIR="$ROOT_DIR/artifacts/hq_proofs/novnc_canonical/$RUN_ID"
+RUN_ID="${OPENCLAW_RUN_ID:-$(date -u +%Y%m%d%H%M%SZ)_novnc_routing}"
+PROOF_DIR="$ROOT_DIR/artifacts/hq_proofs/frontdoor_fix/$RUN_ID"
+FRONTDOOR_PORT="${OPENCLAW_FRONTDOOR_PORT:-8788}"
 mkdir -p "$PROOF_DIR"
 
 TS_HOSTNAME="aiops-1.tailc75c62.ts.net"
@@ -26,109 +29,100 @@ except: print('aiops-1.tailc75c62.ts.net')
 " 2>/dev/null)"
 fi
 
-# 1. Serve remediation
-echo "Applying Tailscale Serve: /novnc, /websockify -> 6080; / -> 8787"
-tailscale serve reset 2>/dev/null || true
-tailscale serve --bg --https=443 --set-path=/novnc "http://127.0.0.1:6080" 2>/dev/null || true
-tailscale serve --bg --https=443 --set-path=/websockify "http://127.0.0.1:6080" 2>/dev/null || true
-tailscale serve --bg --https=443 "http://127.0.0.1:8787" 2>/dev/null || true
+echo "=== openclaw_novnc_routing_fix ==="
+echo "  Run ID: $RUN_ID"
+echo "  Host: $TS_HOSTNAME"
+echo ""
+
+# 1. Install frontdoor if missing
+if ! systemctl is-active --quiet openclaw-frontdoor.service 2>/dev/null; then
+  if [ -f "$ROOT_DIR/ops/install_openclaw_frontdoor.sh" ]; then
+    echo "Installing frontdoor..."
+    sudo ./ops/install_openclaw_frontdoor.sh 2>&1 | tail -5
+  else
+    echo "WARNING: install_openclaw_frontdoor.sh not found; frontdoor may not be installed" >&2
+  fi
+fi
+
+# 2. Restart services (novnc first, then frontdoor)
+echo "Restarting openclaw-novnc..."
+systemctl restart openclaw-novnc 2>/dev/null || true
+sleep 3
+echo "Restarting openclaw-frontdoor..."
+systemctl restart openclaw-frontdoor 2>/dev/null || true
 sleep 2
 
-# 2. Doctor (fast then deep)
-echo "Running noVNC doctor (fast)..."
-OPENCLAW_RUN_ID="${RUN_ID}_fast" "$ROOT_DIR/ops/openclaw_novnc_doctor.sh" --fast 2>/dev/null | tail -1 > "$PROOF_DIR/doctor_fast.json" || true
-echo "Running noVNC doctor (deep)..."
-OPENCLAW_RUN_ID="$RUN_ID" "$ROOT_DIR/ops/openclaw_novnc_doctor.sh" 2>/dev/null | tail -1 > "$PROOF_DIR/doctor.json" || true
+# 3. Tailscale Serve: single-root to frontdoor
+echo "Applying Tailscale Serve: single-root -> 127.0.0.1:$FRONTDOOR_PORT"
+tailscale serve reset 2>/dev/null || true
+tailscale serve --bg --https=443 "http://127.0.0.1:$FRONTDOOR_PORT" 2>/dev/null || true
+sleep 2
 
-# Extract novnc_url from doctor
+# 4. Doctor (fast then full)
+echo "Running noVNC doctor..."
+OPENCLAW_RUN_ID="${RUN_ID}_fast" "$ROOT_DIR/ops/openclaw_novnc_doctor.sh" --fast 2>/dev/null | tail -1 > "$PROOF_DIR/doctor_fast.json" || echo '{"ok":false}' > "$PROOF_DIR/doctor_fast.json"
+OPENCLAW_RUN_ID="$RUN_ID" "$ROOT_DIR/ops/openclaw_novnc_doctor.sh" 2>/dev/null | tail -1 > "$PROOF_DIR/doctor.json" || echo '{"ok":false}' > "$PROOF_DIR/doctor.json"
+
+# 5. WSS probe (WSS over 443 — same as browser)
+WS_PROBE="$ROOT_DIR/ops/scripts/novnc_ws_probe.py"
+WS_PROBE_OK="false"
+if [ -x "$WS_PROBE" ]; then
+  if OPENCLAW_TS_HOSTNAME="$TS_HOSTNAME" OPENCLAW_WS_PROBE_HOLD_SEC=10 python3 "$WS_PROBE" --host "$TS_HOSTNAME" --all 2>/dev/null > "$PROOF_DIR/ws_probe.json"; then
+    WS_PROBE_OK="true"
+  fi
+else
+  echo '{"all_ok":false,"error":"ws_probe not found"}' > "$PROOF_DIR/ws_probe.json"
+fi
+
+# Extract novnc_url
 NOVNC_URL=""
 if [ -f "$PROOF_DIR/doctor.json" ]; then
   NOVNC_URL="$(python3 -c "import json; d=json.load(open('$PROOF_DIR/doctor.json')); print(d.get('novnc_url','') or '')" 2>/dev/null)" || true
 fi
-[ -z "$NOVNC_URL" ] && NOVNC_URL="https://${TS_HOSTNAME}/novnc/vnc.html?autoconnect=1&path=/websockify"
+[ -z "$NOVNC_URL" ] && NOVNC_URL="https://${TS_HOSTNAME}/novnc/vnc.html?autoconnect=1&path=websockify"
 
-# Checks
+# HTTP checks
 NOVNC_HTTP_200="false"
-WS_UPGRADE_OK="false"
-FB_NON_BLACK="false"
+[ "$(curl -kfsS --connect-timeout 3 "https://${TS_HOSTNAME}/novnc/vnc.html" -o /dev/null -w "%{http_code}" 2>/dev/null)" = "200" ] && NOVNC_HTTP_200="true"
 
-if [ "$(curl -kfsS --connect-timeout 3 "https://${TS_HOSTNAME}/novnc/vnc.html" -o /dev/null -w "%{http_code}" 2>/dev/null)" = "200" ]; then
-  NOVNC_HTTP_200="true"
+# Write PROOF.md
+cat > "$PROOF_DIR/PROOF.md" << EOF
+# Frontdoor Fix Proof
+
+**Run ID:** $RUN_ID
+**Timestamp:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+## Architecture
+- Tailscale Serve: single-root \`https://* -> http://127.0.0.1:$FRONTDOOR_PORT\`
+- Frontdoor (Caddy): routes /api/* -> 8787, /novnc/*, /websockify -> 6080
+
+## Checks
+- novnc_http_200: $NOVNC_HTTP_200
+- ws_probe (WSS 443): $WS_PROBE_OK
+- doctor: $(python3 -c "import json; d=json.load(open('$PROOF_DIR/doctor.json')); print('PASS' if d.get('ok') else 'FAIL')" 2>/dev/null || echo "unknown")
+
+## Canonical noVNC URL
+$NOVNC_URL
+
+## Artifacts
+- doctor.json, doctor_fast.json, ws_probe.json
+EOF
+
+# Fail-closed if ws_probe or doctor failed
+DOCTOR_OK="false"
+[ -f "$PROOF_DIR/doctor.json" ] && python3 -c "import json; d=json.load(open('$PROOF_DIR/doctor.json')); exit(0 if d.get('ok') else 1)" 2>/dev/null && DOCTOR_OK="true"
+
+if [ "$WS_PROBE_OK" != "true" ]; then
+  echo "FAIL: ws_probe did not pass (WSS over 443)" >&2
+  cat "$PROOF_DIR/ws_probe.json" 2>/dev/null | head -20
+  exit 1
+fi
+if [ "$DOCTOR_OK" != "true" ]; then
+  echo "FAIL: openclaw_novnc_doctor did not pass" >&2
+  exit 1
 fi
 
-# WS upgrade (local + tailnet)
-if python3 -c "
-import socket, struct, base64, time
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.settimeout(5)
-s.connect(('127.0.0.1', 6080))
-key = base64.b64encode(struct.pack('!I', int(time.time() * 1000) % (2**32))).decode()
-req = 'GET /websockify HTTP/1.1\r\nHost: 127.0.0.1:6080\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ' + key + '\r\nSec-WebSocket-Version: 13\r\n\r\n'
-s.sendall(req.encode())
-r = s.recv(512).decode()
-s.close()
-exit(0 if '101' in r or 'Switching' in r else 1)
-" 2>/dev/null; then
-  WS_UPGRADE_OK="true"
-fi
-
-if [ "$WS_UPGRADE_OK" = "true" ] && python3 -c "
-import socket, ssl, struct, base64, time
-h = '$TS_HOSTNAME'
-try:
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    s = ctx.wrap_socket(socket.socket(socket.AF_INET, socket.SOCK_STREAM), server_hostname=h)
-    s.settimeout(8)
-    s.connect((h, 443))
-    key = base64.b64encode(struct.pack('!I', int(time.time() * 1000) % (2**32))).decode()
-    req = 'GET /websockify HTTP/1.1\r\nHost: ' + h + '\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ' + key + '\r\nSec-WebSocket-Version: 13\r\n\r\n'
-    s.sendall(req.encode())
-    r = s.recv(512).decode(errors='replace')
-    s.close()
-    exit(0 if '101' in r or 'Switching' in r else 1)
-except Exception:
-    exit(1)
-" 2>/dev/null; then
-  :
-else
-  WS_UPGRADE_OK="false"
-fi
-
-# Framebuffer
-for d in $(ls -t "$ROOT_DIR/artifacts/novnc_debug" 2>/dev/null | head -3); do
-  if [ -f "$ROOT_DIR/artifacts/novnc_debug/$d/timings.json" ]; then
-    FB_NON_BLACK="true"
-    break
-  fi
-done
-
-# Write proof.json
-export PROOF_RUN_ID="$RUN_ID"
-export PROOF_NOVNC_URL="$NOVNC_URL"
-export PROOF_HTTP_200="$NOVNC_HTTP_200"
-export PROOF_WS_OK="$WS_UPGRADE_OK"
-export PROOF_FB_OK="$FB_NON_BLACK"
-export PROOF_DIR_VAL="$PROOF_DIR"
-python3 -c "
-import json, os
-from datetime import datetime, timezone
-d = {
-  'run_id': os.environ.get('PROOF_RUN_ID', ''),
-  'timestamp_utc': datetime.now(timezone.utc).isoformat(),
-  'novnc_url_canonical': os.environ.get('PROOF_NOVNC_URL', ''),
-  'checks': {
-    'novnc_http_200': os.environ.get('PROOF_HTTP_200') == 'true',
-    'ws_upgrade_ok': os.environ.get('PROOF_WS_OK') == 'true',
-    'framebuffer_non_black': os.environ.get('PROOF_FB_OK') == 'true',
-  },
-  'proof_dir': 'artifacts/hq_proofs/novnc_canonical/' + os.environ.get('PROOF_RUN_ID', ''),
-}
-with open(os.environ.get('PROOF_DIR_VAL', '') + '/proof.json', 'w') as f:
-    json.dump(d, f, indent=2)
-"
-
-echo "Proof written to $PROOF_DIR/proof.json"
+echo ""
+echo "Proof: $PROOF_DIR/PROOF.md"
 echo "novnc_url_canonical: $NOVNC_URL"
 exit 0

@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-2026-02-23 (hostd auto-heal + watchdog)
+2026-02-27 (noVNC frontdoor + single-root Tailscale Serve)
 
 ## Status
 
@@ -14,7 +14,8 @@
 - **AI Connections Panel**: Shows configured providers (OpenAI), review engine mode, masked fingerprints (NEVER raw keys), gate status.
 - **HQ UI**: 6-section sidebar (Overview, Projects, Runs, Logs, Artifacts, Actions). Projects page with status cards. Runs page with timeline + detail panel.
 - **One-command deploy**: `ops/openclaw_vps_deploy.sh` — 10-step scripted deploy (sync, build, heal, doctor, guard, console, tailscale serve, receipt)
-- **Phone access**: `https://aiops-1.tailc75c62.ts.net` via Tailscale Serve (HTTPS 443 → 127.0.0.1:8787)
+- **Phone access**: `https://aiops-1.tailc75c62.ts.net` via Tailscale Serve (HTTPS 443 → 127.0.0.1:8788 frontdoor)
+- **noVNC frontdoor**: Caddy on 127.0.0.1:8788 routes /api/* → 8787, /novnc/*, /websockify → 6080. Single-root Serve eliminates path-mapping edge cases.
 - **Canonical docs**: HANDOFF + OPS_INDEX as single source of truth; security contract, transfer packet, notification/heal/console docs
 - **Hardened console**: allowlist-only with schema validation, token auth, action lock, audit log, CSRF protection, VPS deploy behind Tailscale
 - **Soma Kajabi Library Ownership**: First-class workflow for Kajabi snapshots (Home + Practitioner), Gmail video harvest, and library mirroring. CLI entrypoints + console UX + SMS commands.
@@ -40,6 +41,7 @@ Docker smoke test passing. Full ops/review/ship framework active. ORB integratio
 | SSH Hardening | Locked (Tailscale-only) | `ops/openclaw_fix_ssh_tailscale_only.sh` |
 | **HQ Console** | Production (127.0.0.1:8787) | `apps/openclaw-console/` |
 | **Phone Access** | Tailscale Serve HTTPS | `https://aiops-1.tailc75c62.ts.net` |
+| **Frontdoor** | Caddy 127.0.0.1:8788 | Single-root Serve; routes /api→8787, /novnc/websockify→6080 |
 | **Project Registry** | 4 projects (fail-closed) | `config/projects.json` |
 | **Run Recorder** | Per-action recording | `artifacts/runs/<run_id>/run.json` |
 | **AI Status** | Provider + review engine | `GET /api/ai-status` |
@@ -294,6 +296,14 @@ config/
 - Type tests (6): construction and serialization incl. ReviewFallbackConfig, ReviewCapsConfig
 
 ## Recent Changes
+
+- **noVNC frontdoor + single-root Tailscale Serve** (2026-02-27):
+  - **Root cause**: Tailscale Serve per-path mapping (/novnc, /websockify -> 6080) passed server-side checks (direct TCP to 6080) but failed from browser (WSS over 443). Path routing edge cases caused intermittent "Failed to connect to server".
+  - **Fix**: Caddy frontdoor on 127.0.0.1:8788. Tailscale Serve: single-root `https://* -> http://127.0.0.1:8788`. Caddy routes /api/* -> 8787, /novnc/*, /websockify, /novnc/websockify -> 6080. WebSocket upgrade handled explicitly by Caddy.
+  - **Canonical noVNC URL**: `https://aiops-1.tailc75c62.ts.net/novnc/vnc.html?autoconnect=1&path=websockify` (or `path=/websockify`).
+  - **WSS probe**: `ops/scripts/novnc_ws_probe.py` probes WSS over 443 (same as browser). Doctor + serve_guard + routing_fix use it.
+  - **One-click Recovery**: `soma_novnc_oneclick_recovery` — fix routing → doctor → ws_probe; if WAITING_FOR_HUMAN report READY with URL; else resume soma_run_to_done.
+  - **Artifacts**: `artifacts/novnc_debug/ws_probe/<run_id>/`, `artifacts/hq_proofs/frontdoor_fix/<run_id>/PROOF.md`.
 
 - **Soma connectors UI hardening + tests** (2026-02-17):
   - **Projects UI**: `/projects/soma_kajabi` connector buttons now use the project run route, show toasts with run_id/artifact_dir, and emit redacted UI telemetry on errors.

@@ -80,23 +80,37 @@ for s in (data if isinstance(data, list) else [data]):
   fi
 }
 
-# --- Self-heal: fix tailscale serve if root misrouted to 6080 (only if tailscale CLI available) ---
+# --- Self-heal: fix tailscale serve (single-root to frontdoor when available) ---
 _heal_tailscale_serve() {
   if command -v tailscale >/dev/null 2>&1; then
-    local root_body
-    root_body="$(curl -skfsS --connect-timeout 3 --max-time 5 "https://$(tailscale status --json 2>/dev/null | python3 -c "
+    local ts_host=""
+    ts_host="$(tailscale status --json 2>/dev/null | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
-    name = (d.get('Self') or {}).get('DNSName', '').rstrip('.')
-    print(name if name else '')
+    print((d.get('Self') or {}).get('DNSName', '').rstrip('.') or '')
 except: pass
-" 2>/dev/null)/" 2>/dev/null)" || true
-    if echo "$root_body" | grep -qE "Directory listing for /|vnc\.html"; then
-      tailscale serve --bg --https=443 --set-path=/novnc "http://127.0.0.1:6080" 2>/dev/null || true
-      tailscale serve --bg --https=443 --set-path=/websockify "http://127.0.0.1:6080" 2>/dev/null || true
-      tailscale serve --bg --https=443 "http://127.0.0.1:$CONSOLE_PORT" 2>/dev/null || true
-      sleep 2
+" 2>/dev/null)" || true
+    [ -z "$ts_host" ] && return
+    local root_body
+    root_body="$(curl -skfsS --connect-timeout 3 --max-time 5 "https://${ts_host}/" 2>/dev/null)" || true
+    local frontdoor_ok=false
+    curl -fsS --connect-timeout 2 "http://127.0.0.1:8788/api/ui/health_public" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') else 1)" 2>/dev/null && frontdoor_ok=true
+    if [ "$frontdoor_ok" = true ]; then
+      # Single-root: all traffic -> frontdoor
+      if echo "$root_body" | grep -qE "Directory listing for /|vnc\.html"; then
+        tailscale serve reset 2>/dev/null || true
+        tailscale serve --bg --https=443 "http://127.0.0.1:8788" 2>/dev/null || true
+        sleep 2
+      fi
+    else
+      # Legacy: per-path (fallback when frontdoor not installed)
+      if echo "$root_body" | grep -qE "Directory listing for /|vnc\.html"; then
+        tailscale serve --bg --https=443 --set-path=/novnc "http://127.0.0.1:6080" 2>/dev/null || true
+        tailscale serve --bg --https=443 --set-path=/websockify "http://127.0.0.1:6080" 2>/dev/null || true
+        tailscale serve --bg --https=443 "http://127.0.0.1:$CONSOLE_PORT" 2>/dev/null || true
+        sleep 2
+      fi
     fi
   fi
 }
@@ -141,6 +155,21 @@ _run_audit() {
     OPENCLAW_RUN_ID="${RUN_ID}_doctor" "$ROOT_DIR/ops/openclaw_novnc_doctor.sh" >"$report_dir/novnc_doctor.json" 2>/dev/null || true
     [ -s "$report_dir/novnc_doctor.json" ] || echo '{"ok":false,"result":"FAIL"}' >"$report_dir/novnc_doctor.json"
   fi
+
+  # 3d. WSS probe (WSS over 443 — same as browser) + frontdoor health
+  ts_host="$(tailscale status --json 2>/dev/null | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    print((d.get('Self') or {}).get('DNSName', '').rstrip('.') or '')
+except: pass
+" 2>/dev/null)" || true
+  if [ -n "$ts_host" ] && [ -x "$ROOT_DIR/ops/scripts/novnc_ws_probe.py" ]; then
+    OPENCLAW_TS_HOSTNAME="$ts_host" OPENCLAW_WS_PROBE_HOLD_SEC=5 python3 "$ROOT_DIR/ops/scripts/novnc_ws_probe.py" --host "$ts_host" --hold 5 --all 2>/dev/null >"$report_dir/ws_probe.json" || echo '{"all_ok":false}' >"$report_dir/ws_probe.json"
+  else
+    echo '{"all_ok":false,"reason":"tailscale_or_probe_unavailable"}' >"$report_dir/ws_probe.json"
+  fi
+  curl -fsS --connect-timeout 2 "http://127.0.0.1:8788/api/ui/health_public" 2>/dev/null >"$report_dir/frontdoor_health.json" || echo '{"ok":false}' >"$report_dir/frontdoor_health.json"
 
   # 4. novnc_probe + novnc_status.json
   if [ -x "$ROOT_DIR/ops/novnc_probe.sh" ]; then

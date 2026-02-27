@@ -18,6 +18,7 @@ export const LONG_RUNNING_ACTIONS = new Set([
   "soma_kajabi_auto_finish",
   "soma_run_to_done",
   "soma_fix_and_retry",
+  "soma_novnc_oneclick_recovery",
   "soma_kajabi_capture_interactive",
   "soma_kajabi_session_check",
   "soma_kajabi_unblock_and_run",

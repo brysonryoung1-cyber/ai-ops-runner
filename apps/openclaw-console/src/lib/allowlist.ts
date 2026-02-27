@@ -50,6 +50,7 @@ export type ActionName =
   | "openclaw_novnc_doctor"
   | "openclaw_novnc_shm_fix"
   | "openclaw_novnc_routing_fix"
+  | "soma_novnc_oneclick_recovery"
   | "soma_fix_and_retry";
 
 export interface AllowedAction {
@@ -422,9 +423,17 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     name: "openclaw_novnc_routing_fix",
     label: "Fix noVNC Routing",
     description:
-      "One-click: serve remediation (/novnc + /websockify), doctor (fast then deep), proof artifact.",
+      "Frontdoor + single-root Serve, doctor, ws_probe. Fail-closed if any check fails.",
     remoteCommand: "cd /opt/ai-ops-runner && bash ./ops/scripts/openclaw_novnc_routing_fix.sh",
     timeoutSec: 180,
+  },
+  soma_novnc_oneclick_recovery: {
+    name: "soma_novnc_oneclick_recovery",
+    label: "One-click Recovery: Fix noVNC + Re-run Soma",
+    description:
+      "Fix routing → doctor → ws_probe. If WAITING_FOR_HUMAN: report READY with URL. Else: resume soma_run_to_done.",
+    remoteCommand: "cd /opt/ai-ops-runner && python3 ./ops/scripts/soma_novnc_oneclick_recovery.py",
+    timeoutSec: 600,
   },
   soma_fix_and_retry: {
     name: "soma_fix_and_retry",

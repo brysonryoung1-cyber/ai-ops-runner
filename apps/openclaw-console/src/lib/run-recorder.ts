@@ -72,6 +72,7 @@ const ACTION_PROJECT_MAP: Record<string, string> = {
   soma_kajabi_auto_finish: "soma_kajabi",
   soma_run_to_done: "soma_kajabi",
   soma_fix_and_retry: "soma_kajabi",
+  soma_novnc_oneclick_recovery: "soma_kajabi",
   soma_kajabi_reauth_and_resume: "soma_kajabi",
   soma_kajabi_session_check: "soma_kajabi",
   openclaw_novnc_restart: "soma_kajabi",

@@ -77,10 +77,36 @@ except: print('framebuffer_guard_failed')
   exit 1
 fi
 
-# WS stability: both local + tailnet must PASS
+# WS stability: local (direct 6080) + tailnet (WSS over 443, same as browser)
 _run_ws_check() {
   local ws_hold=10
   [[ "$FAST_MODE" -eq 1 ]] && ws_hold=3
+  # Prefer WSS-over-443 for tailnet (novnc_ws_probe) when available — matches browser path
+  local ts_host=""
+  ts_host="$(tailscale status --json 2>/dev/null | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    print((d.get('Self') or {}).get('DNSName', '').rstrip('.') or '')
+except: pass
+" 2>/dev/null)" || true
+  if [ -n "$ts_host" ] && [ -x "$SCRIPT_DIR/scripts/novnc_ws_probe.py" ]; then
+    OPENCLAW_NOVNC_PORT="$NOVNC_PORT" OPENCLAW_WS_STABILITY_HOLD_SEC="$ws_hold" python3 "$WS_CHECK" --local 2>/dev/null > "$ART_DIR/ws_local.json" || echo '{"ok":false}' > "$ART_DIR/ws_local.json"
+    OPENCLAW_TS_HOSTNAME="$ts_host" OPENCLAW_WS_PROBE_HOLD_SEC="$ws_hold" python3 "$SCRIPT_DIR/scripts/novnc_ws_probe.py" --host "$ts_host" --hold "$ws_hold" --all 2>/dev/null > "$ART_DIR/ws_wss.json" || echo '{"all_ok":false}' > "$ART_DIR/ws_wss.json"
+    python3 -c "
+import json
+local = json.load(open('$ART_DIR/ws_local.json'))
+wss = json.load(open('$ART_DIR/ws_wss.json'))
+tailnet_ok = wss.get('all_ok', False)
+local['tailnet'] = {'ok': tailnet_ok, 'method': 'wss_443'} if tailnet_ok else {'ok': False, 'close_reason': 'wss_probe_failed'}
+local['ws_stability_local'] = 'verified' if local.get('ok') else 'failed'
+local['ws_stability_tailnet'] = 'verified' if tailnet_ok else 'failed'
+local['ok'] = local.get('ok') and tailnet_ok
+print(json.dumps(local))
+" 2>/dev/null
+    return
+  fi
+  # Fallback: original --all (direct 6080 for both)
   OPENCLAW_NOVNC_PORT="$NOVNC_PORT" OPENCLAW_WS_STABILITY_HOLD_SEC="$ws_hold" python3 "$WS_CHECK" --all 2>/dev/null
 }
 

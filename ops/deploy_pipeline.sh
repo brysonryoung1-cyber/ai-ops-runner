@@ -176,6 +176,19 @@ else
 fi
 echo ""
 
+# --- Step 2c2b: Install openclaw-frontdoor (Caddy reverse proxy for single-root Tailscale Serve) ---
+echo "==> Step 2c2b: Install openclaw-frontdoor"
+if [ -f "$SCRIPT_DIR/install_openclaw_frontdoor.sh" ]; then
+  if ! sudo bash "$SCRIPT_DIR/install_openclaw_frontdoor.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/frontdoor_install.log"; then
+    echo "  WARNING: openclaw-frontdoor install failed (non-fatal; serve_guard falls back to per-path)" >&2
+  else
+    echo "  openclaw-frontdoor: installed"
+  fi
+else
+  echo "  (install_openclaw_frontdoor.sh not found — skip)"
+fi
+echo ""
+
 # --- Step 2c3: Install Soma Kajabi Session Warm timer (disabled by default) ---
 echo "==> Step 2c3: Install Soma Kajabi Session Warm timer"
 if [ -f "$SCRIPT_DIR/install_openclaw_soma_kajabi_warm.sh" ]; then

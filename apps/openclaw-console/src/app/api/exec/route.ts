@@ -161,6 +161,7 @@ async function runActionAsync(
         actionName === "soma_kajabi_auto_finish" ||
         actionName === "soma_run_to_done" ||
         actionName === "soma_fix_and_retry" ||
+        actionName === "soma_novnc_oneclick_recovery" ||
         actionName === "soma_kajabi_reauth_and_resume" ||
         actionName === "soma_kajabi_session_check" ||
         actionName === "soma_zane_finish_plan" ||
@@ -202,7 +203,8 @@ async function runActionAsync(
       if (
         actionName === "soma_run_to_done" ||
         actionName === "soma_kajabi_auto_finish" ||
-        actionName === "soma_fix_and_retry"
+        actionName === "soma_fix_and_retry" ||
+        actionName === "soma_novnc_oneclick_recovery"
       ) {
         writeSomaLastRunIndex();
       }
@@ -225,7 +227,8 @@ async function runActionAsync(
     if (
       actionName === "soma_run_to_done" ||
       actionName === "soma_kajabi_auto_finish" ||
-      actionName === "soma_fix_and_retry"
+      actionName === "soma_fix_and_retry" ||
+      actionName === "soma_novnc_oneclick_recovery"
     ) {
       writeSomaLastRunIndex();
     }
@@ -516,6 +519,7 @@ export async function POST(req: NextRequest) {
       actionName === "soma_kajabi_auto_finish" ||
       actionName === "soma_run_to_done" ||
       actionName === "soma_fix_and_retry" ||
+      actionName === "soma_novnc_oneclick_recovery" ||
       actionName === "soma_kajabi_reauth_and_resume" ||
       actionName === "soma_kajabi_session_check" ||
       actionName === "soma_zane_finish_plan" ||
