@@ -66,6 +66,9 @@ def probe_wss(
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
+        # Force HTTP/1.1 ALPN so server doesn't negotiate h2 (WebSocket needs HTTP/1.1)
+        if hasattr(ctx, "set_alpn_protocols"):
+            ctx.set_alpn_protocols(["http/1.1"])
         raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw.settimeout(10)
         sock = ctx.wrap_socket(raw, server_hostname=host)
