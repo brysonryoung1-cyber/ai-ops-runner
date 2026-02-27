@@ -18,15 +18,23 @@ http://127.0.0.1:8788 {
 
 	# Enforce order: websockify routes MUST match before catch-all (route prevents Caddy re-sort)
 	route {
-		# /websockify — websocket upgrade (Caddy transparently handles Upgrade header)
+		# /websockify — websocket upgrade (force HTTP/1.1 upstream for 101)
 		handle /websockify* {
-			reverse_proxy 127.0.0.1:6080
+			reverse_proxy 127.0.0.1:6080 {
+				transport http {
+					versions 1.1
+				}
+			}
 		}
 
 		# /novnc/websockify alias: rewrite to /websockify for websockify server
 		handle_path /novnc/websockify* {
 			rewrite * /websockify
-			reverse_proxy 127.0.0.1:6080
+			reverse_proxy 127.0.0.1:6080 {
+				transport http {
+					versions 1.1
+				}
+			}
 		}
 
 		# /novnc/* — noVNC web UI (vnc.html, app/, etc.)
