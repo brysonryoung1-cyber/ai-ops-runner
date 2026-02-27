@@ -103,7 +103,8 @@ export async function GET(
   let acceptancePath: string | null = null;
   let proofPath: string | null = null;
   let artifactDir: string | null = resolved.artifact_dir;
-  const novncUrl: string | null = resolved.novnc_url;
+  const novncUrl: string | null = resolved.novnc_url; // canonical (primary)
+  const novncUrlLegacy: string | null = resolved.novnc_url_legacy ?? null;
   const instructionLine: string | null = resolved.instruction_line;
   const artifactLinks = resolved.artifact_links;
   const errorClass: string | null = resolved.error_class;
@@ -245,6 +246,8 @@ export async function GET(
     acceptance_path: acceptancePath,
     proof_path: proofPath,
     novnc_url: novncUrl,
+    novnc_url_canonical: novncUrl,
+    novnc_url_legacy: novncUrlLegacy,
     instruction_line: instructionLine,
     artifact_links: artifactLinks,
     error_class: errorClass,

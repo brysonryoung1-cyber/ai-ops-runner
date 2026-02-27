@@ -11,6 +11,7 @@
 
 import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
+import { toCanonicalNovncUrl } from "./novnc-url";
 
 export interface SomaLastRunResolved {
   status: "SUCCESS" | "WAITING_FOR_HUMAN" | "FAILURE" | "TIMEOUT" | "BLOCKED" | "UNKNOWN" | "running";
@@ -18,6 +19,7 @@ export interface SomaLastRunResolved {
   run_id: string | null;
   artifact_dir: string | null;
   novnc_url: string | null;
+  novnc_url_legacy: string | null;
   instruction_line: string | null;
   started_at: string | null;
   finished_at: string | null;
@@ -285,6 +287,7 @@ export function resolveSomaLastRun(): SomaLastRunResolved {
     run_id: null,
     artifact_dir: null,
     novnc_url: null,
+    novnc_url_legacy: null,
     instruction_line: null,
     started_at: null,
     finished_at: null,
@@ -325,12 +328,16 @@ export function resolveSomaLastRun(): SomaLastRunResolved {
     ? (rawStatus as SomaLastRunResolved["status"])
     : "UNKNOWN";
 
+  const rawNovnc = extracted.novnc_url ?? null;
+  const novncCanonical = rawNovnc ? toCanonicalNovncUrl(rawNovnc) ?? rawNovnc : null;
+
   return {
     status: finalStatus,
     error_class: extracted.error_class ?? runRecord.error_class ?? null,
     run_id: runRecord.run_id,
     artifact_dir: artifactDir,
-    novnc_url: extracted.novnc_url ?? null,
+    novnc_url: novncCanonical,
+    novnc_url_legacy: rawNovnc && rawNovnc !== novncCanonical ? rawNovnc : null,
     instruction_line: extracted.instruction_line ?? null,
     started_at: runRecord.started_at ?? null,
     finished_at: runRecord.finished_at ?? null,

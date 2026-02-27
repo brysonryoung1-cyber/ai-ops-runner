@@ -1,47 +1,51 @@
 #!/usr/bin/env bash
-# novnc_https_proof.sh — Phase D proof artifact for noVNC HTTPS fix.
+# openclaw_novnc_routing_fix.sh — One-click fix for noVNC routing (Tailscale Serve + doctor).
 #
-# Writes artifacts/hq_proofs/novnc_https_fix/<timestamp>/proof.json with:
-#   - build_sha, active WAITING_FOR_HUMAN run_id
-#   - HQ banner noVNC URL format (https://host/novnc)
-#   - HTTP 200 for /novnc, websocket upgrade under HTTPS origin
-#   - Doctor framebuffer non-black
+# 1. Runs serve remediation: /novnc + /websockify -> 6080, / -> 8787
+# 2. Runs openclaw_novnc_doctor (--fast then full)
+# 3. Writes proof artifact to artifacts/hq_proofs/novnc_canonical/<run_id>/
 #
-# Run on aiops-1 after deploy. Never prints secrets.
+# Proof artifact includes: novnc_url_canonical, ws_upgrade_ok, framebuffer_non_black.
+# Run on aiops-1. Never prints secrets.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-TS="$(date -u +%Y%m%dT%H%M%SZ)"
-PROOF_DIR="$ROOT_DIR/artifacts/hq_proofs/novnc_https_fix/$TS"
+RUN_ID="${OPENCLAW_RUN_ID:-$(date -u +%Y%m%d_%H%M%SZ)_novnc_routing}"
+PROOF_DIR="$ROOT_DIR/artifacts/hq_proofs/novnc_canonical/$RUN_ID"
 mkdir -p "$PROOF_DIR"
 
-TS_HOSTNAME=""
+TS_HOSTNAME="aiops-1.tailc75c62.ts.net"
 if command -v tailscale >/dev/null 2>&1; then
   TS_HOSTNAME="$(tailscale status --json 2>/dev/null | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
-    print((d.get('Self') or {}).get('DNSName', '').rstrip('.') or '')
-except: pass
+    print((d.get('Self') or {}).get('DNSName', '').rstrip('.') or 'aiops-1.tailc75c62.ts.net')
+except: print('aiops-1.tailc75c62.ts.net')
 " 2>/dev/null)"
 fi
-[ -z "$TS_HOSTNAME" ] && TS_HOSTNAME="aiops-1.tailc75c62.ts.net"
-export PROOF_TS_HOSTNAME="$TS_HOSTNAME"
 
-BUILD_SHA="unknown"
-if [ -d "$ROOT_DIR/.git" ]; then
-  BUILD_SHA="$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null)" || true
-fi
+# 1. Serve remediation
+echo "Applying Tailscale Serve: /novnc, /websockify -> 6080; / -> 8787"
+tailscale serve reset 2>/dev/null || true
+tailscale serve --bg --https=443 --set-path=/novnc "http://127.0.0.1:6080" 2>/dev/null || true
+tailscale serve --bg --https=443 --set-path=/websockify "http://127.0.0.1:6080" 2>/dev/null || true
+tailscale serve --bg --https=443 "http://127.0.0.1:8787" 2>/dev/null || true
+sleep 2
 
-# Status for run_id + novnc_url
-RUN_ID=""
+# 2. Doctor (fast then deep)
+echo "Running noVNC doctor (fast)..."
+OPENCLAW_RUN_ID="${RUN_ID}_fast" "$ROOT_DIR/ops/openclaw_novnc_doctor.sh" --fast 2>/dev/null | tail -1 > "$PROOF_DIR/doctor_fast.json" || true
+echo "Running noVNC doctor (deep)..."
+OPENCLAW_RUN_ID="$RUN_ID" "$ROOT_DIR/ops/openclaw_novnc_doctor.sh" 2>/dev/null | tail -1 > "$PROOF_DIR/doctor.json" || true
+
+# Extract novnc_url from doctor
 NOVNC_URL=""
-STATUS_JSON="$(curl -kfsS --connect-timeout 5 "https://${TS_HOSTNAME}/api/projects/soma_kajabi/status" 2>/dev/null)" || true
-if [ -n "$STATUS_JSON" ]; then
-  RUN_ID="$(echo "$STATUS_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('active_run_id') or d.get('last_run_id') or '')" 2>/dev/null)"
-  NOVNC_URL="$(echo "$STATUS_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('novnc_url') or '')" 2>/dev/null)"
+if [ -f "$PROOF_DIR/doctor.json" ]; then
+  NOVNC_URL="$(python3 -c "import json; d=json.load(open('$PROOF_DIR/doctor.json')); print(d.get('novnc_url','') or '')" 2>/dev/null)" || true
 fi
+[ -z "$NOVNC_URL" ] && NOVNC_URL="https://${TS_HOSTNAME}/novnc/vnc.html?autoconnect=1&path=/websockify"
 
 # Checks
 NOVNC_HTTP_200="false"
@@ -52,8 +56,7 @@ if [ "$(curl -kfsS --connect-timeout 3 "https://${TS_HOSTNAME}/novnc/vnc.html" -
   NOVNC_HTTP_200="true"
 fi
 
-# WS upgrade: local 6080 (backend) + tailnet wss://host/websockify (canonical path)
-# Local
+# WS upgrade (local + tailnet)
 if python3 -c "
 import socket, struct, base64, time
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -68,12 +71,10 @@ exit(0 if '101' in r or 'Switching' in r else 1)
 " 2>/dev/null; then
   WS_UPGRADE_OK="true"
 fi
-# Tailnet (wss://host/websockify via Tailscale Serve)
-if [ -n "$TS_HOSTNAME" ] && [ "$WS_UPGRADE_OK" = "true" ]; then
-  if ! python3 -c "
-import socket, ssl, struct, base64, time, os
-h = os.environ.get('PROOF_TS_HOSTNAME', '')
-if not h: exit(1)
+
+if [ "$WS_UPGRADE_OK" = "true" ] && python3 -c "
+import socket, ssl, struct, base64, time
+h = '$TS_HOSTNAME'
 try:
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -90,11 +91,12 @@ try:
 except Exception:
     exit(1)
 " 2>/dev/null; then
-    WS_UPGRADE_OK="false"
-  fi
+  :
+else
+  WS_UPGRADE_OK="false"
 fi
 
-# Framebuffer from latest novnc_debug
+# Framebuffer
 for d in $(ls -t "$ROOT_DIR/artifacts/novnc_debug" 2>/dev/null | head -3); do
   if [ -f "$ROOT_DIR/artifacts/novnc_debug/$d/timings.json" ]; then
     FB_NON_BLACK="true"
@@ -102,35 +104,31 @@ for d in $(ls -t "$ROOT_DIR/artifacts/novnc_debug" 2>/dev/null | head -3); do
   fi
 done
 
-export PROOF_BUILD_SHA="$BUILD_SHA"
+# Write proof.json
 export PROOF_RUN_ID="$RUN_ID"
 export PROOF_NOVNC_URL="$NOVNC_URL"
-export PROOF_TS_HOSTNAME="$TS_HOSTNAME"
-export PROOF_TS="$TS"
-export PROOF_DIR="$PROOF_DIR"
-export PROOF_NOVNC_200="$NOVNC_HTTP_200"
+export PROOF_HTTP_200="$NOVNC_HTTP_200"
 export PROOF_WS_OK="$WS_UPGRADE_OK"
 export PROOF_FB_OK="$FB_NON_BLACK"
+export PROOF_DIR_VAL="$PROOF_DIR"
 python3 -c "
 import json, os
 from datetime import datetime, timezone
 d = {
-  'build_sha': os.environ.get('PROOF_BUILD_SHA', ''),
+  'run_id': os.environ.get('PROOF_RUN_ID', ''),
   'timestamp_utc': datetime.now(timezone.utc).isoformat(),
-  'active_run_id': os.environ.get('PROOF_RUN_ID', ''),
-  'novnc_url_canonical': 'https://' + os.environ.get('PROOF_TS_HOSTNAME', '') + '/novnc/vnc.html?autoconnect=1&path=/websockify',
-  'novnc_url_from_status': os.environ.get('PROOF_NOVNC_URL', ''),
+  'novnc_url_canonical': os.environ.get('PROOF_NOVNC_URL', ''),
   'checks': {
-    'novnc_http_200': os.environ.get('PROOF_NOVNC_200') == 'true',
+    'novnc_http_200': os.environ.get('PROOF_HTTP_200') == 'true',
     'ws_upgrade_ok': os.environ.get('PROOF_WS_OK') == 'true',
     'framebuffer_non_black': os.environ.get('PROOF_FB_OK') == 'true',
   },
-  'proof_dir': 'artifacts/hq_proofs/novnc_https_fix/' + os.environ.get('PROOF_TS', ''),
+  'proof_dir': 'artifacts/hq_proofs/novnc_canonical/' + os.environ.get('PROOF_RUN_ID', ''),
 }
-proof_path = os.path.join(os.environ.get('PROOF_DIR', ''), 'proof.json')
-with open(proof_path, 'w') as f:
+with open(os.environ.get('PROOF_DIR_VAL', '') + '/proof.json', 'w') as f:
     json.dump(d, f, indent=2)
 "
 
 echo "Proof written to $PROOF_DIR/proof.json"
+echo "novnc_url_canonical: $NOVNC_URL"
 exit 0

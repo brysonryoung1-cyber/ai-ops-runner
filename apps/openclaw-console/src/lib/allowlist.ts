@@ -49,6 +49,7 @@ export type ActionName =
   | "openclaw_hq_audit"
   | "openclaw_novnc_doctor"
   | "openclaw_novnc_shm_fix"
+  | "openclaw_novnc_routing_fix"
   | "soma_fix_and_retry";
 
 export interface AllowedAction {
@@ -416,6 +417,14 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
       "Diagnose + recover shmget No space left on device. Applies sysctl, restarts noVNC, runs doctor. Writes artifacts/novnc_shm_fix/<run_id>/.",
     remoteCommand: "cd /opt/ai-ops-runner && bash ./ops/scripts/novnc_shm_fix.sh",
     timeoutSec: 360,
+  },
+  openclaw_novnc_routing_fix: {
+    name: "openclaw_novnc_routing_fix",
+    label: "Fix noVNC Routing",
+    description:
+      "One-click: serve remediation (/novnc + /websockify), doctor (fast then deep), proof artifact.",
+    remoteCommand: "cd /opt/ai-ops-runner && bash ./ops/scripts/openclaw_novnc_routing_fix.sh",
+    timeoutSec: 180,
   },
   soma_fix_and_retry: {
     name: "soma_fix_and_retry",

@@ -50,12 +50,12 @@ try:
 except: pass
 " 2>/dev/null)"
     if [ -n "$dns" ] && [[ "$dns" == *".ts.net" ]]; then
-      # Canonical: https same-host /novnc path (avoids http:6080 mixed-content blank)
-      echo "https://${dns}/novnc/vnc.html?autoconnect=1"
+      # Canonical: https same-host /novnc + path=/websockify (WS upgrade via Tailscale Serve /websockify)
+      echo "https://${dns}/novnc/vnc.html?autoconnect=1&path=/websockify"
       return
     fi
   fi
-  echo "https://<TAILSCALE_HOST>/novnc/vnc.html?autoconnect=1"
+  echo "https://<TAILSCALE_HOST>/novnc/vnc.html?autoconnect=1&path=/websockify"
 }
 
 NOVNC_URL="$(_get_novnc_url)"

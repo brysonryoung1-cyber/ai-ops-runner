@@ -23,8 +23,8 @@ def test_ensure_novnc_ready_retries_on_doctor_fail(tmp_path):
         nonlocal call_count
         call_count += 1
         if call_count < 3:
-            return False, "https://test.ts.net/novnc/vnc.html", "NOVNC_WS_TAILNET_FAILED"
-        return True, "https://test.ts.net/novnc/vnc.html?autoconnect=1", None
+            return False, "https://test.ts.net/novnc/vnc.html?autoconnect=1&path=/websockify", "NOVNC_WS_TAILNET_FAILED"
+        return True, "https://test.ts.net/novnc/vnc.html?autoconnect=1&path=/websockify", None
 
     restart_calls = []
 
@@ -38,7 +38,7 @@ def test_ensure_novnc_ready_retries_on_doctor_fail(tmp_path):
         ready, url, err_class, journal = nr.ensure_novnc_ready(tmp_path, "run_123")
 
     assert ready is True
-    assert url == "https://test.ts.net/novnc/vnc.html?autoconnect=1"
+    assert url == "https://test.ts.net/novnc/vnc.html?autoconnect=1&path=/websockify"
     assert err_class is None
     assert call_count == 3
     assert len(restart_calls) == 2  # Restart after attempt 1 and 2
@@ -55,8 +55,8 @@ def test_ensure_novnc_ready_with_recovery_triggers_restart_on_novnc_not_ready(tm
         call_count += 1
         # First ensure_novnc_ready exhausts 5 retries (5 calls), then recovery runs (1+ calls)
         if call_count <= 5:
-            return False, "https://test.ts.net/novnc/vnc.html", "NOVNC_NOT_READY"
-        return True, "https://recovered.ts.net/novnc/vnc.html?autoconnect=1", None
+            return False, "https://test.ts.net/novnc/vnc.html?autoconnect=1&path=/websockify", "NOVNC_NOT_READY"
+        return True, "https://recovered.ts.net/novnc/vnc.html?autoconnect=1&path=/websockify", None
 
     restart_calls = []
 
@@ -87,6 +87,16 @@ def test_novnc_url_must_not_be_localhost() -> None:
     assert "DNSName" in content or "tailscale" in content, (
         "Doctor must derive URL from Tailscale DNSName, not localhost"
     )
+
+
+def test_doctor_emits_canonical_url_with_path_websockify() -> None:
+    """Doctor must emit canonical URL with path=/websockify (WS upgrade via Tailscale Serve)."""
+    doctor = REPO_ROOT / "ops" / "openclaw_novnc_doctor.sh"
+    content = doctor.read_text()
+    assert "path=/websockify" in content, (
+        "Doctor must emit path=/websockify for canonical noVNC URL (WS upgrade)"
+    )
+    assert "vnc.html?autoconnect=1" in content or "vnc.html?autoconnect=1&path=" in content
 
 
 def test_ws_stability_check_supports_tailnet() -> None:

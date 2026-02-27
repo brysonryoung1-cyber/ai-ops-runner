@@ -101,6 +101,16 @@ if grep -q "/novnc" "$ROOT_DIR/ops/guards/serve_guard.sh"; then
 else
   fail "serve_guard must check /novnc path"
 fi
+if grep -q "/websockify" "$ROOT_DIR/ops/guards/serve_guard.sh"; then
+  pass "serve_guard checks /websockify routing (WS upgrade)"
+else
+  fail "serve_guard must check /websockify routing"
+fi
+if grep -q "ws_upgrade_ok" "$ROOT_DIR/ops/guards/serve_guard.sh"; then
+  pass "serve_guard verifies ws_upgrade_ok"
+else
+  fail "serve_guard must verify ws_upgrade_ok"
+fi
 
 echo ""
 echo "=== guards_regression_selftest: $PASS_COUNT passed, $ERRORS failed ==="
