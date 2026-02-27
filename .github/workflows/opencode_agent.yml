@@ -1,0 +1,87 @@
+# OpenCode Agent — optional. Trigger via PR comment "/opencode <goal>" or workflow_dispatch.
+# Produces patch.diff artifact; does NOT auto-merge. Attach patch to PR for review.
+# Secrets: Store provider keys in GitHub repo secrets (e.g. ANTHROPIC_API_KEY); NOT in repo.
+name: OpenCode Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      goal:
+        description: "Goal for OpenCode (e.g. Add unit test for parse_config)"
+        required: true
+        type: string
+      ref:
+        description: "Base ref (default origin/main)"
+        required: false
+        default: "origin/main"
+        type: string
+  issue_comment:
+    types: [created]
+    # Only on PRs; magic phrase /opencode
+    # (Filter in job: event.issue.pull_request and body contains /opencode)
+
+jobs:
+  opencode:
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request != null && contains(github.event.comment.body, '/opencode'))
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse goal
+        id: parse
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "goal=${{ github.event.inputs.goal }}" >> $GITHUB_OUTPUT
+            echo "ref=${{ github.event.inputs.ref || 'origin/main' }}" >> $GITHUB_OUTPUT
+          else
+            BODY="${{ github.event.comment.body }}"
+            GOAL=$(echo "$BODY" | sed -n 's|^/opencode[[:space:]]*||p' | head -1)
+            echo "goal=${GOAL:-Dry run: validate artifact structure}" >> $GITHUB_OUTPUT
+            echo "ref=origin/main" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create params
+        run: |
+          mkdir -p artifacts/hostd/opencode_ci
+          jq -n --arg g "${{ steps.parse.outputs.goal }}" --arg r "${{ steps.parse.outputs.ref }}" \
+            '{goal: $g, ref: $r, dry_run: true}' > artifacts/hostd/opencode_ci/params.json
+
+      - name: Dry-run OpenCode (artifact structure)
+        env:
+          OPENCLAW_REPO_ROOT: ${{ github.workspace }}
+          OPENCLAW_RUN_ID: opencode_ci
+        run: |
+          chmod +x ops/scripts/opencode_run.sh
+          bash ops/scripts/opencode_run.sh
+
+      - name: Upload patch artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-patch-${{ github.run_id }}
+          path: |
+            artifacts/hostd/opencode_ci/patch.diff
+            artifacts/hostd/opencode_ci/patch_summary.json
+            artifacts/hostd/opencode_ci/PROOF.md
+          if-no-files-found: warn
+
+      - name: Comment on PR
+        if: github.event_name == 'issue_comment' && github.event.issue.pull_request != null
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runId = context.runId;
+            const artifactUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${runId}`;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## OpenCode Agent (dry-run)\n\nArtifact: [View run #${runId}](${artifactUrl})\n\nPatch only; does not merge. Use ship_deploy_verify after approval.`
+            });

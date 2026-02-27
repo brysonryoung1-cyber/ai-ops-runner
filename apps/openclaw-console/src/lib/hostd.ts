@@ -24,6 +24,7 @@ export const LONG_RUNNING_ACTIONS = new Set([
   "soma_kajabi_unblock_and_run",
   "deploy_and_verify",
   "system.reconcile",
+  "code.opencode.propose_patch",
 ]);
 
 export interface HostdResult {
@@ -108,8 +109,12 @@ export function getHostdUrl(): string | null {
 
 /**
  * Execute an allowlisted action via hostd. Returns result compatible with former SSH result shape.
+ * For code.opencode.propose_patch, pass params { goal, ref?, test_command?, dry_run? }.
  */
-export async function executeAction(actionName: string): Promise<HostdResult> {
+export async function executeAction(
+  actionName: string,
+  params?: Record<string, unknown>
+): Promise<HostdResult> {
   const start = Date.now();
   const hostdAction = ACTION_TO_HOSTD[actionName];
   if (!hostdAction) {
@@ -162,11 +167,16 @@ export async function executeAction(actionName: string): Promise<HostdResult> {
   const agent = new Agent({ bodyTimeout: 0, headersTimeout: 0 }); // Disable undici defaults (300s each)
   const signal = execTimeoutMs > 0 ? AbortSignal.timeout(execTimeoutMs) : undefined;
 
+  const body: Record<string, unknown> = { action: hostdAction };
+  if (params && actionName === "code.opencode.propose_patch") {
+    body.params = params;
+  }
+
   try {
     const res = await undiciFetch(`${baseUrl}/exec`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ action: hostdAction }),
+      body: JSON.stringify(body),
       signal,
       dispatcher: agent,
     });
