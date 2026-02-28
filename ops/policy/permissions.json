@@ -127,6 +127,7 @@
         "openclaw-hostd.service",
         "openclaw-frontdoor.service",
         "openclaw-novnc.service",
+        "openclaw-browser-gateway.service",
         "openclaw-guard.service",
         "openclaw-serve-guard.service",
         "openclaw-canary.service",
@@ -148,7 +149,8 @@
         "openclaw-guard.timer",
         "openclaw-executor-watchdog.timer",
         "openclaw-frontdoor.service",
-        "openclaw-novnc.service"
+        "openclaw-novnc.service",
+        "openclaw-browser-gateway.service"
       ]
     },
     "tailscale_serve": {

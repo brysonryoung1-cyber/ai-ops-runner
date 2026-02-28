@@ -37,6 +37,7 @@ fi
 # serve_single_root_targets_frontdoor -> reconcile_frontdoor_serve
 # frontdoor_listening_8788 -> reconcile_frontdoor_serve
 # novnc_http_200, ws_probe_* -> recover_novnc_ws
+# browser_gateway_ready -> recover_browser_gateway
 
 choose_playbook() {
   local inv_json="$1"
@@ -44,7 +45,9 @@ choose_playbook() {
 import json,sys
 d=json.load(open('$inv_json'))
 failing=[i['id'] for i in d.get('invariants',[]) if not i.get('pass')]
-if 'serve_single_root_targets_frontdoor' in failing or 'frontdoor_listening_8788' in failing:
+if 'browser_gateway_ready' in failing:
+    print('recover_browser_gateway')
+elif 'serve_single_root_targets_frontdoor' in failing or 'frontdoor_listening_8788' in failing:
     print('reconcile_frontdoor_serve')
 elif 'novnc_http_200' in failing or 'ws_probe_websockify_ge_10s' in failing or 'ws_probe_novnc_websockify_ge_10s' in failing:
     print('recover_novnc_ws')
@@ -142,6 +145,7 @@ EOF
 EOF
 
   case "$PLAYBOOK" in
+    recover_browser_gateway)  bash "$ROOT_DIR/ops/playbooks/recover_browser_gateway.sh" 2>&1 | tail -5 ;;
     reconcile_frontdoor_serve) bash "$ROOT_DIR/ops/playbooks/reconcile_frontdoor_serve.sh" 2>&1 | tail -5 ;;
     recover_novnc_ws)         bash "$ROOT_DIR/ops/playbooks/recover_novnc_ws.sh" 2>&1 | tail -5 ;;
     recover_hq_routing)       bash "$ROOT_DIR/ops/playbooks/recover_hq_routing.sh" 2>&1 | tail -5 ;;
