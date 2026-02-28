@@ -154,17 +154,21 @@ class BrowserGatewaySession:
         display = os.environ.get("DISPLAY", ":99")
         env = {**os.environ, "DISPLAY": display}
 
-        chromium_paths = [
-            "/usr/bin/chromium-browser",
-            "/usr/bin/chromium",
-            "/usr/bin/google-chrome",
-            "/snap/bin/chromium",
-        ]
-        chromium_bin = None
-        for p in chromium_paths:
-            if Path(p).exists():
-                chromium_bin = p
-                break
+        chromium_bin = os.environ.get("BROWSER_GATEWAY_CHROMIUM_BIN")
+        if not chromium_bin:
+            pw_glob = sorted(Path("/root/.cache/ms-playwright").glob("chromium-*/chrome-linux64/chrome"))
+            chromium_paths = (
+                [str(pw_glob[-1])] if pw_glob else []
+            ) + [
+                "/usr/bin/chromium-browser",
+                "/usr/bin/chromium",
+                "/usr/bin/google-chrome",
+                "/snap/bin/chromium",
+            ]
+            for p in chromium_paths:
+                if Path(p).exists():
+                    chromium_bin = p
+                    break
 
         if not chromium_bin:
             try:
