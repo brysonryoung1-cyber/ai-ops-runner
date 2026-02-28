@@ -27,7 +27,7 @@ SP_BEFORE=$(ls -1dt "$ARTIFACTS/system/state_pack"/*/ 2>/dev/null | head -1)
 systemctl restart openclaw-frontdoor 2>/dev/null || true
 sleep 2
 tailscale serve reset 2>/dev/null || true
-tailscale serve --bg --https=443 "http://127.0.0.1:$FRONTDOOR_PORT" 2>/dev/null || true
+tailscale serve --bg --tcp=443 "tcp://127.0.0.1:8443" 2>/dev/null || true
 sleep 2
 
 # 3. State pack + invariants after

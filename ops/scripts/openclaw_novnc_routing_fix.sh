@@ -52,10 +52,10 @@ echo "Restarting openclaw-frontdoor..."
 systemctl restart openclaw-frontdoor 2>/dev/null || true
 sleep 2
 
-# 3. Tailscale Serve: single-root to frontdoor
-echo "Applying Tailscale Serve: single-root -> 127.0.0.1:$FRONTDOOR_PORT"
+# 3. Tailscale Serve: TCP mode (443 → Caddy TLS 8443, WebSocket-safe)
+echo "Applying Tailscale Serve: TCP 443 -> 127.0.0.1:8443"
 tailscale serve reset 2>/dev/null || true
-tailscale serve --bg --https=443 "http://127.0.0.1:$FRONTDOOR_PORT" 2>/dev/null || true
+tailscale serve --bg --tcp=443 "tcp://127.0.0.1:8443" 2>/dev/null || true
 sleep 2
 
 # 4. Doctor (fast then full)

@@ -122,8 +122,8 @@ except Exception:
   if [ "$local_ok" = true ] && [ "$tailnet_ok" = false ] || [ "$frontdoor_ok" = true ] && [ "$tailnet_ok" = false ]; then
     tailscale serve reset 2>/dev/null || true
     if [ "$frontdoor_ok" = true ]; then
-      # Single-root: all traffic -> frontdoor
-      if tailscale serve --bg --https=443 "http://127.0.0.1:$FRONTDOOR_PORT" 2>/dev/null; then
+      # TCP mode: 443 → Caddy TLS 8443 (WebSocket-safe; Caddy terminates TLS)
+      if tailscale serve --bg --tcp=443 "tcp://127.0.0.1:8443" 2>/dev/null; then
         sleep 2
         if curl -kfsS --connect-timeout 5 --max-time 10 "https://${TS_HOSTNAME}/api/ui/health_public" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') is True else 1)" 2>/dev/null; then
           tailnet_ok=true
@@ -131,10 +131,8 @@ except Exception:
         fi
       fi
     else
-      # Legacy: per-path (fallback when frontdoor not installed)
-      tailscale serve --bg --https=443 --set-path=/novnc "http://127.0.0.1:6080" 2>/dev/null || true
-      tailscale serve --bg --https=443 --set-path=/websockify "http://127.0.0.1:6080" 2>/dev/null || true
-      if tailscale serve --bg --https=443 "http://127.0.0.1:$CONSOLE_PORT" 2>/dev/null; then
+      # Fallback: TCP mode with console port (frontdoor not installed)
+      if tailscale serve --bg --tcp=443 "tcp://127.0.0.1:8443" 2>/dev/null; then
         sleep 2
         if curl -kfsS --connect-timeout 5 --max-time 10 "https://${TS_HOSTNAME}/api/ui/health_public" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') is True else 1)" 2>/dev/null; then
           tailnet_ok=true

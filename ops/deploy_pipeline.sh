@@ -190,11 +190,10 @@ if [ -f "$SCRIPT_DIR/install_openclaw_frontdoor.sh" ]; then
     echo "  WARNING: openclaw-frontdoor install failed (non-fatal; serve_guard falls back to per-path)" >&2
   else
     echo "  openclaw-frontdoor: installed"
-    # Enforce Tailscale Serve single-root → frontdoor (prevent per-path drift)
-    FRONTDOOR_PORT="${OPENCLAW_FRONTDOOR_PORT:-8788}"
+    # Tailscale Serve TCP mode: raw TCP 443 → Caddy TLS 8443 (WebSocket-safe)
     tailscale serve reset 2>/dev/null || true
-    tailscale serve --bg --https=443 "http://127.0.0.1:$FRONTDOOR_PORT" 2>/dev/null || true
-    echo "  tailscale serve: single-root -> 127.0.0.1:$FRONTDOOR_PORT"
+    tailscale serve --bg --tcp=443 "tcp://127.0.0.1:8443" 2>/dev/null || true
+    echo "  tailscale serve: TCP 443 → 127.0.0.1:8443 (Caddy TLS)"
   fi
 else
   echo "  (install_openclaw_frontdoor.sh not found — skip)"
