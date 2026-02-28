@@ -487,12 +487,57 @@ export default function SomaPage() {
         />
       </div>
 
-      {/* Action buttons */}
+      {/* Primary Actions (3-button UX) */}
       <div className="mb-8">
         <h3 className="text-lg font-semibold text-apple-text mb-4">
-          Workflow Actions
+          Quick Actions
         </h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <ActionButton
+            label="Run Soma Now"
+            description="Full orchestration: session check, Phase 0, finish plan, acceptance"
+            variant="primary"
+            loading={loading === "soma_run_to_done"}
+            disabled={loading !== null && loading !== "soma_run_to_done"}
+            onClick={() => handleExec("soma_run_to_done")}
+          />
+          <ActionButton
+            label="Fix & Retry"
+            description="Recovery chain: restart infra, doctor, then re-run orchestration"
+            variant="secondary"
+            loading={loading === "soma_fix_and_retry"}
+            disabled={loading !== null && loading !== "soma_fix_and_retry"}
+            onClick={() => handleExec("soma_fix_and_retry")}
+          />
+          <ActionButton
+            label="Open Proof"
+            description="View latest orchestration proof and acceptance artifacts"
+            variant="secondary"
+            loading={false}
+            disabled={false}
+            onClick={() => {
+              const sr = results["soma_status"];
+              if (sr?.stdout) {
+                try {
+                  const parsed = JSON.parse(sr.stdout.trim().split("\n").pop() || "{}");
+                  if (parsed.artifact_dir) {
+                    window.location.href = `/artifacts/${parsed.artifact_dir}`;
+                    return;
+                  }
+                } catch { /* ignore */ }
+              }
+              window.location.href = "/artifacts/soma_kajabi";
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Advanced: primitive workflow actions */}
+      <details className="mb-8">
+        <summary className="text-sm font-medium text-apple-muted cursor-pointer hover:text-apple-text transition-colors">
+          Advanced Actions
+        </summary>
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
           {SOMA_ACTIONS.map((a) => (
             <ActionButton
               key={a.action}
@@ -505,7 +550,7 @@ export default function SomaPage() {
             />
           ))}
         </div>
-      </div>
+      </details>
 
       {/* Last result */}
       {lastResult && (

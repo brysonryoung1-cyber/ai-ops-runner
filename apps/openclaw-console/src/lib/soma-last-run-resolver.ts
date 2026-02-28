@@ -20,6 +20,7 @@ export interface SomaLastRunResolved {
   artifact_dir: string | null;
   novnc_url: string | null;
   novnc_url_legacy: string | null;
+  browser_gateway_url: string | null;
   instruction_line: string | null;
   started_at: string | null;
   finished_at: string | null;
@@ -288,6 +289,7 @@ export function resolveSomaLastRun(): SomaLastRunResolved {
     artifact_dir: null,
     novnc_url: null,
     novnc_url_legacy: null,
+    browser_gateway_url: null,
     instruction_line: null,
     started_at: null,
     finished_at: null,
@@ -331,6 +333,31 @@ export function resolveSomaLastRun(): SomaLastRunResolved {
   const rawNovnc = extracted.novnc_url ?? null;
   const novncCanonical = rawNovnc ? toCanonicalNovncUrl(rawNovnc) ?? rawNovnc : null;
 
+  let browserGatewayUrl: string | null = null;
+  if (finalStatus === "WAITING_FOR_HUMAN" && runRecord.run_id) {
+    const root = getArtifactsRoot();
+    const bgDir = join(root, "browser_gateway");
+    if (existsSync(bgDir)) {
+      const bgDirs = readdirSync(bgDir, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name)
+        .sort()
+        .reverse();
+      for (const d of bgDirs.slice(0, 3)) {
+        const sessionPath = join(bgDir, d, "session.json");
+        if (existsSync(sessionPath)) {
+          try {
+            const session = JSON.parse(readFileSync(sessionPath, "utf-8"));
+            if (session.status === "LIVE") {
+              browserGatewayUrl = `/browser/${session.session_id}`;
+              break;
+            }
+          } catch { /* ignore */ }
+        }
+      }
+    }
+  }
+
   return {
     status: finalStatus,
     error_class: extracted.error_class ?? runRecord.error_class ?? null,
@@ -338,6 +365,7 @@ export function resolveSomaLastRun(): SomaLastRunResolved {
     artifact_dir: artifactDir,
     novnc_url: novncCanonical,
     novnc_url_legacy: rawNovnc && rawNovnc !== novncCanonical ? rawNovnc : null,
+    browser_gateway_url: browserGatewayUrl,
     instruction_line: extracted.instruction_line ?? null,
     started_at: runRecord.started_at ?? null,
     finished_at: runRecord.finished_at ?? null,

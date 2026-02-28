@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenClaw Browser Gateway — CDP-based browser streaming
+After=network.target openclaw-novnc.service
+Wants=openclaw-novnc.service
+
+[Service]
+Type=simple
+ExecStart=/opt/ai-ops-runner/.venv-hostd/bin/python /opt/ai-ops-runner/services/browser_gateway/server.py
+WorkingDirectory=/opt/ai-ops-runner
+Environment=OPENCLAW_REPO_ROOT=/opt/ai-ops-runner
+Environment=OPENCLAW_ARTIFACTS_ROOT=/opt/ai-ops-runner/artifacts
+Environment=BROWSER_GATEWAY_PORT=8890
+Environment=BROWSER_GATEWAY_CDP_PORT=9222
+Environment=DISPLAY=:99
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

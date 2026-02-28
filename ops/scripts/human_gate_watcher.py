@@ -21,6 +21,8 @@ from pathlib import Path
 
 POLL_INTERVAL_SEC = int(os.environ.get("SOMA_HUMAN_GATE_POLL_INTERVAL", "90"))
 MAX_CYCLES = int(os.environ.get("SOMA_HUMAN_GATE_MAX_CYCLES", "20"))  # ~30 min at 90s
+STUCK_THRESHOLD_SEC = int(os.environ.get("SOMA_HUMAN_GATE_STUCK_SEC", "1800"))  # 30 min
+BROWSER_GATEWAY_URL = os.environ.get("BROWSER_GATEWAY_URL", "http://127.0.0.1:8890")
 
 
 def _repo_root() -> Path:
@@ -146,27 +148,107 @@ def _run_novnc_audit(root: Path, run_id: str) -> bool:
     return False
 
 
+def _start_browser_gateway(root: Path, run_id: str) -> str | None:
+    """Start a Browser Gateway session for the human gate. Returns viewer_url or None."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"{BROWSER_GATEWAY_URL}/session/start",
+            data=json.dumps({"run_id": run_id, "purpose": "kajabi_login"}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+            if data.get("ok"):
+                return data.get("viewer_url")
+    except Exception:
+        pass
+    return None
+
+
+def _check_browser_gateway_health() -> bool:
+    """Check if Browser Gateway server is responsive."""
+    try:
+        import urllib.request
+        with urllib.request.urlopen(f"{BROWSER_GATEWAY_URL}/health", timeout=3) as resp:
+            data = json.loads(resp.read())
+            return data.get("ok", False)
+    except Exception:
+        return False
+
+
+def _write_instructions_md(gate_dir: Path, run_id: str, bg_url: str | None, novnc_url: str | None) -> None:
+    """Write a single INSTRUCTIONS.md packet for the human gate."""
+    lines = [
+        "# Human Gate Instructions",
+        "",
+        f"**Run ID:** {run_id}",
+        f"**Timestamp:** {datetime.now(timezone.utc).isoformat()}",
+        "",
+        "## What to do",
+        "",
+        "Login to Kajabi + complete 2FA, then confirm Products > Courses shows both libraries.",
+        "",
+        "## Access",
+        "",
+    ]
+    if bg_url:
+        lines.append(f"**PRIMARY:** [Open Browser Gateway]({bg_url})")
+        lines.append("")
+    if novnc_url:
+        label = "SECONDARY (Advanced)" if bg_url else "PRIMARY"
+        lines.append(f"**{label}:** [Open noVNC]({novnc_url})")
+        lines.append("")
+    lines.extend([
+        "## Auto-Resume",
+        "",
+        "Session check polls automatically. Once login is detected,",
+        "the pipeline will auto-resume. No manual 'Click Resume' needed.",
+    ])
+    (gate_dir / "INSTRUCTIONS.md").write_text("\n".join(lines))
+
+
 def main() -> int:
     root = _repo_root()
     waiting, run_id = _is_waiting_for_human(root)
     if not waiting or not run_id:
-        return 0  # Nothing to watch
+        return 0
 
-    # If auto_finish lock is held, it's polling itself — skip (avoid duplicate session_check)
     lock_path = root / "artifacts" / ".locks" / "soma_kajabi_auto_finish.json"
     if lock_path.exists():
         try:
             data = json.loads(lock_path.read_text())
             if data.get("active_run_id") and data.get("started_at"):
-                return 0  # Auto_finish is running, it will auto-resume
+                return 0
         except (OSError, json.JSONDecodeError):
             pass
 
     gate_dir = root / "artifacts" / "soma_kajabi" / "human_gate" / run_id
     gate_dir.mkdir(parents=True, exist_ok=True)
 
+    # One-shot resume guard: if AUTO_RESUME.md already exists, this was already handled
+    if (gate_dir / "AUTO_RESUME.md").exists():
+        return 0
+
+    # Start Browser Gateway session
+    bg_url = _start_browser_gateway(root, run_id)
+
+    # Get noVNC URL for fallback
+    novnc_url = None
+    try:
+        from novnc_ready import ensure_novnc_ready_with_recovery
+        ready, tailscale_url, _err, _journal = ensure_novnc_ready_with_recovery(gate_dir, run_id)
+        if ready:
+            novnc_url = tailscale_url
+    except Exception:
+        pass
+
+    _write_instructions_md(gate_dir, run_id, bg_url, novnc_url)
+
+    start_time = time.time()
+
     for cycle in range(MAX_CYCLES):
-        # Re-check: maybe user cancelled or new run superseded
         waiting_now, run_id_now = _is_waiting_for_human(root)
         if not waiting_now or run_id_now != run_id:
             break
@@ -174,29 +256,47 @@ def main() -> int:
         novnc_ready = _run_novnc_audit(root, run_id)
         session_ok, sc_doc = _run_session_check(root)
 
+        elapsed = time.time() - start_time
+        bg_healthy = _check_browser_gateway_health()
+
         status = {
             "waiting_reason": "KAJABI_LOGIN_OR_2FA",
             "last_check_ts": datetime.now(timezone.utc).isoformat(),
             "novnc_ready": novnc_ready,
+            "browser_gateway_healthy": bg_healthy,
+            "browser_gateway_url": bg_url,
             "authenticated_detected": session_ok,
             "run_id": run_id,
             "cycle": cycle + 1,
+            "elapsed_sec": int(elapsed),
+            "stuck": elapsed > STUCK_THRESHOLD_SEC,
         }
         (gate_dir / "status.json").write_text(json.dumps(status, indent=2))
 
         if session_ok:
-            # Auto-resume: run reauth_and_resume (exports state + auto_finish)
             (gate_dir / "AUTO_RESUME.md").write_text(
-                f"# Auto-Resume\n\n**Timestamp:** {datetime.now(timezone.utc).isoformat()}\n"
+                f"# Auto-Resume\n\n"
+                f"**Timestamp:** {datetime.now(timezone.utc).isoformat()}\n"
                 f"**Evidence:** session_check PASS (Products shows both libraries)\n"
-                f"**Action:** soma_kajabi_reauth_and_resume triggered\n"
+                f"**Cycle:** {cycle + 1}\n"
+                f"**Elapsed:** {int(elapsed)}s\n"
+                f"**Browser Gateway:** {'active' if bg_healthy else 'N/A'}\n"
+                f"**Action:** soma_kajabi_reauth_and_resume triggered (one-shot)\n"
             )
             rc = _run_reauth_and_resume(root)
-            (gate_dir / "AUTO_RESUME.md").write_text(
-                (gate_dir / "AUTO_RESUME.md").read_text() +
-                f"\n**reauth_and_resume exit_code:** {rc}\n"
-            )
+            with open(gate_dir / "AUTO_RESUME.md", "a") as f:
+                f.write(f"\n**reauth_and_resume exit_code:** {rc}\n")
             return 0 if rc == 0 else 1
+
+        # Stuck detection
+        if elapsed > STUCK_THRESHOLD_SEC and bg_healthy:
+            (gate_dir / "STUCK_DETECTED.md").write_text(
+                f"# Stuck Detection\n\n"
+                f"**Timestamp:** {datetime.now(timezone.utc).isoformat()}\n"
+                f"**Elapsed:** {int(elapsed)}s (threshold: {STUCK_THRESHOLD_SEC}s)\n"
+                f"**Browser Gateway:** healthy\n"
+                f"**Action available:** Force relaunch interactive session\n"
+            )
 
         time.sleep(POLL_INTERVAL_SEC)
 

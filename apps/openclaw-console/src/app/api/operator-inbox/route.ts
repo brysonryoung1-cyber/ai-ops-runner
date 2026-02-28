@@ -37,6 +37,7 @@ export async function GET() {
     run_id: string;
     reason: string;
     canonical_url: string | null;
+    browser_gateway_url: string | null;
     single_instruction: string | null;
     artifacts_link: string | null;
   }[] = [];
@@ -72,11 +73,30 @@ export async function GET() {
   // --- waiting_for_human: Soma WAITING_FOR_HUMAN ---
   const somaResolved = resolveSomaLastRun();
   if (somaResolved.status === "WAITING_FOR_HUMAN" && somaResolved.run_id) {
+    let browserGatewayUrl: string | null = null;
+    const bgSessionDir = join(artifactsRoot, "browser_gateway");
+    if (existsSync(bgSessionDir)) {
+      const bgDirs = readdirSync(bgSessionDir).sort().reverse();
+      for (const d of bgDirs.slice(0, 3)) {
+        const sessionPath = join(bgSessionDir, d, "session.json");
+        if (existsSync(sessionPath)) {
+          try {
+            const session = JSON.parse(readFileSync(sessionPath, "utf-8"));
+            if (session.status === "LIVE" && session.run_id === somaResolved.run_id) {
+              browserGatewayUrl = `/browser/${session.session_id}`;
+              break;
+            }
+          } catch { /* ignore */ }
+        }
+      }
+    }
+
     waiting_for_human.push({
       project_id: "soma_kajabi",
       run_id: somaResolved.run_id,
       reason: somaResolved.error_class ?? "WAITING_FOR_HUMAN",
       canonical_url: somaResolved.novnc_url,
+      browser_gateway_url: browserGatewayUrl,
       single_instruction: somaResolved.instruction_line,
       artifacts_link: somaResolved.artifact_dir ? toArtifactUrl(somaResolved.artifact_dir) : null,
     });

@@ -9,6 +9,7 @@ interface WaitingForHuman {
   run_id: string;
   reason: string;
   canonical_url: string | null;
+  browser_gateway_url: string | null;
   single_instruction: string | null;
   artifacts_link: string | null;
 }
@@ -47,6 +48,50 @@ interface InboxData {
   last_proof: LastProof;
   last_deploy: LastDeploy;
   last_canary: LastCanary;
+}
+
+function BrowserGatewayButton({ runId, existingUrl }: { runId: string; existingUrl: string | null }) {
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleClick = async () => {
+    if (existingUrl) {
+      window.open(existingUrl, "_blank");
+      return;
+    }
+    setStarting(true);
+    setError(null);
+    try {
+      const resp = await fetch("/api/browser-gateway/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run_id: runId, purpose: "kajabi_login" }),
+      });
+      const data = await resp.json();
+      if (data.ok && data.viewer_url) {
+        window.open(data.viewer_url, "_blank");
+      } else {
+        setError(data.error || "Failed to start");
+      }
+    } catch {
+      setError("Gateway unreachable");
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        onClick={handleClick}
+        disabled={starting}
+        className="inline-flex items-center px-3 py-1.5 rounded-lg bg-blue-500/20 text-blue-200 text-sm font-medium hover:bg-blue-500/30 transition-colors disabled:opacity-50"
+      >
+        {starting ? "Starting…" : "Open Browser Gateway"}
+      </button>
+      {error && <span className="text-[10px] text-red-400">{error}</span>}
+    </div>
+  );
 }
 
 export default function InboxPage() {
@@ -134,16 +179,24 @@ export default function InboxPage() {
                         <p className="text-xs text-white/70 mt-1">{item.single_instruction}</p>
                       )}
                     </div>
-                    <div className="flex gap-2 flex-shrink-0">
+                    <div className="flex gap-2 flex-shrink-0 flex-wrap">
+                      <BrowserGatewayButton runId={item.run_id} existingUrl={item.browser_gateway_url} />
                       {item.canonical_url ? (
-                        <a
-                          href={item.canonical_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center px-3 py-1.5 rounded-lg bg-amber-500/20 text-amber-200 text-sm font-medium hover:bg-amber-500/30 transition-colors"
-                        >
-                          Open noVNC
-                        </a>
+                        <details className="inline-flex">
+                          <summary className="cursor-pointer inline-flex items-center px-3 py-1.5 rounded-lg bg-white/5 text-white/50 text-xs font-medium hover:bg-white/10 transition-colors list-none">
+                            Advanced
+                          </summary>
+                          <div className="mt-1">
+                            <a
+                              href={item.canonical_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center px-3 py-1.5 rounded-lg bg-amber-500/10 text-amber-200/70 text-xs font-medium hover:bg-amber-500/20 transition-colors"
+                            >
+                              Open noVNC (fallback)
+                            </a>
+                          </div>
+                        </details>
                       ) : null}
                       {item.artifacts_link && (
                         <Link
