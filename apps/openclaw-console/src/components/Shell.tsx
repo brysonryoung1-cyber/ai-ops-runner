@@ -10,8 +10,8 @@ import GuidedHumanGateBanner from "./GuidedHumanGateBanner";
 import NotificationBanner from "./NotificationBanner";
 
 const NAV_ITEMS = [
-  { href: "/", label: "Overview" },
   { href: "/inbox", label: "Inbox" },
+  { href: "/overview", label: "Overview" },
   { href: "/projects", label: "Projects" },
   { href: "/runs", label: "Runs" },
   { href: "/artifacts", label: "Artifacts" },

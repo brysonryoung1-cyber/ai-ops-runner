@@ -105,4 +105,42 @@ test.describe("/inbox page", () => {
     await expect(headings.nth(1)).toContainText("Degraded");
     await expect(headings.nth(2)).toContainText("Recent");
   });
+
+  test("shows Open Browser Gateway button when WAITING_FOR_HUMAN with browser_gateway ok", async ({
+    page,
+    request,
+  }) => {
+    const statusRes = await request.get("/api/agent/status");
+    const statusData = await statusRes.json();
+
+    const inboxRes = await request.get("/api/operator-inbox");
+    const inboxData = await inboxRes.json();
+
+    if (
+      inboxData.waiting_for_human.length > 0 &&
+      statusData.checks?.browser_gateway?.status === "ok"
+    ) {
+      await page.goto("/inbox");
+      await expect(page.getByTestId("operator-inbox-page")).toBeVisible({
+        timeout: 10_000,
+      });
+
+      const bgButton = page.getByRole("button", {
+        name: /Open Browser Gateway/i,
+      });
+      await expect(bgButton).toBeVisible();
+
+      const advancedToggle = page.locator("details summary");
+      if (await advancedToggle.isVisible()) {
+        const advancedText = await advancedToggle.textContent();
+        expect(advancedText).toContain("Advanced");
+      }
+    }
+  });
+
+  test("root URL redirects to /inbox (landing page)", async ({ page }) => {
+    await page.goto("/");
+    await page.waitForURL(/\/inbox/, { timeout: 5_000 });
+    expect(page.url()).toContain("/inbox");
+  });
 });

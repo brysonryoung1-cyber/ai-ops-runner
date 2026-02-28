@@ -62,6 +62,8 @@ SCREENCAST_MAX_WIDTH = 1280
 SCREENCAST_MAX_HEIGHT = 720
 MAX_RECONNECT_ATTEMPTS = 3
 HEARTBEAT_INTERVAL = 10
+VERSION = "1.0.0"
+_SERVER_START_TIME: float = 0.0
 
 TS_HOSTNAME = os.environ.get("OPENCLAW_TS_HOSTNAME", "aiops-1.tailc75c62.ts.net")
 
@@ -465,6 +467,8 @@ class BrowserGatewayServer:
         active = [s.to_dict() for s in self.sessions.values() if s.status == "LIVE"]
         return web.json_response({
             "ok": True,
+            "version": VERSION,
+            "uptime_sec": round(time.time() - _SERVER_START_TIME, 1),
             "active_sessions": len(active),
             "sessions": active,
             "server_time": _now_iso(),
@@ -600,6 +604,8 @@ class BrowserGatewayServer:
 
 
 async def main():
+    global _SERVER_START_TIME
+    _SERVER_START_TIME = time.time()
     server = BrowserGatewayServer()
     runner = web.AppRunner(server.app)
     await runner.setup()

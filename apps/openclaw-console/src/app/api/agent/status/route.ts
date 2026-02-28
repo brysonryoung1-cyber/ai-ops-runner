@@ -3,12 +3,18 @@
  *
  * Capability Gate: returns ok/blocked + remediation + links.
  * Aggregates preflight checks, subsystem health, and current state.
+ *
+ * Fail-closed rule: when a WAITING_FOR_HUMAN soma run is active,
+ * browser_gateway MUST be status=ok. If not, overall becomes BLOCKED
+ * with remediation instruction. No ambiguous "warn but ok=true".
+ *
  * No secrets. Deterministic. No LLM.
  */
 
 import { NextResponse } from "next/server";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
+import { resolveSomaLastRun } from "@/lib/soma-last-run-resolver";
 
 export const dynamic = "force-dynamic";
 
@@ -56,7 +62,10 @@ async function checkBrowserGateway(): Promise<CheckResult> {
       signal: AbortSignal.timeout(3000),
     });
     const data = await resp.json() as Record<string, unknown>;
-    return { status: "ok", detail: `active_sessions=${data.active_sessions}` };
+    return {
+      status: "ok",
+      detail: `version=${data.version} uptime_sec=${data.uptime_sec} active_sessions=${data.active_sessions}`,
+    };
   } catch {
     return { status: "warn", detail: "Browser Gateway not running" };
   }
@@ -75,6 +84,15 @@ async function checkDrift(): Promise<CheckResult> {
     return { status: "blocked", detail: `drift_status=${data.drift_status} drift=${data.drift}` };
   } catch {
     return { status: "warn", detail: "Version endpoint unreachable" };
+  }
+}
+
+function isHumanGateActive(): boolean {
+  try {
+    const resolved = resolveSomaLastRun();
+    return resolved.status === "WAITING_FOR_HUMAN";
+  } catch {
+    return false;
   }
 }
 
@@ -122,6 +140,20 @@ export async function GET() {
   checks.browser_gateway = browserGateway;
   checks.drift = drift;
 
+  const humanGateActive = isHumanGateActive();
+
+  /**
+   * Fail-closed: when WAITING_FOR_HUMAN is active and browser_gateway
+   * is not ok, escalate from warn to blocked. The human gate requires
+   * a working browser gateway to be actionable.
+   */
+  if (humanGateActive && checks.browser_gateway.status !== "ok") {
+    checks.browser_gateway = {
+      status: "blocked",
+      detail: `${checks.browser_gateway.detail} (BLOCKED: human gate active, browser gateway required)`,
+    };
+  }
+
   const latestPreflight = getLatestPreflight();
   const latestCanary = getLatestCanary();
 
@@ -138,10 +170,17 @@ export async function GET() {
   if (checks.drift.status === "blocked") {
     remediation.push("Run deploy to fix drift: ./ops/ship_deploy_verify.sh");
   }
+  if (checks.browser_gateway.status === "blocked") {
+    remediation.push("Enable Browser Gateway: sudo systemctl enable --now openclaw-browser-gateway.service");
+  }
+  if (checks.browser_gateway.status === "warn") {
+    remediation.push("Browser Gateway not running (optional when no human gate active): sudo systemctl start openclaw-browser-gateway.service");
+  }
 
   return NextResponse.json({
     ok: !blocked,
     overall,
+    human_gate_active: humanGateActive,
     checks,
     remediation,
     latest_preflight: latestPreflight
