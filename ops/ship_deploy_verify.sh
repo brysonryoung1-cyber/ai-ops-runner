@@ -168,6 +168,12 @@ REMOTE_CANARY
     echo "  Canary: PASS"
   else
     echo "ERROR: Strict canary failed (noVNC must be up)" >&2
+    # Collect hop-by-hop WebSocket upgrade diagnostics on canary failure
+    echo "==> Phase 2b-diag: Hop-by-hop WebSocket upgrade probe"
+    ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o BatchMode=yes -- "$AIOPS_SSH" bash -se <<'REMOTE_HOP_PROBE' 2>&1 | tee "$PROOF_DIR/hop_probes.log" || true
+cd /opt/ai-ops-runner
+[ -f ops/scripts/ws_upgrade_hop_probe.sh ] && bash ops/scripts/ws_upgrade_hop_probe.sh 2>&1 || echo "hop_probe script not found"
+REMOTE_HOP_PROBE
     echo '{"overall":"FAIL","phase":"canary","run_id":"'"$RUN_ID"'"}' > "$PROOF_DIR/result.json"
     exit 2
   fi
