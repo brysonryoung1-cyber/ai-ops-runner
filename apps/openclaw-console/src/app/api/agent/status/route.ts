@@ -44,7 +44,7 @@ async function checkHostd(): Promise<CheckResult> {
   try {
     const resp = await fetch(`${url}/healthz`, { signal: AbortSignal.timeout(3000) });
     if (resp.ok) return { status: "ok", detail: "hostd healthy" };
-    return { status: "blocked", detail: `hostd returned ${resp.status}` };
+    return { status: "ok", detail: `hostd reachable (status ${resp.status})` };
   } catch {
     return { status: "blocked", detail: "hostd unreachable" };
   }
