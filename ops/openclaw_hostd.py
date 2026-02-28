@@ -21,6 +21,58 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 
+ROOTD_SOCKET = "/run/openclaw/rootd.sock"
+
+
+def _rootd_available() -> bool:
+    """Check if rootd Unix socket exists and responds to health check."""
+    try:
+        from ops.rootd_client import RootdClient
+        client = RootdClient(ROOTD_SOCKET)
+        return client.is_available()
+    except Exception:
+        return False
+
+
+def _rootd_exec(command: str, args: dict, run_id: str | None = None) -> dict:
+    """Execute a command via rootd. Returns result dict. Fail-closed on error."""
+    try:
+        from ops.rootd_client import RootdClient
+        client = RootdClient(ROOTD_SOCKET)
+        return client.exec(command, args, run_id)
+    except Exception as e:
+        return {"ok": False, "reason": f"rootd client error: {e}", "rootd_unavailable": True}
+
+
+def _create_rootd_incident(run_id: str, command: str, error: str) -> None:
+    """Create an incident artifact when rootd is unavailable."""
+    incident_dir = os.path.join(ROOT_DIR, "artifacts", "incidents", f"rootd_unavailable_{run_id}")
+    os.makedirs(incident_dir, exist_ok=True)
+    incident = {
+        "incident_type": "rootd_unavailable",
+        "run_id": run_id,
+        "command": command,
+        "error": error,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "recommended_action": "Check rootd: systemctl status openclaw-rootd. Restart if needed.",
+    }
+    with open(os.path.join(incident_dir, "incident.json"), "w", encoding="utf-8") as f:
+        json.dump(incident, f, indent=2)
+    summary = (
+        f"# rootd Unavailable Incident\n\n"
+        f"**Run ID:** {run_id}\n"
+        f"**Command:** {command}\n"
+        f"**Error:** {error}\n"
+        f"**Time:** {datetime.now(timezone.utc).isoformat()}\n\n"
+        f"## Remediation\n\n"
+        f"1. `systemctl status openclaw-rootd`\n"
+        f"2. `systemctl restart openclaw-rootd`\n"
+        f"3. Check HMAC key: `/etc/ai-ops-runner/secrets/rootd_hmac_key`\n"
+    )
+    with open(os.path.join(incident_dir, "SUMMARY.md"), "w", encoding="utf-8") as f:
+        f.write(summary)
+
+
 def get_version() -> str:
     """Short git SHA if in repo, else VERSION."""
     try:
@@ -468,11 +520,13 @@ class Handler(BaseHTTPRequestHandler):
             start_time = getattr(Handler, "_start_time", None)
             uptime_seconds = int(time.monotonic() - start_time) if start_time is not None else 0
             version = getattr(Handler, "_version", None) or get_version()
+            rootd_ok = _rootd_available()
             self.send_json(200, {
                 "ok": True,
                 "version": version,
                 "uptime_seconds": uptime_seconds,
                 "time": datetime.now(timezone.utc).isoformat(),
+                "rootd_available": rootd_ok,
             })
             return
         if parsed.path == "/connectors/gmail/secret-status":
@@ -480,10 +534,42 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.send_json(200, _gmail_client_secret_status())
             return
+        if parsed.path == "/rootd/health":
+            if not self._require_admin():
+                return
+            self.send_json(200, {"rootd_available": _rootd_available()})
+            return
         self.send_json(404, {"error": "Not found"})
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/rootd/exec":
+            if not self._require_admin():
+                return
+            content_length = self.headers.get("Content-Length")
+            if not content_length or int(content_length) > 32768:
+                self.send_json(400, {"error": "Invalid or missing body"})
+                return
+            body = self.rfile.read(int(content_length)).decode("utf-8", errors="replace")
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError:
+                self.send_json(400, {"error": "Invalid JSON"})
+                return
+            command = data.get("command") if isinstance(data, dict) else None
+            if not command or not isinstance(command, str):
+                self.send_json(400, {"error": "Missing or invalid command"})
+                return
+            args = data.get("args", {})
+            run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + os.urandom(4).hex()
+            result = _rootd_exec(command, args, run_id)
+            if result.get("rootd_unavailable"):
+                _create_rootd_incident(run_id, command, result.get("reason", "unknown"))
+                self.send_json(503, result)
+                return
+            status = 200 if result.get("ok") else 403 if not result.get("policy_allowed") else 500
+            self.send_json(status, result)
+            return
         if parsed.path == "/secrets/upload":
             if not self._require_admin():
                 return

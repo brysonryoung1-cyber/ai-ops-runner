@@ -401,6 +401,34 @@
       "timeout_sec": 900,
       "cmd_template": "cd ${ROOT_DIR} && bash ./ops/scripts/opencode_run.sh",
       "description": "Optional code lane: run OpenCode in sandboxed container to propose a patch. Produces patch.diff, patch_summary.json, PROOF.md. Never merges/deploys."
+    },
+    {
+      "id": "rollback",
+      "label": "Auto-Rollback",
+      "timeout_sec": 600,
+      "cmd_template": "cd ${ROOT_DIR} && OPENCLAW_ROLLBACK_APPROVED=true ./ops/rollback_playbook.sh",
+      "description": "Rollback to last-known-good tree SHA. Only allowed after N consecutive canary failures. Destructive_ops tier."
+    },
+    {
+      "id": "serve_enforcer",
+      "label": "Serve Enforcer",
+      "timeout_sec": 120,
+      "cmd_template": "cd ${ROOT_DIR} && ./ops/serve_enforcer.sh",
+      "description": "Enforce serve_single_root_targets_frontdoor invariant. Repairs drift via rootd."
+    },
+    {
+      "id": "rootd.systemctl_restart",
+      "label": "Restart Service (rootd)",
+      "timeout_sec": 60,
+      "cmd_template": "cd ${ROOT_DIR} && python3 ops/rootd_client.py systemctl_restart",
+      "description": "Restart an allowlisted systemd unit via rootd. Privileged_ops tier."
+    },
+    {
+      "id": "rootd.tailscale_serve_apply",
+      "label": "Apply Tailscale Serve (rootd)",
+      "timeout_sec": 60,
+      "cmd_template": "cd ${ROOT_DIR} && python3 ops/rootd_client.py tailscale_serve '{\"subcmd\":\"apply\",\"target\":\"tcp://127.0.0.1:8443\",\"tcp_port\":\"443\"}'",
+      "description": "Apply desired Tailscale Serve config via rootd. Privileged_ops tier."
     }
   ]
 }

@@ -1,0 +1,168 @@
+{
+  "$schema": "./permissions.schema.json",
+  "version": "1.0.0",
+  "tiers": {
+    "readonly": {
+      "level": 0,
+      "description": "Read-only operations. No state mutation.",
+      "requires_human_approval": false,
+      "requires_rootd": false
+    },
+    "low_risk_ops": {
+      "level": 1,
+      "description": "Low-risk mutations: restart non-critical services, clear caches.",
+      "requires_human_approval": false,
+      "requires_rootd": false
+    },
+    "privileged_ops": {
+      "level": 2,
+      "description": "Privileged operations requiring root via rootd. Systemd installs, Tailscale Serve, TLS changes.",
+      "requires_human_approval": false,
+      "requires_rootd": true
+    },
+    "destructive_ops": {
+      "level": 3,
+      "description": "Destructive operations: rollback, data deletion, secret rotation. Requires human approval.",
+      "requires_human_approval": true,
+      "requires_rootd": true
+    }
+  },
+  "actions": {
+    "doctor": {
+      "tier": "readonly",
+      "description": "Full health check"
+    },
+    "port_audit": {
+      "tier": "readonly",
+      "description": "List listening TCP ports"
+    },
+    "tail_guard_log": {
+      "tier": "readonly",
+      "description": "Read guard journal"
+    },
+    "timer": {
+      "tier": "readonly",
+      "description": "Guard timer status"
+    },
+    "llm_doctor": {
+      "tier": "readonly",
+      "description": "LLM provider health check"
+    },
+    "system.canary": {
+      "tier": "readonly",
+      "description": "System canary check"
+    },
+    "system.reconcile": {
+      "tier": "low_risk_ops",
+      "description": "State reconciliation"
+    },
+    "apply": {
+      "tier": "low_risk_ops",
+      "description": "Apply OpenClaw (sync + rebuild)"
+    },
+    "deploy_and_verify": {
+      "tier": "low_risk_ops",
+      "description": "Deploy pipeline"
+    },
+    "soma_kajabi_phase0": {
+      "tier": "low_risk_ops",
+      "description": "Soma Kajabi Phase 0 read-only snapshot"
+    },
+    "soma_kajabi_auto_finish": {
+      "tier": "low_risk_ops",
+      "description": "Auto-finish Soma pipeline"
+    },
+    "soma_run_to_done": {
+      "tier": "low_risk_ops",
+      "description": "Run Soma to DONE"
+    },
+    "guard": {
+      "tier": "privileged_ops",
+      "description": "Install/repair guard systemd timer"
+    },
+    "rootd.systemctl_restart": {
+      "tier": "privileged_ops",
+      "description": "Restart specific systemd units via rootd"
+    },
+    "rootd.systemctl_enable": {
+      "tier": "privileged_ops",
+      "description": "Enable/install specific systemd units via rootd"
+    },
+    "rootd.tailscale_serve_reset": {
+      "tier": "privileged_ops",
+      "description": "Reset Tailscale Serve config via rootd"
+    },
+    "rootd.tailscale_serve_apply": {
+      "tier": "privileged_ops",
+      "description": "Apply desired Tailscale Serve config via rootd"
+    },
+    "rootd.write_etc_config": {
+      "tier": "privileged_ops",
+      "description": "Write/update files in /etc/ai-ops-runner via rootd"
+    },
+    "rootd.bind_verify_443": {
+      "tier": "privileged_ops",
+      "description": "Verify TLS termination on 443 via rootd"
+    },
+    "rootd.install_timer": {
+      "tier": "privileged_ops",
+      "description": "Install systemd timer/service via rootd"
+    },
+    "rollback": {
+      "tier": "destructive_ops",
+      "description": "Rollback to last-known-good tree SHA"
+    },
+    "rootd.rotate_hmac_key": {
+      "tier": "destructive_ops",
+      "description": "Rotate rootd HMAC key"
+    },
+    "rootd.purge_artifacts": {
+      "tier": "destructive_ops",
+      "description": "Purge old artifacts from disk"
+    }
+  },
+  "rootd_allowlist": {
+    "systemctl_restart": {
+      "allowed_units": [
+        "openclaw-hostd.service",
+        "openclaw-frontdoor.service",
+        "openclaw-novnc.service",
+        "openclaw-guard.service",
+        "openclaw-serve-guard.service",
+        "openclaw-canary.service",
+        "openclaw-reconcile.service",
+        "openclaw-autopilot.service",
+        "openclaw-rootd.service",
+        "ai-ops-runner.service"
+      ]
+    },
+    "systemctl_enable": {
+      "allowed_units": [
+        "openclaw-hostd.service",
+        "openclaw-hostd-watchdog.timer",
+        "openclaw-rootd-watchdog.timer",
+        "openclaw-serve-enforcer.timer",
+        "openclaw-serve-guard.timer",
+        "openclaw-canary.timer",
+        "openclaw-reconcile.timer",
+        "openclaw-guard.timer",
+        "openclaw-executor-watchdog.timer",
+        "openclaw-frontdoor.service",
+        "openclaw-novnc.service"
+      ]
+    },
+    "tailscale_serve": {
+      "allowed_targets": [
+        "tcp://127.0.0.1:8443",
+        "http://127.0.0.1:8788"
+      ]
+    },
+    "write_etc_config": {
+      "allowed_paths": [
+        "/etc/ai-ops-runner/ship_info.json",
+        "/etc/ai-ops-runner/deploy_info.json",
+        "/etc/ai-ops-runner/rootd_policy.json"
+      ]
+    }
+  }
+}
