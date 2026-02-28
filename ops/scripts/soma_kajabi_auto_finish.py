@@ -329,11 +329,11 @@ def _ensure_novnc_audit_pass(root: Path, run_id: str, max_attempts: int = 3) -> 
     Set OPENCLAW_SKIP_NOVNC_AUDIT=1 to bypass (test/CI only)."""
     if os.environ.get("OPENCLAW_SKIP_NOVNC_AUDIT") == "1":
         ts_host = os.environ.get("OPENCLAW_TS_HOSTNAME", "aiops-1.tailc75c62.ts.net")
-        return True, f"https://{ts_host}/novnc/vnc.html?autoconnect=1&path=/websockify"
+        return True, f"https://{ts_host}/novnc/vnc.html?autoconnect=1&reconnect=true&reconnect_delay=2000&path=/websockify"
     audit_script = root / "ops" / "scripts" / "novnc_connectivity_audit.py"
     reconcile_script = root / "ops" / "scripts" / "reconcile.sh"
     ts_host = os.environ.get("OPENCLAW_TS_HOSTNAME", "aiops-1.tailc75c62.ts.net")
-    canonical_url = f"https://{ts_host}/novnc/vnc.html?autoconnect=1&path=/websockify"
+    canonical_url = f"https://{ts_host}/novnc/vnc.html?autoconnect=1&reconnect=true&reconnect_delay=2000&path=/websockify"
     if not audit_script.exists():
         return False, canonical_url
     for attempt in range(1, max_attempts + 1):

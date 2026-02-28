@@ -90,13 +90,16 @@ def test_novnc_url_must_not_be_localhost() -> None:
 
 
 def test_doctor_emits_canonical_url_with_path_websockify() -> None:
-    """Doctor must emit canonical URL with path=/websockify (WS upgrade via Tailscale Serve)."""
+    """Doctor must emit canonical URL with path=/websockify and reconnect params."""
     doctor = REPO_ROOT / "ops" / "openclaw_novnc_doctor.sh"
     content = doctor.read_text()
     assert "path=/websockify" in content, (
         "Doctor must emit path=/websockify for canonical noVNC URL (WS upgrade)"
     )
-    assert "vnc.html?autoconnect=1" in content or "vnc.html?autoconnect=1&path=" in content
+    assert "reconnect=true" in content, (
+        "Doctor must emit reconnect=true so noVNC auto-retries on transient WS failure"
+    )
+    assert "vnc.html?autoconnect=1" in content
 
 
 def test_ws_stability_check_supports_tailnet() -> None:
@@ -114,6 +117,20 @@ def test_doctor_pass_includes_tailnet_verified() -> None:
     content = doctor.read_text()
     assert "ws_stability_tailnet" in content
     assert "verified" in content
+
+
+def test_novnc_ready_canonical_url_format() -> None:
+    """novnc_ready._build_canonical_url must return HTTPS with reconnect + path params."""
+    import novnc_ready as nr
+
+    url = nr._build_canonical_url("test.ts.net")
+    assert url.startswith("https://test.ts.net/novnc/vnc.html?")
+    assert "autoconnect=1" in url
+    assert "reconnect=true" in url
+    assert "reconnect_delay=2000" in url
+    assert "path=/websockify" in url
+    assert "http://" not in url
+    assert ":6080" not in url
 
 
 def test_novnc_ready_uses_doctor_only() -> None:

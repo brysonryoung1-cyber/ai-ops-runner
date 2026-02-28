@@ -51,11 +51,11 @@ except: pass
 " 2>/dev/null)"
     if [ -n "$dns" ] && [[ "$dns" == *".ts.net" ]]; then
       # Canonical: https same-host /novnc + path=/websockify (WS upgrade via Tailscale Serve /websockify)
-      echo "https://${dns}/novnc/vnc.html?autoconnect=1&path=/websockify"
+      echo "https://${dns}/novnc/vnc.html?autoconnect=1&reconnect=true&reconnect_delay=2000&path=/websockify"
       return
     fi
   fi
-  echo "https://<TAILSCALE_HOST>/novnc/vnc.html?autoconnect=1&path=/websockify"
+  echo "https://<TAILSCALE_HOST>/novnc/vnc.html?autoconnect=1&reconnect=true&reconnect_delay=2000&path=/websockify"
 }
 
 NOVNC_URL="$(_get_novnc_url)"
