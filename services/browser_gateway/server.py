@@ -188,6 +188,8 @@ class BrowserGatewaySession:
             f"--user-data-dir={profile}",
             "--no-first-run",
             "--no-default-browser-check",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
             "--disable-background-networking",
             "--disable-sync",
             f"--window-size={SCREENCAST_MAX_WIDTH},{SCREENCAST_MAX_HEIGHT}",
