@@ -7,6 +7,7 @@ After=openclaw-novnc.service
 [Service]
 Type=simple
 WorkingDirectory=/opt/ai-ops-runner
+ExecStartPre=/bin/bash -c '[ -f /etc/ssl/tailscale/aiops-1.crt ] || tailscale cert --cert-file /etc/ssl/tailscale/aiops-1.crt --key-file /etc/ssl/tailscale/aiops-1.key $(tailscale status --json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"Self\",{}).get(\"DNSName\",\"\").rstrip(\".\"))" 2>/dev/null || echo aiops-1.tailc75c62.ts.net) 2>/dev/null || true'
 ExecStart=/usr/bin/caddy run --config /opt/ai-ops-runner/ops/caddy/Caddyfile.frontdoor --adapter caddyfile
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always

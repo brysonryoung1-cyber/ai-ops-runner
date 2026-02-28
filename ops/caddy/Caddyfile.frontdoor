@@ -1,27 +1,23 @@
-# OpenClaw frontdoor — single local reverse proxy for Tailscale Serve.
-# Bind ONLY to 127.0.0.1. Tailscale Serve forwards https://* -> http://127.0.0.1:8788
+# OpenClaw frontdoor — Caddy reverse proxy with direct TLS termination.
 #
-# FIX (2026-02-28): Removed header-based @websockify matcher. Tailscale Serve
-# strips hop-by-hop Connection/Upgrade headers when proxying, causing the old
-# header matcher to fail and /websockify to fall through to the HQ Console
-# catch-all (returning 200 instead of 101). Path-only routing is correct here;
-# Caddy reverse_proxy handles WebSocket upgrades automatically.
+# Architecture:
+#   Tailscale Serve (TCP mode, port 443) -> raw TCP -> Caddy (TLS, port 8443)
+#   Caddy terminates TLS with Tailscale cert, handles all HTTP routing
+#   including WebSocket upgrades for noVNC/websockify.
+#
+# Why not Tailscale Serve HTTPS mode?
+#   Tailscale Serve strips hop-by-hop Connection/Upgrade headers when
+#   reverse-proxying HTTP, breaking WebSocket upgrade (returns 200, not 101).
+#   TCP mode passes raw bytes; Caddy handles TLS + HTTP natively.
 #
 {
 	admin off
-	auto_https off
 }
-#
-# Routes (PATH-ONLY matching — no header matchers):
-#   /novnc/websockify* -> strip /novnc, proxy to 127.0.0.1:6080 (HTTP/1.1)
-#   /websockify*       -> proxy to 127.0.0.1:6080 (HTTP/1.1)
-#   /novnc/*           -> 127.0.0.1:6080 (noVNC web UI)
-#   *                  -> 127.0.0.1:8787 (HQ Console default)
 
-http://127.0.0.1:8788 {
-	bind 127.0.0.1
-
-	# route {} preserves handler order (no Caddy auto-sort)
+# Shared routes: noVNC websockify + HQ Console.
+# PATH-ONLY matching (no header matchers needed; Caddy reverse_proxy
+# handles WebSocket upgrades automatically when it sees Upgrade headers).
+(proxy_routes) {
 	route {
 		handle /novnc/websockify* {
 			uri strip_prefix /novnc
@@ -50,4 +46,18 @@ http://127.0.0.1:8788 {
 			reverse_proxy 127.0.0.1:8787
 		}
 	}
+}
+
+# HTTPS: tailnet traffic arrives via Tailscale Serve TCP proxy on 8443.
+# Caddy terminates TLS here so WebSocket upgrades work end-to-end.
+https://aiops-1.tailc75c62.ts.net:8443 {
+	bind 127.0.0.1
+	tls /etc/ssl/tailscale/aiops-1.crt /etc/ssl/tailscale/aiops-1.key
+	import proxy_routes
+}
+
+# HTTP: local health checks + backward compatibility (unchanged).
+http://127.0.0.1:8788 {
+	bind 127.0.0.1
+	import proxy_routes
 }
