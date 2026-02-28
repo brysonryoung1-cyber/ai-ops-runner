@@ -1,31 +1,38 @@
 # OpenClaw frontdoor — single local reverse proxy for Tailscale Serve.
 # Bind ONLY to 127.0.0.1. Tailscale Serve forwards https://* -> http://127.0.0.1:8788
 #
+# FIX (2026-02-28): Removed header-based @websockify matcher. Tailscale Serve
+# strips hop-by-hop Connection/Upgrade headers when proxying, causing the old
+# header matcher to fail and /websockify to fall through to the HQ Console
+# catch-all (returning 200 instead of 101). Path-only routing is correct here;
+# Caddy reverse_proxy handles WebSocket upgrades automatically.
+#
 {
 	admin off
 	auto_https off
 }
 #
-# Routes:
-#   /api/*, /_next/*, etc -> 127.0.0.1:8787 (HQ Console)
-#   /novnc/* -> 127.0.0.1:6080 (noVNC web + websockify)
-#   /websockify, /websockify/* -> 127.0.0.1:6080 (websocket upgrade)
-#   /novnc/websockify -> rewrite to /websockify -> 127.0.0.1:6080 (alias)
-#   * -> 127.0.0.1:8787 (HQ default)
+# Routes (PATH-ONLY matching — no header matchers):
+#   /novnc/websockify* -> strip /novnc, proxy to 127.0.0.1:6080 (HTTP/1.1)
+#   /websockify*       -> proxy to 127.0.0.1:6080 (HTTP/1.1)
+#   /novnc/*           -> 127.0.0.1:6080 (noVNC web UI)
+#   *                  -> 127.0.0.1:8787 (HQ Console default)
 
 http://127.0.0.1:8788 {
 	bind 127.0.0.1
 
-	# Enforce order: route prevents Caddy from re-sorting handles
+	# route {} preserves handler order (no Caddy auto-sort)
 	route {
-		# WebSocket upgrade: match by path + Upgrade header
-		@websockify {
-			path_regexp ^/(websockify|novnc/websockify)
-			header Connection *Upgrade*
-			header Upgrade websocket
+		handle /novnc/websockify* {
+			uri strip_prefix /novnc
+			reverse_proxy 127.0.0.1:6080 {
+				transport http {
+					versions 1.1
+				}
+			}
 		}
-		handle @websockify {
-			uri replace /novnc/websockify /websockify
+
+		handle /websockify* {
 			reverse_proxy 127.0.0.1:6080 {
 				transport http {
 					versions 1.1

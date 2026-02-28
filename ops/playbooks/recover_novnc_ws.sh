@@ -20,6 +20,12 @@ SP_BEFORE=$(ls -1dt "$ARTIFACTS/system/state_pack"/*/ 2>/dev/null | head -1)
 [ -n "$SP_BEFORE" ] && OPENCLAW_STATE_PACK_RUN_ID=$(basename "$SP_BEFORE") OPENCLAW_INVARIANTS_OUTPUT="$OUT_DIR/invariants_before.json" \
   python3 "$ROOT_DIR/ops/scripts/invariants_eval.py" 2>/dev/null || true
 
+# 1b. Hop-by-hop probe before fix (diagnostic baseline)
+if [ -f "$ROOT_DIR/ops/scripts/ws_upgrade_hop_probe.sh" ]; then
+  OPENCLAW_HOP_PROBE_RUN_ID="${RUN_ID}_before" \
+    bash "$ROOT_DIR/ops/scripts/ws_upgrade_hop_probe.sh" > "$OUT_DIR/hop_probe_before.log" 2>&1 || true
+fi
+
 # 2. Run routing fix (idempotent: restart novnc, frontdoor, serve)
 bash "$ROOT_DIR/ops/scripts/openclaw_novnc_routing_fix.sh" 2>&1 | tee "$OUT_DIR/routing_fix.log" || true
 # routing_fix can fail; we continue to capture after state
@@ -31,12 +37,18 @@ SP_AFTER=$(ls -1dt "$ARTIFACTS/system/state_pack"/*/ 2>/dev/null | head -1)
 [ -n "$SP_AFTER" ] && OPENCLAW_STATE_PACK_RUN_ID=$(basename "$SP_AFTER") OPENCLAW_INVARIANTS_OUTPUT="$OUT_DIR/invariants_after.json" \
   python3 "$ROOT_DIR/ops/scripts/invariants_eval.py" 2>/dev/null || true
 
+# 3b. Hop-by-hop probe after fix (validation)
+if [ -f "$ROOT_DIR/ops/scripts/ws_upgrade_hop_probe.sh" ]; then
+  OPENCLAW_HOP_PROBE_RUN_ID="${RUN_ID}_after" \
+    bash "$ROOT_DIR/ops/scripts/ws_upgrade_hop_probe.sh" > "$OUT_DIR/hop_probe_after.log" 2>&1 || true
+fi
+
 # 4. Actions taken
 cat > "$OUT_DIR/actions_taken.json" << EOF
 {
   "playbook": "recover_novnc_ws",
   "run_id": "$RUN_ID",
-  "actions": ["openclaw_novnc_routing_fix"],
+  "actions": ["hop_probe_before", "openclaw_novnc_routing_fix", "hop_probe_after"],
   "timestamp_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF

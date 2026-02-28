@@ -51,6 +51,16 @@ if [ "$PORT_6080_OK" = "true" ]; then
     cp "$ARTIFACTS/novnc_debug/ws_probe/${RUN_ID}_audit/ws_probe.json" "$OUT_DIR/" 2>/dev/null || true
 fi
 
+# 2b. Hop-by-hop WebSocket upgrade probe (diagnostic on failure, validation on success)
+HOP_PROBE="$SCRIPT_DIR/ws_upgrade_hop_probe.sh"
+if [ -f "$HOP_PROBE" ]; then
+  OPENCLAW_HOP_PROBE_RUN_ID="${RUN_ID}_hop" OPENCLAW_TS_HOSTNAME="$TS_HOSTNAME" \
+    bash "$HOP_PROBE" > "$OUT_DIR/hop_probe.log" 2>&1 || true
+  HOP_LATEST="$ARTIFACTS/novnc_debug/ws_handshake/${RUN_ID}_hop"
+  [ -f "$HOP_LATEST/result.json" ] && cp "$HOP_LATEST/result.json" "$OUT_DIR/hop_result.json" 2>/dev/null || true
+  [ -f "$HOP_LATEST/summary.md" ] && cp "$HOP_LATEST/summary.md" "$OUT_DIR/hop_summary.md" 2>/dev/null || true
+fi
+
 # 3. Write PROOF
 cat > "$OUT_DIR/PROOF.md" << EOF
 # novnc_stack_doctor
@@ -63,6 +73,7 @@ cat > "$OUT_DIR/PROOF.md" << EOF
 - /novnc/vnc.html HTTP 200: $([ "$AUDIT_PASS" -eq 1 ] && echo "PASS" || echo "FAIL")
 - WSS /websockify >=10s: $([ "$AUDIT_PASS" -eq 1 ] && echo "PASS" || echo "FAIL")
 - WSS /novnc/websockify >=10s: $([ "$AUDIT_PASS" -eq 1 ] && echo "PASS" || echo "FAIL")
+- Hop probe (A/B/C/D 101): $([ -f "$OUT_DIR/hop_result.json" ] && python3 -c "import json; d=json.load(open('$OUT_DIR/hop_result.json')); print('PASS' if d.get('all_101') else 'FAIL')" 2>/dev/null || echo "SKIP")
 
 **Overall:** $([ "$PORT_6080_OK" = "true" ] && [ "$AUDIT_PASS" -eq 1 ] && echo "PASS" || echo "FAIL")
 EOF

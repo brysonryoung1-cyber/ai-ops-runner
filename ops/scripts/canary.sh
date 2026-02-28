@@ -116,6 +116,11 @@ else
   NOVNC_OK=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/novnc_audit.json')); print(d.get('all_ok', False))" 2>/dev/null) || NOVNC_OK="False"
   if [ "$NOVNC_OK" != "True" ]; then
     echo "  noVNC audit: FAIL"
+    # Collect hop-by-hop diagnostic on failure
+    if [ -f "$ROOT_DIR/ops/scripts/ws_upgrade_hop_probe.sh" ]; then
+      OPENCLAW_HOP_PROBE_RUN_ID="${RUN_ID}_canary_hop" \
+        bash "$ROOT_DIR/ops/scripts/ws_upgrade_hop_probe.sh" > "$CANARY_DIR/hop_probe.log" 2>&1 || true
+    fi
     [ -z "$FAILED_INVARIANT" ] && FAILED_INVARIANT="novnc_audit_failed"
     REMEDIATE=1
   else
