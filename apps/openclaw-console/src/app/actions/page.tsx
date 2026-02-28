@@ -18,15 +18,19 @@ import CollapsibleOutput from "@/components/CollapsibleOutput";
 import { useExec, ExecResult } from "@/lib/hooks";
 import { GlassCard, StatusDot, Pill } from "@/components/glass";
 
+type PolicyTier = "readonly" | "low_risk_ops" | "privileged_ops" | "destructive_ops";
+
 interface ActionDef {
   action: string;
   label: string;
   description: string;
   variant: "primary" | "secondary" | "danger";
+  tier?: PolicyTier;
+  requiresApproval?: boolean;
 }
 
 /** Actions that mutate remote state and require confirmation before execution. */
-const DESTRUCTIVE_ACTIONS = new Set(["apply", "guard", "soma_mirror"]);
+const DESTRUCTIVE_ACTIONS = new Set(["apply", "guard", "soma_mirror", "rollback"]);
 
 const ACTIONS: ActionDef[] = [
   {
@@ -76,6 +80,7 @@ const ACTIONS: ActionDef[] = [
     description:
       "Deploy or repair the openclaw-guard systemd timer (runs every 10 min)",
     variant: "secondary",
+    tier: "privileged_ops",
   },
   {
     action: "ports",
@@ -117,6 +122,34 @@ const ACTIONS: ActionDef[] = [
     description:
       "Safe unlock when no active run exists. Refuses if Auto-Finish is running. Clears stale locks (>30 min).",
     variant: "secondary",
+  },
+];
+
+const PRIVILEGED_ACTIONS: ActionDef[] = [
+  {
+    action: "rootd.systemctl_restart",
+    label: "Restart Service (rootd)",
+    description:
+      "Restart an allowlisted systemd unit via rootd. Will use privileged_ops via rootd.",
+    variant: "secondary",
+    tier: "privileged_ops",
+  },
+  {
+    action: "rootd.tailscale_serve_apply",
+    label: "Apply Tailscale Serve (rootd)",
+    description:
+      "Apply desired Tailscale Serve config via rootd. Enforces single-root frontdoor.",
+    variant: "secondary",
+    tier: "privileged_ops",
+  },
+  {
+    action: "rollback",
+    label: "Auto-Rollback",
+    description:
+      "Rollback to last-known-good tree SHA. Only allowed after N consecutive canary failures. Requires approval.",
+    variant: "danger",
+    tier: "destructive_ops",
+    requiresApproval: true,
   },
 ];
 
@@ -201,8 +234,33 @@ export default function ActionsPage() {
             loading={loading === a.action}
             disabled={loading !== null && loading !== a.action}
             onClick={() => handleExec(a.action)}
+            tier={a.tier}
+            requiresApproval={a.requiresApproval}
           />
         ))}
+      </div>
+
+      {/* Privileged Operations — rootd escalation */}
+      <div className="mt-8">
+        <h3 className="text-lg font-semibold text-white/90 mb-2">Privileged Operations</h3>
+        <p className="text-xs text-white/50 mb-3">
+          These actions use privileged_ops via rootd. Destructive operations require explicit approval.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {PRIVILEGED_ACTIONS.map((a) => (
+            <ActionButton
+              key={a.action}
+              label={a.label}
+              description={a.description}
+              variant={a.variant}
+              loading={loading === a.action}
+              disabled={loading !== null && loading !== a.action}
+              onClick={() => handleExec(a.action)}
+              tier={a.tier}
+              requiresApproval={a.requiresApproval}
+            />
+          ))}
+        </div>
       </div>
 
       {/* ORB Backtest — Soma-first gate lock banner */}

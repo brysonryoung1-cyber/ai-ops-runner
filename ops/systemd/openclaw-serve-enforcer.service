@@ -1,0 +1,10 @@
+[Unit]
+Description=OpenClaw serve enforcer — continuous frontdoor invariant
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ai-ops-runner/ops/serve_enforcer.sh
+WorkingDirectory=/opt/ai-ops-runner
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=OpenClaw rootd watchdog (socket + health probe)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ai-ops-runner/ops/rootd_watchdog.sh
+WorkingDirectory=/opt/ai-ops-runner
+
+[Install]
+WantedBy=multi-user.target

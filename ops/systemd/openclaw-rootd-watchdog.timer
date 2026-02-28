@@ -1,0 +1,10 @@
+[Unit]
+Description=OpenClaw rootd watchdog (every 60s)
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,22 @@
+[Unit]
+Description=OpenClaw rootd — privileged helper daemon (allowlisted root ops)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/ai-ops-runner/ops/openclaw_rootd.py
+WorkingDirectory=/opt/ai-ops-runner
+Restart=always
+RestartSec=3
+StartLimitIntervalSec=0
+TimeoutStartSec=10
+TimeoutStopSec=10
+
+# Hardened: only the specific capabilities rootd needs
+NoNewPrivileges=no
+ProtectSystem=false
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

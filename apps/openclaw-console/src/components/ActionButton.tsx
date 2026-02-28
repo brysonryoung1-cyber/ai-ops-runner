@@ -1,5 +1,7 @@
 "use client";
 
+type PolicyTier = "readonly" | "low_risk_ops" | "privileged_ops" | "destructive_ops";
+
 interface ActionButtonProps {
   label: string;
   description: string;
@@ -7,12 +9,27 @@ interface ActionButtonProps {
   loading?: boolean;
   variant?: "primary" | "secondary" | "danger";
   disabled?: boolean;
+  tier?: PolicyTier;
+  requiresApproval?: boolean;
 }
 
 const VARIANT_STYLES = {
   primary: "bg-white/20 text-white hover:bg-white/30 border-white/20 backdrop-blur-md",
   secondary: "bg-white/10 text-white/90 border-white/10 hover:bg-white/15 backdrop-blur-md",
   danger: "bg-red-500/20 text-red-200 hover:bg-red-500/30 border-red-500/30 backdrop-blur-md",
+};
+
+const TIER_BADGE: Record<PolicyTier, { label: string; className: string } | null> = {
+  readonly: null,
+  low_risk_ops: null,
+  privileged_ops: {
+    label: "privileged_ops via rootd",
+    className: "bg-amber-500/20 text-amber-200 border-amber-500/30",
+  },
+  destructive_ops: {
+    label: "destructive_ops — approval required",
+    className: "bg-red-500/20 text-red-200 border-red-500/30",
+  },
 };
 
 export default function ActionButton({
@@ -22,7 +39,11 @@ export default function ActionButton({
   loading = false,
   variant = "secondary",
   disabled = false,
+  tier,
+  requiresApproval = false,
 }: ActionButtonProps) {
+  const badge = tier ? TIER_BADGE[tier] : null;
+
   return (
     <button
       onClick={onClick}
@@ -34,7 +55,14 @@ export default function ActionButton({
     >
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-sm font-semibold">{label}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-semibold">{label}</p>
+            {badge && (
+              <span className={`text-[10px] px-1.5 py-0.5 rounded border ${badge.className}`}>
+                {badge.label}
+              </span>
+            )}
+          </div>
           <p className="text-xs mt-0.5 text-white/60">
             {description}
           </p>
