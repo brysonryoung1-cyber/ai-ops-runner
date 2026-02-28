@@ -66,6 +66,7 @@ const CONSOLE_ROUTES = [
   "/incidents",
   "/settings",
   "/soma",
+  "/browser/[sessionId]",
 ];
 
 export async function GET() {

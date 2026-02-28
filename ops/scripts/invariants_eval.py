@@ -171,6 +171,37 @@ def evaluate_invariants(state_pack_dir: Path) -> dict:
         "evidence": f"live_probe:wss://{TS_HOSTNAME}/novnc/websockify",
     })
 
+    # 7. Browser Gateway ready (only when human gate session is active)
+    bg_code, bg_data = _curl_http("http://127.0.0.1:8890/health")
+    bg_active = bg_data.get("active_sessions", 0) > 0 if bg_data else False
+    human_gate_active = False
+    hg_lock = ARTIFACTS_ROOT / ".locks" / "soma_kajabi_auto_finish.json"
+    if hg_lock.exists():
+        hg_data = _read_json(hg_lock)
+        if hg_data and hg_data.get("active_run_id"):
+            human_gate_active = True
+    if not human_gate_active:
+        af_root = ARTIFACTS_ROOT / "soma_kajabi" / "auto_finish"
+        if af_root.exists():
+            af_dirs = sorted([d.name for d in af_root.iterdir() if d.is_dir()], reverse=True)
+            for d in af_dirs[:3]:
+                result_p = af_root / d / "RESULT.json"
+                if result_p.exists():
+                    r_data = _read_json(result_p)
+                    if r_data and r_data.get("status") == "WAITING_FOR_HUMAN":
+                        human_gate_active = True
+                        break
+
+    if human_gate_active:
+        bg_pass = bg_code == 200 and bg_data is not None
+        invariants.append({
+            "id": "browser_gateway_ready",
+            "pass": bg_pass,
+            "reason": "OK" if bg_pass else "Browser Gateway not responding (human gate active)",
+            "evidence": "live_probe:http://127.0.0.1:8890/health",
+        })
+        evidence.append(invariants[-1]["evidence"])
+
     out["all_pass"] = all(i["pass"] for i in invariants)
     return out
 

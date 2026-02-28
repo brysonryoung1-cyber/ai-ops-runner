@@ -37,6 +37,21 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# ─── Preflight gate (hard gate: must pass before ship/deploy) ───
+echo "=== Preflight Gate ==="
+PREFLIGHT_SCRIPT="$SCRIPT_DIR/agent_preflight.sh"
+if [ -x "$PREFLIGHT_SCRIPT" ]; then
+  if ! bash "$PREFLIGHT_SCRIPT"; then
+    echo "ERROR: Preflight BLOCKED. Fix issues above before ship/deploy." >&2
+    echo '{"ok":false,"error":"PREFLIGHT_BLOCKED","proof_dir":"'"$PROOF_DIR"'"}' > "$PROOF_DIR/RESULT.json"
+    exit 1
+  fi
+  echo "Preflight PASS"
+else
+  echo "WARN: agent_preflight.sh not found or not executable; skipping preflight"
+fi
+echo ""
+
 # Resolve deploy target (fail-closed if deploy needed and unresolved)
 if [ "$SKIP_DEPLOY" -eq 0 ]; then
   if ! source "$SCRIPT_DIR/scripts/resolve_deploy_target.sh"; then

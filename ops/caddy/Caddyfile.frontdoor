@@ -19,6 +19,16 @@
 # handles WebSocket upgrades automatically when it sees Upgrade headers).
 (proxy_routes) {
 	route {
+		# Browser Gateway — CDP streaming (primary human gate transport)
+		handle /browser-gateway/* {
+			uri strip_prefix /browser-gateway
+			reverse_proxy 127.0.0.1:8890 {
+				transport http {
+					versions 1.1
+				}
+			}
+		}
+
 		handle /novnc/websockify* {
 			uri strip_prefix /novnc
 			reverse_proxy 127.0.0.1:6080 {

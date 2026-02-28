@@ -1,0 +1,157 @@
+/**
+ * GET /api/agent/status
+ *
+ * Capability Gate: returns ok/blocked + remediation + links.
+ * Aggregates preflight checks, subsystem health, and current state.
+ * No secrets. Deterministic. No LLM.
+ */
+
+import { NextResponse } from "next/server";
+import { existsSync, readdirSync, readFileSync } from "fs";
+import { join } from "path";
+import { execSync } from "child_process";
+
+export const dynamic = "force-dynamic";
+
+function getRepoRoot(): string {
+  return process.env.OPENCLAW_REPO_ROOT || process.cwd();
+}
+
+function getArtifactsRoot(): string {
+  if (process.env.OPENCLAW_ARTIFACTS_ROOT) return process.env.OPENCLAW_ARTIFACTS_ROOT;
+  return join(getRepoRoot(), "artifacts");
+}
+
+interface CheckResult {
+  status: "ok" | "blocked" | "warn" | "unknown";
+  detail: string;
+}
+
+function checkHqHealth(): CheckResult {
+  try {
+    const resp = execSync(
+      'curl -sf --max-time 3 http://127.0.0.1:8788/api/ui/health_public',
+      { encoding: "utf-8", timeout: 5000 },
+    );
+    const data = JSON.parse(resp);
+    return { status: data.ok ? "ok" : "warn", detail: `build_sha=${data.build_sha}` };
+  } catch {
+    return { status: "blocked", detail: "HQ health_public unreachable" };
+  }
+}
+
+function checkHostd(): CheckResult {
+  try {
+    const url = process.env.OPENCLAW_HOSTD_URL || "http://127.0.0.1:8877";
+    const resp = execSync(
+      `curl -sf --max-time 3 ${url}/healthz`,
+      { encoding: "utf-8", timeout: 5000 },
+    );
+    return { status: "ok", detail: "hostd healthy" };
+  } catch {
+    return { status: "blocked", detail: "hostd unreachable" };
+  }
+}
+
+function checkBrowserGateway(): CheckResult {
+  try {
+    const resp = execSync(
+      'curl -sf --max-time 3 http://127.0.0.1:8890/health',
+      { encoding: "utf-8", timeout: 5000 },
+    );
+    const data = JSON.parse(resp);
+    return { status: "ok", detail: `active_sessions=${data.active_sessions}` };
+  } catch {
+    return { status: "warn", detail: "Browser Gateway not running" };
+  }
+}
+
+function checkDrift(): CheckResult {
+  try {
+    const resp = execSync(
+      'curl -sf --max-time 3 http://127.0.0.1:8788/api/ui/version',
+      { encoding: "utf-8", timeout: 5000 },
+    );
+    const data = JSON.parse(resp);
+    if (data.drift_status === "ok" && !data.drift) {
+      return { status: "ok", detail: "drift_status=ok drift=false" };
+    }
+    return { status: "blocked", detail: `drift_status=${data.drift_status} drift=${data.drift}` };
+  } catch {
+    return { status: "warn", detail: "Version endpoint unreachable" };
+  }
+}
+
+function getLatestPreflight(): Record<string, string> | null {
+  const base = join(getArtifactsRoot(), "system", "preflight");
+  if (!existsSync(base)) return null;
+  const dirs = readdirSync(base).sort().reverse();
+  for (const d of dirs.slice(0, 5)) {
+    const p = join(base, d, "preflight.json");
+    if (existsSync(p)) {
+      try {
+        return JSON.parse(readFileSync(p, "utf-8"));
+      } catch { /* ignore */ }
+    }
+  }
+  return null;
+}
+
+function getLatestCanary(): { status: string; run_id: string } | null {
+  const base = join(getArtifactsRoot(), "system", "canary");
+  if (!existsSync(base)) return null;
+  const dirs = readdirSync(base)
+    .filter((d) => existsSync(join(base, d, "result.json")))
+    .sort().reverse();
+  if (dirs.length === 0) return null;
+  try {
+    const r = JSON.parse(readFileSync(join(base, dirs[0], "result.json"), "utf-8"));
+    return { status: r.status ?? "unknown", run_id: dirs[0] };
+  } catch {
+    return null;
+  }
+}
+
+export async function GET() {
+  const checks: Record<string, CheckResult> = {};
+
+  checks.hq_health = checkHqHealth();
+  checks.hostd = checkHostd();
+  checks.browser_gateway = checkBrowserGateway();
+  checks.drift = checkDrift();
+
+  const latestPreflight = getLatestPreflight();
+  const latestCanary = getLatestCanary();
+
+  const blocked = Object.values(checks).some((c) => c.status === "blocked");
+  const overall = blocked ? "blocked" : "ok";
+
+  const remediation: string[] = [];
+  if (checks.hq_health.status === "blocked") {
+    remediation.push("Restart HQ console: systemctl restart openclaw-console");
+  }
+  if (checks.hostd.status === "blocked") {
+    remediation.push("Restart hostd: systemctl restart openclaw-hostd");
+  }
+  if (checks.drift.status === "blocked") {
+    remediation.push("Run deploy to fix drift: ./ops/ship_deploy_verify.sh");
+  }
+
+  return NextResponse.json({
+    ok: !blocked,
+    overall,
+    checks,
+    remediation,
+    latest_preflight: latestPreflight
+      ? { run_id: (latestPreflight as Record<string, unknown>).run_id, overall: (latestPreflight as Record<string, unknown>).overall }
+      : null,
+    latest_canary: latestCanary,
+    links: {
+      inbox: "/inbox",
+      soma: "/soma",
+      preflight_artifacts: "/artifacts/system/preflight",
+      canary_artifacts: "/artifacts/system/canary",
+    },
+    server_time: new Date().toISOString(),
+  });
+}
