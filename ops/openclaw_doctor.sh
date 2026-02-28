@@ -733,6 +733,10 @@ fi
 if [ -n "$TS_HOSTNAME" ]; then
   CURL_OPTS="-kfsS --connect-timeout 5 --max-time 10"
   HEALTH_JSON="$(curl $CURL_OPTS "https://${TS_HOSTNAME}/api/ui/health_public" 2>/dev/null)" || true
+  # Fallback: when on same host (hairpin may fail), use frontdoor localhost
+  if [ -z "$HEALTH_JSON" ]; then
+    HEALTH_JSON="$(curl -sf --connect-timeout 3 --max-time 5 "http://127.0.0.1:8788/api/ui/health_public" 2>/dev/null)" || true
+  fi
   if [ -z "$HEALTH_JSON" ]; then
     fail "Hostname /api/ui/health_public unreachable (https://${TS_HOSTNAME})"
   elif ! echo "$HEALTH_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') is True else 1)" 2>/dev/null; then
@@ -762,6 +766,7 @@ fi
 BUILD_SHA_DRIFT=""
 if [ -n "$TS_HOSTNAME" ] && [ -n "$ORIGIN_MAIN" ]; then
   HEALTH_DRIFT="$(curl -kfsS --connect-timeout 5 --max-time 10 "https://${TS_HOSTNAME}/api/ui/health_public" 2>/dev/null)" || true
+  [ -z "$HEALTH_DRIFT" ] && HEALTH_DRIFT="$(curl -sf --connect-timeout 3 --max-time 5 "http://127.0.0.1:8788/api/ui/health_public" 2>/dev/null)" || true
   BUILD_SHA_DRIFT="$(echo "$HEALTH_DRIFT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('build_sha',''))" 2>/dev/null || echo "")"
 fi
 if [ -n "$ORIGIN_MAIN" ] && [ -n "$BUILD_SHA_DRIFT" ]; then
