@@ -13,13 +13,15 @@ interface RunData {
   project_id: string;
   action: string;
   started_at: string;
-  finished_at: string;
-  status: "success" | "failure" | "error";
+  finished_at?: string;
+  updated_at?: string;
+  status: "success" | "failure" | "error" | "running" | "queued";
   exit_code: number | null;
   duration_ms: number;
   error_summary: string | null;
   artifact_paths: string[];
   artifact_dir?: string | null;
+  repaired?: boolean;
 }
 
 function statusBadge(status: string): { bg: string; text: string; label: string } {
@@ -30,19 +32,35 @@ function statusBadge(status: string): { bg: string; text: string; label: string 
       return { bg: "bg-red-500/15", text: "text-red-200", label: "Failure" };
     case "error":
       return { bg: "bg-amber-500/15", text: "text-amber-200", label: "Error" };
+    case "running":
+      return { bg: "bg-blue-500/15", text: "text-blue-200", label: "Running" };
+    case "queued":
+      return { bg: "bg-violet-500/15", text: "text-violet-200", label: "Queued" };
     default:
       return { bg: "bg-white/10", text: "text-white/70", label: status };
   }
 }
 
 function formatDuration(ms: number): string {
+  if (!isFinite(ms) || isNaN(ms)) return "—";
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
   return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
 }
 
-function formatTimestamp(iso: string): string {
+/** Compute live elapsed duration for a running run. */
+function formatElapsed(startedAtIso: string): string {
+  const startMs = new Date(startedAtIso).getTime();
+  if (isNaN(startMs)) return "—";
+  const elapsed = Date.now() - startMs;
+  if (elapsed < 0) return "—";
+  return formatDuration(elapsed);
+}
+
+function formatTimestamp(iso: string | undefined): string {
+  if (!iso) return "—";
   const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
   return d.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
@@ -53,8 +71,12 @@ function formatTimestamp(iso: string): string {
   });
 }
 
-function formatRelativeTime(isoString: string): string {
-  const diff = Date.now() - new Date(isoString).getTime();
+function formatRelativeTime(isoString: string | undefined): string {
+  if (!isoString) return "—";
+  const ts = new Date(isoString).getTime();
+  if (isNaN(ts)) return "—";
+  const diff = Date.now() - ts;
+  if (!isFinite(diff) || diff < 0) return "—";
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m ago`;
@@ -62,6 +84,24 @@ function formatRelativeTime(isoString: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+function isRunActive(run: RunData): boolean {
+  return run.status === "running" || run.status === "queued";
+}
+
+/** Get the best available date for grouping a run. */
+function getRunGroupDate(run: RunData): string {
+  const ts = run.finished_at || run.started_at;
+  if (!ts) return "Unknown";
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return "Unknown";
+  return d.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 function RunsContent() {
@@ -140,14 +180,12 @@ function RunsContent() {
     if (projectFilter === "soma_kajabi" || !projectFilter) fetchSomaStatus();
   }, [projectFilter, fetchSomaStatus]);
 
-  // Group runs by date
-  const runsByDate = runs.reduce<Record<string, RunData[]>>((acc, run) => {
-    const date = new Date(run.finished_at).toLocaleDateString("en-US", {
-      weekday: "long",
-      month: "long",
-      day: "numeric",
-      year: "numeric",
-    });
+  // Separate active runs from completed, group completed by date
+  const activeRuns = runs.filter(isRunActive);
+  const completedRuns = runs.filter((r) => !isRunActive(r));
+
+  const runsByDate = completedRuns.reduce<Record<string, RunData[]>>((acc, run) => {
+    const date = getRunGroupDate(run);
     if (!acc[date]) acc[date] = [];
     acc[date].push(run);
     return acc;
@@ -235,6 +273,68 @@ function RunsContent() {
       <div className="flex gap-6">
         {/* Runs timeline */}
         <div className={`${selectedRun ? "w-1/2" : "w-full"} transition-all duration-200`}>
+          {/* Active runs section */}
+          {activeRuns.length > 0 && (
+            <div className="mb-6">
+              <h3 className="text-xs font-semibold text-blue-400/80 uppercase tracking-wider mb-2 px-1">
+                Currently Running
+              </h3>
+              <div className="glass-surface rounded-2xl overflow-hidden border border-blue-500/20">
+                <ul className="divide-y divide-white/5">
+                  {activeRuns.map((run) => {
+                    const badge = statusBadge(run.status);
+                    const isSelected = selectedRun?.run_id === run.run_id;
+                    return (
+                      <li
+                        key={run.run_id}
+                        className={`transition-colors ${isSelected ? "bg-white/10" : "hover:bg-white/5"}`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setSelectedRun(isSelected ? null : run)}
+                          className="w-full flex items-center justify-between px-4 py-3 cursor-pointer text-left"
+                        >
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <span className="w-2 h-2 rounded-full flex-shrink-0 bg-blue-500 animate-pulse" />
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-medium text-white/90">
+                                  {run.action}
+                                </span>
+                                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${badge.bg} ${badge.text}`}>
+                                  {badge.label}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <span className="text-[10px] text-white/50">{run.project_id}</span>
+                                <span className="text-[10px] text-white/50">·</span>
+                                <span className="text-[10px] text-blue-300/70">
+                                  {formatElapsed(run.started_at)} elapsed
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                          <span className="text-[11px] text-white/50 flex-shrink-0 ml-3">
+                            started {formatRelativeTime(run.started_at)}
+                          </span>
+                        </button>
+                        <div className="px-4 pb-2 -mt-1 flex items-center gap-3">
+                          <Link
+                            href={`/runs?id=${encodeURIComponent(run.run_id)}`}
+                            className="text-[10px] font-medium text-white/40 hover:text-white/70"
+                          >
+                            Permalink
+                          </Link>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            </div>
+          )}
+
+          {/* Completed runs by date */}
           {Object.entries(runsByDate).map(([date, dateRuns]) => (
             <div key={date} className="mb-6">
               <h3 className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-2 px-1">
@@ -284,10 +384,9 @@ function RunsContent() {
                             </div>
                           </div>
                           <span className="text-[11px] text-white/50 flex-shrink-0 ml-3">
-                            {formatRelativeTime(run.finished_at)}
+                            {formatRelativeTime(run.finished_at || run.updated_at || run.started_at)}
                           </span>
                         </button>
-                        {/* Anchor link for no-JS fallback */}
                         <div className="px-4 pb-2 -mt-1 flex items-center gap-3">
                           {run.artifact_paths.length > 0 && (
                             <Link
@@ -374,7 +473,9 @@ function RunsContent() {
                       Duration
                     </p>
                     <p className="text-xs text-white/90 mt-0.5">
-                      {formatDuration(selectedRun.duration_ms)}
+                      {isRunActive(selectedRun)
+                        ? formatElapsed(selectedRun.started_at) + " (running)"
+                        : formatDuration(selectedRun.duration_ms)}
                     </p>
                   </div>
                   <div>
@@ -387,10 +488,10 @@ function RunsContent() {
                   </div>
                   <div>
                     <p className="text-[10px] font-semibold text-white/50 uppercase tracking-wider">
-                      Finished
+                      {isRunActive(selectedRun) ? "Status" : "Finished"}
                     </p>
                     <p className="text-xs text-white/90 mt-0.5">
-                      {formatTimestamp(selectedRun.finished_at)}
+                      {isRunActive(selectedRun) ? "In progress…" : formatTimestamp(selectedRun.finished_at)}
                     </p>
                   </div>
                 </div>
@@ -462,6 +563,14 @@ function RunsContent() {
       {runs.length > 0 && (
         <div className="mt-6 p-4 rounded-2xl glass-surface">
           <div className="flex items-center gap-6">
+            {activeRuns.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                <span className="text-xs text-white/60">
+                  {activeRuns.length} running
+                </span>
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-500" />
               <span className="text-xs text-white/60">

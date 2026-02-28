@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readdirSync, existsSync } from "fs";
 import { join } from "path";
-import { listRunRecords, getRunRecord } from "@/lib/run-recorder";
+import { listRunRecords, getRunRecord, sanitizeRunRecord, repairOrphanedRuns } from "@/lib/run-recorder";
 import { getLockInfo } from "@/lib/action-lock";
+import type { RunRecord } from "@/lib/run-recorder";
+
+let _lastRepairTs = 0;
+const REPAIR_INTERVAL_MS = 5 * 60 * 1000;
 
 function getArtifactsRoot(): string {
   if (process.env.OPENCLAW_ARTIFACTS_ROOT) return process.env.OPENCLAW_ARTIFACTS_ROOT;
@@ -55,6 +59,13 @@ export async function GET(req: NextRequest) {
 
   const runId = req.nextUrl.searchParams.get("id");
 
+  // Lazy orphan repair: at most once per 5 minutes
+  const now = Date.now();
+  if (now - _lastRepairTs > REPAIR_INTERVAL_MS) {
+    _lastRepairTs = now;
+    try { repairOrphanedRuns(); } catch { /* best-effort */ }
+  }
+
   // Single run lookup
   if (runId) {
     const record = getRunRecord(runId);
@@ -64,21 +75,20 @@ export async function GET(req: NextRequest) {
         { status: 404 }
       );
     }
-    const runWithArtifacts = { ...record };
-    // For running/queued: merge artifact_dir from lock (hostd script updates it)
+    const { record: sanitized } = sanitizeRunRecord(record);
+    const runWithArtifacts = { ...sanitized };
     if (
-      (record.status === "running" || record.status === "queued") &&
-      record.action
+      (sanitized.status === "running" || sanitized.status === "queued") &&
+      sanitized.action
     ) {
-      const lockInfo = getLockInfo(record.action);
+      const lockInfo = getLockInfo(sanitized.action);
       if (lockInfo?.active_run_id === runId && lockInfo.artifact_dir) {
         runWithArtifacts.artifact_dir = lockInfo.artifact_dir;
       }
     }
-    // For apply/doctor/guard without artifact_dir, try to resolve from hostd dirs by timestamp
     if (
       !runWithArtifacts.artifact_dir &&
-      (record.action === "apply" || record.action === "doctor" || record.action === "guard")
+      (sanitized.action === "apply" || sanitized.action === "doctor" || sanitized.action === "guard")
     ) {
       const resolved = resolveHostdArtifactDirForRun(runId);
       if (resolved) runWithArtifacts.artifact_dir = resolved;
@@ -90,7 +100,7 @@ export async function GET(req: NextRequest) {
   const limitParam = req.nextUrl.searchParams.get("limit");
   const limit = Math.min(Math.max(1, parseInt(limitParam || "100", 10) || 100), 500);
 
-  const runs = listRunRecords(limit);
+  const runs = listRunRecords(limit).map((r: RunRecord) => sanitizeRunRecord(r).record);
 
   return NextResponse.json({ ok: true, runs, count: runs.length });
 }
