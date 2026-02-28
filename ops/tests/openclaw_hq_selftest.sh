@@ -327,16 +327,20 @@ else
   fail "layout title not updated to 'OpenClaw HQ'"
 fi
 
-# Test 31: Overview page has AI Connections panel
-if grep -q 'AI Connections' "$REPO_ROOT/apps/openclaw-console/src/app/page.tsx"; then
+# Test 31: Overview page has AI Connections panel (moved to /overview)
+OVERVIEW_PAGE="$REPO_ROOT/apps/openclaw-console/src/app/overview/page.tsx"
+if [ ! -f "$OVERVIEW_PAGE" ]; then
+  OVERVIEW_PAGE="$REPO_ROOT/apps/openclaw-console/src/app/page.tsx"
+fi
+if grep -q 'AI Connections' "$OVERVIEW_PAGE"; then
   pass "overview page has AI Connections panel"
 else
   fail "overview page missing AI Connections panel"
 fi
 
 # Test 32: AI panel shows masked fingerprints only
-if grep -q 'fingerprint' "$REPO_ROOT/apps/openclaw-console/src/app/page.tsx" && \
-   grep -q 'Keys are never displayed' "$REPO_ROOT/apps/openclaw-console/src/app/page.tsx"; then
+if grep -q 'fingerprint' "$OVERVIEW_PAGE" && \
+   grep -q 'Keys are never displayed' "$OVERVIEW_PAGE"; then
   pass "AI panel shows masked fingerprints with security note"
 else
   fail "AI panel missing fingerprint masking"
