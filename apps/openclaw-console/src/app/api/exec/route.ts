@@ -8,7 +8,7 @@ import {
   deriveActor,
   hashParams,
 } from "@/lib/audit";
-import { buildRunRecord, buildRunRecordStart, writeRunRecord } from "@/lib/run-recorder";
+import { buildRunRecord, buildRunRecordStart, writeRunRecord, repairOrphanedRuns } from "@/lib/run-recorder";
 import { writeSomaLastRunIndex } from "@/lib/soma-last-run-resolver";
 
 export const runtime = "nodejs";
@@ -365,6 +365,22 @@ export async function POST(req: NextRequest) {
     forceClearLock(AUTO_FINISH_ACTION);
     return NextResponse.json(
       { ok: true, unlocked: true, message: "Stale lock cleared. Auto-Finish can be started." },
+      { status: 200 }
+    );
+  }
+
+  // System repair action: marks orphaned/stale runs as failed, clears stale locks
+  if (actionName === "system.repair_run_state") {
+    const repaired = repairOrphanedRuns();
+    return NextResponse.json(
+      {
+        ok: true,
+        action: "system.repair_run_state",
+        repaired_count: repaired,
+        message: repaired > 0
+          ? `Repaired ${repaired} orphaned/stale run(s).`
+          : "No orphaned runs found.",
+      },
       { status: 200 }
     );
   }

@@ -21,6 +21,8 @@ export interface RunRecord {
   started_at: string;
   /** Omitted when status is "running" or "queued". */
   finished_at?: string;
+  /** Server-side timestamp updated on every state transition. */
+  updated_at?: string;
   status: "success" | "failure" | "error" | "running" | "queued";
   /** Stage from hostd (e.g. phase0, session_check). */
   stage?: string | null;
@@ -32,6 +34,8 @@ export interface RunRecord {
   artifact_paths: string[];
   /** Host executor artifact dir (e.g. artifacts/hostd/YYYYMMDD_HHMMSS_hex) for apply/doctor etc. */
   artifact_dir?: string | null;
+  /** Set to true when timestamps were auto-repaired from invalid values. */
+  repaired?: boolean;
 }
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -167,12 +171,14 @@ export function buildRunRecord(
   errorClass?: string | null,
   stage?: string | null
 ): RunRecord {
+  const now = new Date().toISOString();
   return {
     run_id: runId ?? generateRunId(),
     project_id: projectId || resolveProjectId(action),
     action,
     started_at: startedAt.toISOString(),
     finished_at: finishedAt.toISOString(),
+    updated_at: now,
     status: ok ? "success" : exitCode !== null ? "failure" : "error",
     exit_code: exitCode,
     duration_ms: finishedAt.getTime() - startedAt.getTime(),
@@ -195,11 +201,13 @@ export function buildRunRecordStart(
   projectId?: string,
   status: "queued" | "running" = "running"
 ): RunRecord {
+  const now = new Date().toISOString();
   return {
     run_id: runId,
     project_id: projectId || resolveProjectId(action),
     action,
     started_at: startedAt.toISOString(),
+    updated_at: now,
     status,
     exit_code: null,
     duration_ms: 0,
@@ -281,4 +289,108 @@ export function getLastRunForProject(projectId: string): RunRecord | null {
 export function getRunsForProject(projectId: string, limit = 50): RunRecord[] {
   const runs = listRunRecords(500);
   return runs.filter((r) => r.project_id === projectId).slice(0, limit);
+}
+
+// ── Timestamp validation ───────────────────────────────────────
+
+function isValidISOTimestamp(ts: unknown): ts is string {
+  if (typeof ts !== "string" || ts.length === 0) return false;
+  const d = new Date(ts);
+  return !isNaN(d.getTime());
+}
+
+/**
+ * Sanitize a run record: ensure all timestamps are valid ISO8601 UTC.
+ * If a timestamp is missing or invalid, repairs it and marks repaired=true.
+ * Returns the (possibly mutated) record and whether it was repaired.
+ */
+export function sanitizeRunRecord(record: RunRecord): { record: RunRecord; wasRepaired: boolean } {
+  let repaired = false;
+  const now = new Date().toISOString();
+
+  if (!isValidISOTimestamp(record.started_at)) {
+    record.started_at = now;
+    repaired = true;
+  }
+
+  if (record.status !== "running" && record.status !== "queued") {
+    if (!isValidISOTimestamp(record.finished_at)) {
+      record.finished_at = record.updated_at && isValidISOTimestamp(record.updated_at)
+        ? record.updated_at
+        : record.started_at;
+      repaired = true;
+    }
+  }
+
+  if (!isValidISOTimestamp(record.updated_at)) {
+    record.updated_at = record.finished_at && isValidISOTimestamp(record.finished_at)
+      ? record.finished_at
+      : now;
+    repaired = true;
+  }
+
+  if (record.duration_ms < 0 || !isFinite(record.duration_ms)) {
+    if (record.finished_at && isValidISOTimestamp(record.finished_at)) {
+      record.duration_ms = Math.max(0, new Date(record.finished_at).getTime() - new Date(record.started_at).getTime());
+    } else {
+      record.duration_ms = 0;
+    }
+    repaired = true;
+  }
+
+  if (repaired) record.repaired = true;
+  return { record, wasRepaired: repaired };
+}
+
+// ── Orphan repair ──────────────────────────────────────────────
+
+/**
+ * Mark an orphaned "running" run as failed.
+ * Used when stale locks are cleared or during system.repair_run_state.
+ */
+export function markRunOrphaned(runId: string, reason = "orphaned/stale"): boolean {
+  try {
+    const record = getRunRecord(runId);
+    if (!record) return false;
+    if (record.status !== "running" && record.status !== "queued") return false;
+
+    const now = new Date();
+    record.status = "error";
+    record.finished_at = now.toISOString();
+    record.updated_at = now.toISOString();
+    record.error_summary = reason;
+    record.error_class = "ORPHANED_STALE";
+    record.duration_ms = now.getTime() - new Date(record.started_at).getTime();
+
+    const runsDir = resolveRunsDir();
+    const runPath = join(runsDir, runId, "run.json");
+    writeFileSync(runPath, JSON.stringify(record, null, 2) + "\n", "utf-8");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Repair all orphaned/stale "running" records older than maxAgeMs.
+ * Returns count of repaired records.
+ */
+export function repairOrphanedRuns(maxAgeMs = 35 * 60 * 1000): number {
+  let count = 0;
+  try {
+    const runs = listRunRecords(500);
+    const now = Date.now();
+    for (const run of runs) {
+      if (run.status !== "running" && run.status !== "queued") continue;
+      const startedMs = new Date(run.started_at).getTime();
+      if (isNaN(startedMs) || now - startedMs > maxAgeMs) {
+        if (markRunOrphaned(run.run_id, "orphaned/stale — auto-repaired by system.repair_run_state")) {
+          count++;
+        }
+      }
+    }
+  } catch {
+    // best-effort
+  }
+  return count;
 }

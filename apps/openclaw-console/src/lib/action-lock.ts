@@ -13,6 +13,7 @@
 import { randomBytes } from "crypto";
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
 import { join } from "path";
+import { markRunOrphaned } from "./run-recorder";
 
 export interface LockAcquireResult {
   acquired: boolean;
@@ -60,13 +61,27 @@ const LONG_RUNNING_ACTIONS = new Set([
   "deploy_and_verify",
 ]);
 
+/**
+ * Soma lane orchestrator actions: at most ONE of these may run at a time.
+ * When any is active, a lane-level lock "soma_kajabi_lane" is also held.
+ */
+const SOMA_LANE_ACTIONS = new Set([
+  "soma_kajabi_auto_finish",
+  "soma_run_to_done",
+  "soma_fix_and_retry",
+  "soma_novnc_oneclick_recovery",
+  "soma_kajabi_reauth_and_resume",
+]);
+const SOMA_LANE_KEY = "soma_kajabi_lane";
+
 const STALE_MS_NORMAL = 5 * 60 * 1000;
 const STALE_MS_LONG = 30 * 60 * 1000;
 /** When heartbeat exists, use 3 min — script updates every 10–15s during polling. */
 const STALE_MS_HEARTBEAT = 3 * 60 * 1000;
 
 function getStaleMs(actionName: string): number {
-  return LONG_RUNNING_ACTIONS.has(actionName) ? STALE_MS_LONG : STALE_MS_NORMAL;
+  if (LONG_RUNNING_ACTIONS.has(actionName) || actionName === SOMA_LANE_KEY) return STALE_MS_LONG;
+  return STALE_MS_NORMAL;
 }
 
 function getStaleMsFromFile(actionName: string, fileLock: LockFileShape | null): number {
@@ -135,21 +150,60 @@ function isStale(acquiredAt: number, actionName: string, fileLock?: LockFileShap
   return Date.now() - ts > staleMs;
 }
 
+/** Repair the orphaned run when a stale lock is cleared. */
+function repairOrphanOnStaleClear(runId: string): void {
+  try {
+    markRunOrphaned(runId, "orphaned/stale — lock expired without completion");
+  } catch {
+    // best-effort
+  }
+}
+
 /**
  * Attempt to acquire a lock for the given action.
  * Returns { acquired, runId?, existing? }. When acquired, runId is set for the in-flight run.
  * When not acquired, existing ALWAYS has runId and startedAt for join semantics (never empty).
+ *
+ * For soma lane actions, also checks/acquires the lane-level lock to enforce
+ * at most one active soma orchestrator at a time.
  */
 export function acquireLock(actionName: string): LockAcquireResult {
   if (CONCURRENT_ALLOWED.has(actionName)) {
     return { acquired: true, runId: generateLockRunId() };
   }
 
+  // Soma lane enforcement: if this is a soma lane action, check the lane lock first
+  if (SOMA_LANE_ACTIONS.has(actionName)) {
+    const laneEntry = locks.get(SOMA_LANE_KEY);
+    const laneFileLock = readLockFile(SOMA_LANE_KEY);
+    if (laneEntry && !isStale(laneEntry.acquiredAt, SOMA_LANE_KEY, laneFileLock)) {
+      return {
+        acquired: false,
+        existing: { runId: laneEntry.runId, startedAt: laneEntry.acquiredAt },
+      };
+    }
+    if (laneFileLock) {
+      const lt = new Date(laneFileLock.started_at).getTime();
+      if (!isNaN(lt) && !isStale(lt, SOMA_LANE_KEY, laneFileLock)) {
+        locks.set(SOMA_LANE_KEY, { acquiredAt: lt, runId: laneFileLock.run_id });
+        return {
+          acquired: false,
+          existing: { runId: laneFileLock.run_id, startedAt: lt },
+        };
+      }
+      // Stale lane lock — clear and repair
+      if (laneFileLock.run_id) repairOrphanOnStaleClear(laneFileLock.run_id);
+      locks.delete(SOMA_LANE_KEY);
+      deleteLockFile(SOMA_LANE_KEY);
+    }
+  }
+
   // 1. Check in-memory first
-  let existing = locks.get(actionName);
+  const existing = locks.get(actionName);
   const fileLock = readLockFile(actionName);
   if (existing) {
     if (isStale(existing.acquiredAt, actionName, fileLock)) {
+      repairOrphanOnStaleClear(existing.runId);
       locks.delete(actionName);
       deleteLockFile(actionName);
     } else {
@@ -165,13 +219,13 @@ export function acquireLock(actionName: string): LockAcquireResult {
   if (fileLock2) {
     const startedAt = new Date(fileLock2.started_at).getTime();
     if (!isStale(startedAt, actionName, fileLock2)) {
-      // Sync in-memory
       locks.set(actionName, { acquiredAt: startedAt, runId: fileLock2.run_id });
       return {
         acquired: false,
         existing: { runId: fileLock2.run_id, startedAt },
       };
     }
+    repairOrphanOnStaleClear(fileLock2.run_id);
     deleteLockFile(actionName);
   }
 
@@ -179,15 +233,28 @@ export function acquireLock(actionName: string): LockAcquireResult {
   const now = Date.now();
   locks.set(actionName, { acquiredAt: now, runId });
   writeLockFile(actionName, runId, now);
+
+  // Also acquire soma lane lock if applicable
+  if (SOMA_LANE_ACTIONS.has(actionName)) {
+    locks.set(SOMA_LANE_KEY, { acquiredAt: now, runId });
+    writeLockFile(SOMA_LANE_KEY, runId, now);
+  }
+
   return { acquired: true, runId };
 }
 
 /**
  * Release the lock for the given action.
+ * Also releases the soma lane lock if this is a soma lane action.
  */
 export function releaseLock(actionName: string): void {
   locks.delete(actionName);
   deleteLockFile(actionName);
+
+  if (SOMA_LANE_ACTIONS.has(actionName)) {
+    locks.delete(SOMA_LANE_KEY);
+    deleteLockFile(SOMA_LANE_KEY);
+  }
 }
 
 /**
@@ -270,7 +337,7 @@ export function getActiveLocks(): Array<{
   const now = Date.now();
   const out: Array<{ action: string; runId: string; acquiredAt: number; elapsed_ms: number }> = [];
   for (const [action, entry] of Array.from(locks.entries())) {
-    if (CONCURRENT_ALLOWED.has(action) || isStale(entry.acquiredAt, action, readLockFile(action))) continue;
+    if (CONCURRENT_ALLOWED.has(action) || action === SOMA_LANE_KEY || isStale(entry.acquiredAt, action, readLockFile(action))) continue;
     out.push({
       action,
       runId: entry.runId,
@@ -279,4 +346,12 @@ export function getActiveLocks(): Array<{
     });
   }
   return out;
+}
+
+/**
+ * Get the current active soma lane run info.
+ * Returns the active_run_id for the soma lane, or null if no soma orchestrator is running.
+ */
+export function getSomaLaneInfo(): { active_run_id: string; started_at: string } | null {
+  return getLockInfo(SOMA_LANE_KEY);
 }

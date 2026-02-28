@@ -31,14 +31,29 @@ export default function BrowserViewerPage() {
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 
+    let receivedFrame = false;
+    let gotError = false;
+
+    const connectTimeout = setTimeout(() => {
+      if (!receivedFrame && ws.readyState !== WebSocket.CLOSED) {
+        setLastError("Connection timed out — gateway may be unreachable or session expired");
+        setState("ERROR");
+        ws.close();
+      }
+    }, 15000);
+
     ws.onopen = () => {
-      setState("LIVE");
       reconnectAttemptRef.current = 0;
       setLastError(null);
     };
 
     ws.onmessage = (evt) => {
       if (evt.data instanceof ArrayBuffer) {
+        if (!receivedFrame) {
+          receivedFrame = true;
+          clearTimeout(connectTimeout);
+          setState("LIVE");
+        }
         const blob = new Blob([evt.data], { type: "image/jpeg" });
         const url = URL.createObjectURL(blob);
         const img = new Image();
@@ -56,10 +71,22 @@ export default function BrowserViewerPage() {
           frameCountRef.current++;
         };
         img.src = url;
+      } else if (typeof evt.data === "string") {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg.error) {
+            gotError = true;
+            clearTimeout(connectTimeout);
+            setLastError(msg.error);
+            setState("ERROR");
+          }
+        } catch { /* ignore non-JSON text */ }
       }
     };
 
     ws.onclose = () => {
+      clearTimeout(connectTimeout);
+      if (gotError) return;
       if (reconnectAttemptRef.current < maxReconnects) {
         setState("RECONNECTING");
         reconnectAttemptRef.current++;
@@ -71,7 +98,8 @@ export default function BrowserViewerPage() {
     };
 
     ws.onerror = () => {
-      setLastError("WebSocket connection error");
+      clearTimeout(connectTimeout);
+      setLastError("WebSocket connection error — check that Browser Gateway is running");
     };
   }, [token]);
 
