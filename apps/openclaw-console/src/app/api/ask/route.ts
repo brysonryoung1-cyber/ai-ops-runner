@@ -227,7 +227,7 @@ function buildDeterministicAnswer(
         // ignore
       }
     }
-    novncAnswer += `Canonical URL: https://<host>/novnc/vnc.html?autoconnect=1&path=/websockify`;
+    novncAnswer += `Canonical URL: https://<host>/novnc/vnc.html?autoconnect=1&reconnect=true&reconnect_delay=2000&path=/websockify`;
     return {
       answer: novncAnswer,
       citations,

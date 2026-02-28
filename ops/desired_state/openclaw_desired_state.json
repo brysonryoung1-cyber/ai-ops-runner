@@ -40,7 +40,7 @@
     "5900": "x11vnc/VNC"
   },
   "novnc": {
-    "canonical_url_format": "https://<host>/novnc/vnc.html?autoconnect=1&path=/websockify",
+    "canonical_url_format": "https://<host>/novnc/vnc.html?autoconnect=1&reconnect=true&reconnect_delay=2000&path=/websockify",
     "http_path": "/novnc/vnc.html",
     "ws_paths": ["/websockify", "/novnc/websockify"],
     "ws_probe_hold_sec": 10

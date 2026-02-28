@@ -61,8 +61,10 @@ with open(sys.argv[1], "w") as f:
 PYEOF
 }
 
+WATCHDOG_PID=""
 cleanup() {
   write_status "false" "shutdown" "$XVFB_PID" "$X11VNC_PID" "$WEBSOCKIFY_PID"
+  [ -n "$WATCHDOG_PID" ] && kill -TERM "$WATCHDOG_PID" 2>/dev/null || true
   for pid in $WEBSOCKIFY_PID $X11VNC_PID; do
     [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null || true
   done
@@ -152,7 +154,35 @@ fi
 [ -n "$WEB_DIR" ] && WS_ARGS+=(--web "$WEB_DIR") || true
 WS_ARGS+=("$BIND_ADDR:$NOVNC_PORT" "127.0.0.1:$VNC_PORT")
 
-# ── 4) Loop: x11vnc + websockify with auto-restart ──
+# ── 4) Desktop watchdog: ensure non-blank background + Chromium alive ──
+WATCHDOG_INTERVAL="${OPENCLAW_NOVNC_WATCHDOG_SEC:-30}"
+KAJABI_ENSURE="$(cd "$(dirname "$0")" && pwd)/scripts/kajabi_ui_ensure.sh"
+
+_desktop_watchdog() {
+  while true; do
+    sleep "$WATCHDOG_INTERVAL"
+    # Re-apply background if root window goes blank
+    if command -v xsetroot >/dev/null 2>&1; then
+      xsetroot -solid "#2b2b2b" 2>/dev/null || true
+    fi
+    # Ensure WM alive
+    if ! pgrep -f "openbox" >/dev/null 2>&1 && command -v openbox >/dev/null 2>&1; then
+      openbox --sm-disable 2>/dev/null &
+    fi
+    # Relaunch Chromium if crashed
+    if ! pgrep -f "chromium.*kajabi_chrome_profile" >/dev/null 2>&1; then
+      if [ -x "$KAJABI_ENSURE" ]; then
+        DISPLAY="$DISPLAY_NUM" "$KAJABI_ENSURE" 2>/dev/null || true
+      fi
+    fi
+  done
+}
+
+# Start watchdog in background
+_desktop_watchdog &
+WATCHDOG_PID=$!
+
+# ── 5) Loop: x11vnc + websockify with auto-restart ──
 while true; do
   # Start x11vnc on localhost:<VNC_PORT> with -forever -shared and explicit -display
   x11vnc -display "$DISPLAY_NUM" -rfbport "$VNC_PORT" -localhost -nopw -forever -shared -noxdamage -repeat -threads &
@@ -176,7 +206,7 @@ while true; do
   fi
 
   write_status "true" "" "$XVFB_PID" "$X11VNC_PID" "$WEBSOCKIFY_PID"
-  echo "noVNC stack up: x11vnc=$X11VNC_PID websockify=$WEBSOCKIFY_PID vnc=$VNC_PORT ws=$NOVNC_PORT" >&2
+  echo "noVNC stack up: x11vnc=$X11VNC_PID websockify=$WEBSOCKIFY_PID vnc=$VNC_PORT ws=$NOVNC_PORT watchdog=$WATCHDOG_PID" >&2
 
   # Wait for either to exit; then restart both
   while kill -0 "$X11VNC_PID" 2>/dev/null && kill -0 "$WEBSOCKIFY_PID" 2>/dev/null; do

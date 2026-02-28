@@ -1,13 +1,14 @@
 /**
  * noVNC URL canonicalization — same-origin, path=/websockify.
  *
- * Canonical: https://<host>/novnc/vnc.html?autoconnect=1&path=/websockify
- * Legacy: http://<host>:6080/... or https://<host>/novnc/vnc.html?autoconnect=1 (no path param)
+ * Canonical: https://<host>/novnc/vnc.html?autoconnect=1&reconnect=true&reconnect_delay=2000&path=/websockify
+ * Legacy: http://<host>:6080/... or https://<host>/novnc/vnc.html?autoconnect=1 (no path/reconnect params)
  *
  * Ensures WS upgrade completes (Tailscale Serve /websockify -> 6080).
  */
 
-const CANONICAL_PATH = "/novnc/vnc.html?autoconnect=1&path=/websockify";
+const CANONICAL_PATH =
+  "/novnc/vnc.html?autoconnect=1&reconnect=true&reconnect_delay=2000&path=/websockify";
 
 /**
  * Returns canonical noVNC URL for the given host.
@@ -19,8 +20,8 @@ export function buildCanonicalNovncUrl(host: string): string {
 
 /**
  * Normalize any noVNC URL to canonical form.
- * - http://...:6080/... => https://<host>/novnc/vnc.html?autoconnect=1&path=/websockify
- * - https://<host>/novnc/vnc.html?autoconnect=1 (no path) => append &path=/websockify
+ * - http://...:6080/... => canonical (https + reconnect + path)
+ * - https://<host>/novnc/vnc.html?autoconnect=1 (no path/reconnect) => add missing params
  */
 export function toCanonicalNovncUrl(url: string | null | undefined): string | null {
   if (!url || typeof url !== "string") return null;
@@ -32,11 +33,12 @@ export function toCanonicalNovncUrl(url: string | null | undefined): string | nu
     const host = u.hostname;
     if (!host || host === "localhost" || host === "127.0.0.1") return null;
 
-    // Already canonical
+    // Already canonical (check all required params)
     if (
       u.protocol === "https:" &&
       u.pathname === "/novnc/vnc.html" &&
-      u.searchParams.get("path") === "/websockify"
+      u.searchParams.get("path") === "/websockify" &&
+      u.searchParams.get("reconnect") === "true"
     ) {
       return trimmed;
     }
@@ -46,12 +48,15 @@ export function toCanonicalNovncUrl(url: string | null | undefined): string | nu
       return buildCanonicalNovncUrl(host);
     }
 
-    // https /novnc/vnc.html but missing path param
+    // https /novnc/vnc.html but missing path or reconnect params
     if (u.protocol === "https:" && u.pathname === "/novnc/vnc.html") {
       const pathParam = u.searchParams.get("path");
-      if (pathParam !== "/websockify") {
+      const hasReconnect = u.searchParams.get("reconnect") === "true";
+      if (pathParam !== "/websockify" || !hasReconnect) {
         const next = new URL(trimmed);
         next.searchParams.set("path", "/websockify");
+        next.searchParams.set("reconnect", "true");
+        next.searchParams.set("reconnect_delay", "2000");
         return next.toString();
       }
       return trimmed;

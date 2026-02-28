@@ -81,6 +81,14 @@ def _run_doctor(artifact_dir: Path, run_id: str) -> tuple[bool, str, str | None]
         return False, "", "NOVNC_BACKEND_UNAVAILABLE"
 
 
+CANONICAL_PARAMS = "autoconnect=1&reconnect=true&reconnect_delay=2000&path=/websockify"
+
+
+def _build_canonical_url(host: str) -> str:
+    """Build canonical HTTPS noVNC URL for a given host (through frontdoor/Tailscale Serve)."""
+    return f"https://{host}/novnc/vnc.html?{CANONICAL_PARAMS}"
+
+
 def _get_tailscale_url() -> str:
     try:
         out = subprocess.run(
@@ -93,26 +101,12 @@ def _get_tailscale_url() -> str:
             data = json.loads(out.stdout)
             self_data = data.get("Self", {})
             dns_name = (self_data.get("DNSName") or "").rstrip(".")
-            host_name = self_data.get("HostName") or ""
             if dns_name and ".ts.net" in dns_name:
-                return f"http://{dns_name}:{NOVNC_PORT}/vnc.html?autoconnect=1"
-            if host_name:
-                return f"http://{host_name}:{NOVNC_PORT}/vnc.html?autoconnect=1"
+                return _build_canonical_url(dns_name)
     except Exception:
         pass
-    try:
-        out = subprocess.run(
-            ["tailscale", "ip", "-4"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-        if out.returncode == 0 and out.stdout.strip():
-            ip = out.stdout.strip().split()[0]
-            return f"http://{ip}:{NOVNC_PORT}/vnc.html?autoconnect=1"
-    except Exception:
-        pass
-    return f"http://<TAILSCALE_IP>:{NOVNC_PORT}/vnc.html?autoconnect=1"
+    fallback_host = os.environ.get("OPENCLAW_TS_HOSTNAME", "aiops-1.tailc75c62.ts.net")
+    return _build_canonical_url(fallback_host)
 
 
 def _run_probe() -> tuple[bool, str]:

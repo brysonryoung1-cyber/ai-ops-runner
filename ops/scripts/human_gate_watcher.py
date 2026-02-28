@@ -113,20 +113,37 @@ def _run_reauth_and_resume(root: Path) -> int:
 
 
 def _run_novnc_audit(root: Path, run_id: str) -> bool:
-    """Run novnc_connectivity_audit. Return True if PASS."""
+    """Run novnc_connectivity_audit (HTTP + WSS + framebuffer). Return True if PASS.
+
+    On first failure: run self-heal (kajabi_ui_ensure + service restart) and retry once.
+    This prevents false-negative due to transient framebuffer blank after Chromium crash.
+    """
     script = root / "ops" / "scripts" / "novnc_connectivity_audit.py"
     if not script.exists():
-        return True  # Skip if missing
-    try:
-        r = subprocess.run(
-            [sys.executable, str(script), "--run-id", f"{run_id}_watcher", "--host", os.environ.get("OPENCLAW_TS_HOSTNAME", "aiops-1.tailc75c62.ts.net")],
-            capture_output=True,
-            timeout=60,
-            cwd=str(root),
-        )
-        return r.returncode == 0
-    except (subprocess.TimeoutExpired, OSError):
-        return False
+        return True
+    host = os.environ.get("OPENCLAW_TS_HOSTNAME", "aiops-1.tailc75c62.ts.net")
+
+    for attempt in range(2):
+        try:
+            r = subprocess.run(
+                [sys.executable, str(script), "--run-id", f"{run_id}_watcher_a{attempt}", "--host", host],
+                capture_output=True,
+                timeout=60,
+                cwd=str(root),
+            )
+            if r.returncode == 0:
+                return True
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+        if attempt == 0:
+            ensure = root / "ops" / "scripts" / "kajabi_ui_ensure.sh"
+            if ensure.exists() and os.access(ensure, os.X_OK):
+                subprocess.run([str(ensure)], capture_output=True, timeout=30, cwd=str(root))
+            subprocess.run(["systemctl", "restart", "openclaw-novnc"], capture_output=True, timeout=15)
+            time.sleep(8)
+
+    return False
 
 
 def main() -> int:

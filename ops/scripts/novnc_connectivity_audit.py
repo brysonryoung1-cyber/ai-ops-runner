@@ -3,6 +3,7 @@
 
 HTTP 200: /novnc/vnc.html
 WSS probe >=10s: wss://<host>/websockify, wss://<host>/novnc/websockify
+Framebuffer non-blank: xwd capture + pixel variance check
 
 Writes artifacts/novnc_debug/ws_probe/<run_id>/ws_probe.json + PROOF.md
 Exit 0 only when all checks PASS. Fail-closed: never claim READY unless proofs pass.
@@ -39,6 +40,48 @@ def _curl_http(url: str, timeout: int = 5) -> int:
         return int(r.stdout.strip()) if r.stdout.strip().isdigit() else 0
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError, ValueError):
         return 0
+
+
+def _check_framebuffer_non_blank() -> tuple[bool, str]:
+    """Check framebuffer is not all-black via xwd capture. Return (ok, detail)."""
+    display = os.environ.get("DISPLAY", ":99")
+    cfg = Path("/etc/ai-ops-runner/config/novnc_display.env")
+    if cfg.exists():
+        for line in cfg.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("DISPLAY="):
+                display = line.split("=", 1)[1].strip().strip("'\"") or ":99"
+                break
+
+    xwd_file = "/tmp/novnc_audit_fb.xwd"
+    try:
+        r = subprocess.run(
+            ["xwd", "-root", "-silent", "-out", xwd_file],
+            capture_output=True,
+            timeout=10,
+            env={**os.environ, "DISPLAY": display},
+        )
+        if r.returncode != 0:
+            return False, "xwd_capture_failed"
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return True, "xwd_unavailable_skipped"
+
+    xwd_path = Path(xwd_file)
+    if not xwd_path.exists() or xwd_path.stat().st_size < 500:
+        return False, "xwd_empty"
+
+    try:
+        data = xwd_path.read_bytes()
+        pixels = data[256:min(256 + 50000, len(data))]
+        unique = len(set(pixels))
+        nonzero = sum(1 for b in pixels if b != 0)
+        if unique > 2 or nonzero > 100:
+            return True, f"non_blank(unique={unique},nonzero={nonzero})"
+        return False, f"all_black(unique={unique},nonzero={nonzero})"
+    except Exception as e:
+        return False, f"check_error:{e}"
+    finally:
+        xwd_path.unlink(missing_ok=True)
 
 
 def _run_ws_probe(host: str, hold_sec: int) -> dict:
@@ -82,7 +125,10 @@ def run_audit(run_id: str, host: str | None = None) -> tuple[bool, dict]:
     ws_novnc_ok = eps.get("/novnc/websockify", {}).get("ok") is True
     ws_ok = ws_websockify_ok and ws_novnc_ok
 
-    all_pass = http_ok and ws_ok
+    # 3. Framebuffer non-blank (skip gracefully if xwd unavailable)
+    fb_ok, fb_detail = _check_framebuffer_non_blank()
+
+    all_pass = http_ok and ws_ok and fb_ok
     result = {
         "run_id": run_id,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
@@ -93,6 +139,8 @@ def run_audit(run_id: str, host: str | None = None) -> tuple[bool, dict]:
         "ws_probe_hold_sec": WS_PROBE_HOLD,
         "ws_probe_websockify_ok": ws_websockify_ok,
         "ws_probe_novnc_websockify_ok": ws_novnc_ok,
+        "framebuffer_non_blank": fb_ok,
+        "framebuffer_detail": fb_detail,
         "all_ok": all_pass,
         "endpoints": eps,
     }
@@ -109,6 +157,7 @@ def run_audit(run_id: str, host: str | None = None) -> tuple[bool, dict]:
         f"- HTTP 200 /novnc/vnc.html: {'PASS' if http_ok else 'FAIL'} (local={http_local}, tailnet={http_tailnet})",
         f"- WSS /websockify >=10s: {'PASS' if ws_websockify_ok else 'FAIL'}",
         f"- WSS /novnc/websockify >=10s: {'PASS' if ws_novnc_ok else 'FAIL'}",
+        f"- Framebuffer non-blank: {'PASS' if fb_ok else 'FAIL'} ({fb_detail})",
         "",
         f"**Overall:** {'PASS' if all_pass else 'FAIL'}",
     ]

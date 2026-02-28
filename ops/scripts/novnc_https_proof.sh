@@ -118,7 +118,7 @@ d = {
   'build_sha': os.environ.get('PROOF_BUILD_SHA', ''),
   'timestamp_utc': datetime.now(timezone.utc).isoformat(),
   'active_run_id': os.environ.get('PROOF_RUN_ID', ''),
-  'novnc_url_canonical': 'https://' + os.environ.get('PROOF_TS_HOSTNAME', '') + '/novnc/vnc.html?autoconnect=1&path=/websockify',
+  'novnc_url_canonical': 'https://' + os.environ.get('PROOF_TS_HOSTNAME', '') + '/novnc/vnc.html?autoconnect=1&reconnect=true&reconnect_delay=2000&path=/websockify',
   'novnc_url_from_status': os.environ.get('PROOF_NOVNC_URL', ''),
   'checks': {
     'novnc_http_200': os.environ.get('PROOF_NOVNC_200') == 'true',
