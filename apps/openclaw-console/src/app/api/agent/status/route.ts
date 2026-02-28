@@ -9,7 +9,6 @@
 import { NextResponse } from "next/server";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
-import { execSync } from "child_process";
 
 export const dynamic = "force-dynamic";
 
@@ -27,52 +26,49 @@ interface CheckResult {
   detail: string;
 }
 
-function checkHqHealth(): CheckResult {
+async function checkHqHealth(): Promise<CheckResult> {
+  const port = process.env.OPENCLAW_CONSOLE_PORT || "8787";
   try {
-    const resp = execSync(
-      'curl -sf --max-time 3 http://127.0.0.1:8788/api/ui/health_public',
-      { encoding: "utf-8", timeout: 5000 },
-    );
-    const data = JSON.parse(resp);
+    const resp = await fetch(`http://127.0.0.1:${port}/api/ui/health_public`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    const data = await resp.json() as Record<string, unknown>;
     return { status: data.ok ? "ok" : "warn", detail: `build_sha=${data.build_sha}` };
   } catch {
     return { status: "blocked", detail: "HQ health_public unreachable" };
   }
 }
 
-function checkHostd(): CheckResult {
+async function checkHostd(): Promise<CheckResult> {
+  const url = process.env.OPENCLAW_HOSTD_URL || "http://127.0.0.1:8877";
   try {
-    const url = process.env.OPENCLAW_HOSTD_URL || "http://127.0.0.1:8877";
-    const resp = execSync(
-      `curl -sf --max-time 3 ${url}/healthz`,
-      { encoding: "utf-8", timeout: 5000 },
-    );
-    return { status: "ok", detail: "hostd healthy" };
+    const resp = await fetch(`${url}/healthz`, { signal: AbortSignal.timeout(3000) });
+    if (resp.ok) return { status: "ok", detail: "hostd healthy" };
+    return { status: "blocked", detail: `hostd returned ${resp.status}` };
   } catch {
     return { status: "blocked", detail: "hostd unreachable" };
   }
 }
 
-function checkBrowserGateway(): CheckResult {
+async function checkBrowserGateway(): Promise<CheckResult> {
   try {
-    const resp = execSync(
-      'curl -sf --max-time 3 http://127.0.0.1:8890/health',
-      { encoding: "utf-8", timeout: 5000 },
-    );
-    const data = JSON.parse(resp);
+    const resp = await fetch("http://127.0.0.1:8890/health", {
+      signal: AbortSignal.timeout(3000),
+    });
+    const data = await resp.json() as Record<string, unknown>;
     return { status: "ok", detail: `active_sessions=${data.active_sessions}` };
   } catch {
     return { status: "warn", detail: "Browser Gateway not running" };
   }
 }
 
-function checkDrift(): CheckResult {
+async function checkDrift(): Promise<CheckResult> {
+  const port = process.env.OPENCLAW_CONSOLE_PORT || "8787";
   try {
-    const resp = execSync(
-      'curl -sf --max-time 3 http://127.0.0.1:8788/api/ui/version',
-      { encoding: "utf-8", timeout: 5000 },
-    );
-    const data = JSON.parse(resp);
+    const resp = await fetch(`http://127.0.0.1:${port}/api/ui/version`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    const data = await resp.json() as Record<string, unknown>;
     if (data.drift_status === "ok" && !data.drift) {
       return { status: "ok", detail: "drift_status=ok drift=false" };
     }
@@ -115,10 +111,16 @@ function getLatestCanary(): { status: string; run_id: string } | null {
 export async function GET() {
   const checks: Record<string, CheckResult> = {};
 
-  checks.hq_health = checkHqHealth();
-  checks.hostd = checkHostd();
-  checks.browser_gateway = checkBrowserGateway();
-  checks.drift = checkDrift();
+  const [hqHealth, hostd, browserGateway, drift] = await Promise.all([
+    checkHqHealth(),
+    checkHostd(),
+    checkBrowserGateway(),
+    checkDrift(),
+  ]);
+  checks.hq_health = hqHealth;
+  checks.hostd = hostd;
+  checks.browser_gateway = browserGateway;
+  checks.drift = drift;
 
   const latestPreflight = getLatestPreflight();
   const latestCanary = getLatestCanary();
