@@ -19,6 +19,8 @@ Environment=OPENCLAW_NOVNC_VNC_PORT=5900
 # Params from next.env (written by kajabi_capture_interactive.py before start)
 EnvironmentFile=-/run/openclaw-novnc/next.env
 
+# Pre-start: GC orphaned SysV shm segments (nattch=0, age>60s) to prevent shmget ENOSPC
+ExecStartPre=/opt/ai-ops-runner/ops/scripts/shm_gc_orphans.sh
 # Pre-start: remove stale X lock for configured DISPLAY only (safe, minimal)
 ExecStartPre=/bin/bash -c 'd=${OPENCLAW_NOVNC_DISPLAY#:}; d=${d:-99}; L=/tmp/.X${d}-lock; [ -f "$L" ] && p=$(cat "$L" 2>/dev/null) && [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null && rm -f "$L" || true'
 

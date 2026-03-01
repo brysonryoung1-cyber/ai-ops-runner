@@ -31,7 +31,7 @@ if [ -z "$INSTALL_ROOT" ] && [ "$(id -u)" -ne 0 ]; then
 fi
 
 # --- Verify source units exist ---
-ALL_UNITS="openclaw-guard.service openclaw-guard.timer openclaw-serve-guard.service openclaw-serve-guard.timer openclaw-novnc-guard.service openclaw-novnc-guard.timer"
+ALL_UNITS="openclaw-guard.service openclaw-guard.timer openclaw-serve-guard.service openclaw-serve-guard.timer openclaw-novnc-guard.service openclaw-novnc-guard.timer openclaw-novnc-shm-guard.service openclaw-novnc-shm-guard.timer"
 for unit in $ALL_UNITS; do
   if [ ! -f "$UNIT_SRC/$unit" ]; then
     echo "ERROR: Missing source unit file: $UNIT_SRC/$unit" >&2
@@ -57,14 +57,16 @@ systemctl daemon-reload
 systemctl enable --now openclaw-guard.timer
 systemctl enable --now openclaw-serve-guard.timer
 systemctl enable --now openclaw-novnc-guard.timer
+systemctl enable --now openclaw-novnc-shm-guard.timer
 echo "  openclaw-guard.timer: enabled + started"
 echo "  openclaw-serve-guard.timer: enabled + started"
 echo "  openclaw-novnc-guard.timer: enabled + started"
+echo "  openclaw-novnc-shm-guard.timer: enabled + started"
 
 # --- Verify ---
 echo ""
 echo "--- Verification ---"
-for t in openclaw-guard openclaw-serve-guard openclaw-novnc-guard; do
+for t in openclaw-guard openclaw-serve-guard openclaw-novnc-guard openclaw-novnc-shm-guard; do
   if systemctl is-active --quiet "${t}.timer" 2>/dev/null; then
     echo "  ${t}.timer: ACTIVE"
   else
@@ -75,6 +77,7 @@ done
 echo ""
 echo "  Guard will run every 10 minutes."
 echo "  Serve guard + noVNC guard: every 2 minutes."
+echo "  noVNC SHM guard: every 5 minutes."
 echo "  Check logs: journalctl -u openclaw-guard.service"
 echo "  Guard log:  /var/log/openclaw_guard.log"
 echo ""

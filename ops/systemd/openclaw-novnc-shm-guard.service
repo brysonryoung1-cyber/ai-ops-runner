@@ -1,0 +1,10 @@
+[Unit]
+Description=OpenClaw noVNC SHM guard — GC orphaned shm segments + restart on threshold
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai-ops-runner
+ExecStart=/bin/bash /opt/ai-ops-runner/ops/scripts/novnc_shm_guard.sh
+TimeoutStartSec=120
