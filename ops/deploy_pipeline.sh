@@ -265,6 +265,33 @@ else
 fi
 echo ""
 
+# --- Step 2e: SSH Tailscale-only (lock sshd to tailscale0; fail-closed if Tailscale unhealthy) ---
+echo "==> Step 2e: SSH Tailscale-only"
+if [ -f "$SCRIPT_DIR/openclaw_fix_ssh_tailscale_only.sh" ]; then
+  if sudo "$SCRIPT_DIR/openclaw_fix_ssh_tailscale_only.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/ssh_tailscale_only.log"; then
+    echo "  SSH Tailscale-only: PASS"
+  else
+    write_fail "ssh_tailscale_only" "ssh_tailscale_fix_failed" "Tailscale may be down or sshd config invalid; fix manually then re-run deploy" "artifacts/deploy/$RUN_ID/ssh_tailscale_only.log"
+    exit 2
+  fi
+else
+  echo "  (openclaw_fix_ssh_tailscale_only.sh not found — skip)"
+fi
+echo ""
+
+# --- Step 2f: Install guard timer (idempotent) ---
+echo "==> Step 2f: Install guard timer"
+if [ -f "$SCRIPT_DIR/openclaw_install_guard.sh" ]; then
+  if sudo "$SCRIPT_DIR/openclaw_install_guard.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/guard_install.log"; then
+    echo "  Guard timer install: PASS"
+  else
+    echo "  WARNING: guard timer install failed (non-fatal; guard may need manual install)" >&2
+  fi
+else
+  echo "  (openclaw_install_guard.sh not found — skip)"
+fi
+echo ""
+
 # --- Step 3a: Explicit console build (fail-closed; no || true bypass) ---
 if [ -f "docker-compose.console.yml" ]; then
   STEP="console_build"
@@ -345,6 +372,21 @@ else
   exit 2
 fi
 echo "  Deploy timestamp set"
+echo ""
+
+# --- Step 4b: Force guard run (fresh PASS for verify) ---
+STEP="force_guard_run"
+echo "==> Step 4b: Force guard run"
+if [ -f "$SCRIPT_DIR/openclaw_guard.sh" ]; then
+  if sudo "$SCRIPT_DIR/openclaw_guard.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/guard_run.log"; then
+    echo "  Guard: PASS"
+  else
+    write_fail "$STEP" "guard_run_failed" "Guard failed; check doctor/sshd/public-ports and re-run deploy" "artifacts/deploy/$RUN_ID/guard_run.log"
+    exit 2
+  fi
+else
+  echo "  (openclaw_guard.sh not found — skip)"
+fi
 echo ""
 
 # --- Step 5: verify_production ---
