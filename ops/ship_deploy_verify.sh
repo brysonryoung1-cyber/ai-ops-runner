@@ -214,7 +214,7 @@ for _s in $(seq 1 12); do
   ss -tln 2>/dev/null | grep -qE ':6080[^0-9]|:6080$' && S_PORT=1
   # Retry HTTP up to 3 times with 2s gaps (websockify can transiently 404)
   for _h in 1 2 3; do
-    [ "$S_PORT" -eq 1 ] && curl -sf --connect-timeout 3 http://127.0.0.1:6080/novnc/vnc.html > /dev/null 2>&1 && S_HTTP=1 && break
+    [ "$S_PORT" -eq 1 ] && curl -sf --connect-timeout 3 http://127.0.0.1:6080/vnc.html > /dev/null 2>&1 && S_HTTP=1 && break
     [ "$_h" -lt 3 ] && sleep 2
   done
   if [ "$S_HTTP" -eq 1 ]; then
