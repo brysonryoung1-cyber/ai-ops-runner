@@ -121,12 +121,19 @@ else
   fail "docker command not found"
 fi
 
-# --- 3. API healthz ---
+# --- 3. API healthz (retry up to 6 attempts, 5s apart, <=30s total) ---
 echo "--- API healthz ---"
-if curl -sf http://127.0.0.1:8000/healthz >/dev/null 2>&1; then
+API_HEALTHZ_OK=0
+API_HEALTHZ_LAST_ERR=""
+for _attempt in 1 2 3 4 5 6; do
+  API_HEALTHZ_LAST_ERR="$(curl -sf http://127.0.0.1:8000/healthz 2>&1)" && API_HEALTHZ_OK=1 && break
+  [ "$_attempt" -lt 6 ] && sleep 5
+done
+if [ "$API_HEALTHZ_OK" -eq 1 ]; then
   pass "API healthz OK (127.0.0.1:8000)"
 else
-  fail "API healthz FAILED (127.0.0.1:8000)"
+  fail "API healthz FAILED after 6 attempts (127.0.0.1:8000)"
+  [ -n "$API_HEALTHZ_LAST_ERR" ] && echo "  Last curl output: ${API_HEALTHZ_LAST_ERR:0:500}" >&2
 fi
 
 # --- 4. Public Port Audit (tailnet-aware) ---
