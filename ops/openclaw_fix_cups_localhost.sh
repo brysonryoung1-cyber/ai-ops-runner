@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# openclaw_fix_cups_localhost.sh — Idempotent: reconfigure or stop CUPS to eliminate public :631 binds.
+# openclaw_fix_cups_localhost.sh — Idempotent: stop CUPS (system or snap) to eliminate public :631 binds.
 set -euo pipefail
 
 echo "=== openclaw_fix_cups_localhost.sh ==="
@@ -14,49 +14,43 @@ fi
 echo "  Public :631 binds detected:"
 echo "$PUBLIC_631"
 
-# Find cupsd.conf (may be at different paths)
-CUPSD_CONF=""
-for conf in /etc/cups/cupsd.conf /usr/local/etc/cups/cupsd.conf; do
-  if [ -f "$conf" ]; then
-    CUPSD_CONF="$conf"
-    break
-  fi
-done
+# --- Strategy 1: Snap-based CUPS (Ubuntu 22.04+) ---
+if command -v snap >/dev/null 2>&1 && snap list cups >/dev/null 2>&1; then
+  echo "  CUPS is a snap package — stopping and disabling..."
+  snap stop cups 2>/dev/null || true
+  snap disable cups 2>/dev/null || true
 
-CHANGED=0
-if [ -n "$CUPSD_CONF" ]; then
-  echo "  Found $CUPSD_CONF — reconfiguring to localhost-only..."
-  cp "$CUPSD_CONF" "${CUPSD_CONF}.bak.$(date +%s)"
-
-  # Comment out public Listen/Port directives
-  sed -i 's/^\(\s*Listen\s\+\*:631\)/#\1 # disabled by openclaw/' "$CUPSD_CONF" 2>/dev/null || true
-  sed -i 's/^\(\s*Listen\s\+0\.0\.0\.0:631\)/#\1 # disabled by openclaw/' "$CUPSD_CONF" 2>/dev/null || true
-  sed -i 's/^\(\s*Listen\s\+\[::\]:631\)/#\1 # disabled by openclaw/' "$CUPSD_CONF" 2>/dev/null || true
-  sed -i 's/^\(\s*Port\s\+631\)/#\1 # disabled by openclaw/' "$CUPSD_CONF" 2>/dev/null || true
-
-  # Ensure Listen localhost:631 is present
-  if ! grep -qE '^\s*Listen\s+(localhost|127\.0\.0\.1):631' "$CUPSD_CONF"; then
-    echo "Listen localhost:631" >> "$CUPSD_CONF"
-  fi
-
-  CHANGED=1
-  echo "  cupsd.conf updated."
+  for unit in snap.cups.cupsd.service snap.cups.cups-browsed.service; do
+    systemctl stop "$unit" 2>/dev/null || true
+    systemctl mask "$unit" 2>/dev/null || true
+  done
+  systemctl daemon-reload 2>/dev/null || true
+  sleep 3
 fi
 
-# Mask systemd units to prevent future public activation
+# --- Strategy 2: System-packaged CUPS ---
 for unit in cups.service cups.socket cups-browsed.service cups.path; do
   systemctl mask "$unit" 2>/dev/null || true
   systemctl stop "$unit" 2>/dev/null || true
 done
 systemctl daemon-reload 2>/dev/null || true
 
-if [ "$CHANGED" -eq 1 ]; then
-  # Restart cupsd so config takes effect (it's masked but restart still works for active units)
-  systemctl restart cups 2>/dev/null || systemctl restart cups.service 2>/dev/null || true
-  sleep 3
-fi
+# --- Strategy 3: Reconfigure cupsd.conf if present ---
+for conf in /etc/cups/cupsd.conf /usr/local/etc/cups/cupsd.conf /snap/cups/current/etc/cups/cupsd.conf; do
+  if [ -f "$conf" ] && [ -w "$conf" ]; then
+    echo "  Reconfiguring $conf to localhost-only..."
+    cp "$conf" "${conf}.bak.$(date +%s)" 2>/dev/null || true
+    sed -i 's/^\(\s*Listen\s\+\*:631\)/#\1 # disabled by openclaw/' "$conf" 2>/dev/null || true
+    sed -i 's/^\(\s*Listen\s\+0\.0\.0\.0:631\)/#\1 # disabled by openclaw/' "$conf" 2>/dev/null || true
+    sed -i 's/^\(\s*Listen\s\+\[::\]:631\)/#\1 # disabled by openclaw/' "$conf" 2>/dev/null || true
+    sed -i 's/^\(\s*Port\s\+631\)/#\1 # disabled by openclaw/' "$conf" 2>/dev/null || true
+    if ! grep -qE '^\s*Listen\s+(localhost|127\.0\.0\.1):631' "$conf"; then
+      echo "Listen localhost:631" >> "$conf"
+    fi
+  fi
+done
 
-# Kill cupsd processes and use fuser as fallback
+# --- Kill any remaining cupsd processes ---
 for _kill_attempt in 1 2 3; do
   PUBLIC_631="$(ss -tlnp 2>/dev/null | grep -E ':(631)\b' | grep -vE '127\.0\.0\.1|::1|\[::1\]' || true)"
   [ -z "$PUBLIC_631" ] && break
@@ -66,7 +60,7 @@ for _kill_attempt in 1 2 3; do
   sleep 3
 done
 
-# Final verification
+# --- Final verification ---
 echo "  Verifying no public binds on :631..."
 PUBLIC_631="$(ss -tlnp 2>/dev/null | grep -E ':(631)\b' | grep -vE '127\.0\.0\.1|::1|\[::1\]' || true)"
 if [ -n "$PUBLIC_631" ]; then
