@@ -1,72 +1,79 @@
 #!/usr/bin/env bash
-# openclaw_fix_cups_localhost.sh — Idempotent: reconfigure CUPS to bind localhost only (no public :631).
+# openclaw_fix_cups_localhost.sh — Idempotent: reconfigure or stop CUPS to eliminate public :631 binds.
 set -euo pipefail
 
 echo "=== openclaw_fix_cups_localhost.sh ==="
 
-CUPSD_CONF="/etc/cups/cupsd.conf"
-
-# If cups is not installed at all, exit cleanly
-if ! command -v cupsd >/dev/null 2>&1 && [ ! -f "$CUPSD_CONF" ]; then
-  echo "  cups not present — nothing to do."
+# Detect by port binding — the ground truth that matters
+PUBLIC_631="$(ss -tlnp 2>/dev/null | grep -E ':(631)\b' | grep -vE '127\.0\.0\.1|::1|\[::1\]' || true)"
+if [ -z "$PUBLIC_631" ]; then
+  echo "  No public binds on :631 — nothing to do."
   exit 0
 fi
 
-if [ ! -f "$CUPSD_CONF" ]; then
-  echo "  cups not present (no cupsd.conf) — nothing to do."
-  exit 0
-fi
+echo "  Public :631 binds detected:"
+echo "$PUBLIC_631"
 
-echo "  Found $CUPSD_CONF"
+# Find cupsd.conf (may be at different paths)
+CUPSD_CONF=""
+for conf in /etc/cups/cupsd.conf /usr/local/etc/cups/cupsd.conf; do
+  if [ -f "$conf" ]; then
+    CUPSD_CONF="$conf"
+    break
+  fi
+done
 
-# Phase 1: Reconfigure cupsd to bind localhost only
-# Replace "Listen" and "Port" directives that bind publicly
 CHANGED=0
-
-# Check if already configured for localhost-only
-if grep -qE '^\s*Listen\s+(localhost|127\.0\.0\.1):631' "$CUPSD_CONF" && \
-   ! grep -qE '^\s*(Listen\s+(\*|0\.0\.0\.0|::)|Port\s+631)' "$CUPSD_CONF"; then
-  echo "  cupsd.conf already binds localhost:631 only — no changes needed."
-else
-  echo "  Reconfiguring cupsd.conf to bind localhost:631 only..."
+if [ -n "$CUPSD_CONF" ]; then
+  echo "  Found $CUPSD_CONF — reconfiguring to localhost-only..."
   cp "$CUPSD_CONF" "${CUPSD_CONF}.bak.$(date +%s)"
 
-  # Comment out any public Listen/Port directives
-  sed -i 's/^\(\s*Listen\s\+\*:631\)/#\1 # disabled by openclaw/' "$CUPSD_CONF"
-  sed -i 's/^\(\s*Listen\s\+0\.0\.0\.0:631\)/#\1 # disabled by openclaw/' "$CUPSD_CONF"
-  sed -i 's/^\(\s*Listen\s\+\[::\]:631\)/#\1 # disabled by openclaw/' "$CUPSD_CONF"
-  sed -i 's/^\(\s*Port\s\+631\)/#\1 # disabled by openclaw/' "$CUPSD_CONF"
+  # Comment out public Listen/Port directives
+  sed -i 's/^\(\s*Listen\s\+\*:631\)/#\1 # disabled by openclaw/' "$CUPSD_CONF" 2>/dev/null || true
+  sed -i 's/^\(\s*Listen\s\+0\.0\.0\.0:631\)/#\1 # disabled by openclaw/' "$CUPSD_CONF" 2>/dev/null || true
+  sed -i 's/^\(\s*Listen\s\+\[::\]:631\)/#\1 # disabled by openclaw/' "$CUPSD_CONF" 2>/dev/null || true
+  sed -i 's/^\(\s*Port\s\+631\)/#\1 # disabled by openclaw/' "$CUPSD_CONF" 2>/dev/null || true
 
   # Ensure Listen localhost:631 is present
   if ! grep -qE '^\s*Listen\s+(localhost|127\.0\.0\.1):631' "$CUPSD_CONF"; then
-    # Add after the first commented-out Listen line, or at top
-    if grep -q '# disabled by openclaw' "$CUPSD_CONF"; then
-      sed -i '/# disabled by openclaw/{a\Listen localhost:631
-      ;:a;n;ba}' "$CUPSD_CONF"
-    else
-      sed -i '1i\Listen localhost:631' "$CUPSD_CONF"
-    fi
+    echo "Listen localhost:631" >> "$CUPSD_CONF"
   fi
 
   CHANGED=1
-  echo "  cupsd.conf updated: public listeners disabled, localhost:631 added."
+  echo "  cupsd.conf updated."
 fi
 
-# Phase 2: Restart cupsd to apply config
+# Mask systemd units to prevent future public activation
+for unit in cups.service cups.socket cups-browsed.service cups.path; do
+  systemctl mask "$unit" 2>/dev/null || true
+  systemctl stop "$unit" 2>/dev/null || true
+done
+systemctl daemon-reload 2>/dev/null || true
+
 if [ "$CHANGED" -eq 1 ]; then
-  echo "  Restarting cups..."
-  systemctl restart cups.service 2>/dev/null || systemctl restart cups 2>/dev/null || true
+  # Restart cupsd so config takes effect (it's masked but restart still works for active units)
+  systemctl restart cups 2>/dev/null || systemctl restart cups.service 2>/dev/null || true
   sleep 3
 fi
 
-# Phase 3: Verify no public cupsd binds on :631
-echo "  Verifying no public cupsd binds on :631..."
-PUBLIC_CUPS="$(ss -tlnp 2>/dev/null | grep -E ':(631)\b' | grep -vE '127\.0\.0\.1|::1|\[::1\]' || true)"
-if [ -n "$PUBLIC_CUPS" ]; then
-  echo "  FAIL: cupsd still has public binds on :631:" >&2
-  echo "$PUBLIC_CUPS" >&2
+# Kill cupsd processes and use fuser as fallback
+for _kill_attempt in 1 2 3; do
+  PUBLIC_631="$(ss -tlnp 2>/dev/null | grep -E ':(631)\b' | grep -vE '127\.0\.0\.1|::1|\[::1\]' || true)"
+  [ -z "$PUBLIC_631" ] && break
+  echo "  Still bound publicly (attempt $_kill_attempt) — killing..."
+  pgrep -f cupsd | xargs -r kill -9 2>/dev/null || true
+  command -v fuser >/dev/null 2>&1 && fuser -k -9 631/tcp 2>/dev/null || true
+  sleep 3
+done
+
+# Final verification
+echo "  Verifying no public binds on :631..."
+PUBLIC_631="$(ss -tlnp 2>/dev/null | grep -E ':(631)\b' | grep -vE '127\.0\.0\.1|::1|\[::1\]' || true)"
+if [ -n "$PUBLIC_631" ]; then
+  echo "  FAIL: port 631 still has public binds after remediation:" >&2
+  echo "$PUBLIC_631" >&2
   exit 1
 fi
 
-echo "  PASS: no public cupsd binds on :631."
+echo "  PASS: no public binds on :631."
 exit 0
