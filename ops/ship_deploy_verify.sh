@@ -201,6 +201,43 @@ if [ "$READY" -eq 0 ]; then
   journalctl -u openclaw-novnc.service -n 50 --no-pager 2>&1 | tail -20
   exit 1
 fi
+
+# Stability hold: WS must stay healthy for 120 seconds (checks every 10s)
+echo "--- Stability hold: 120s WS + port + HTTP verification ---"
+STABILITY_OK=1
+for _s in $(seq 1 12); do
+  sleep 10
+  S_PORT=0; S_HTTP=0; S_WS=0
+  ss -tln 2>/dev/null | grep -qE ':6080[^0-9]|:6080$' && S_PORT=1
+  [ "$S_PORT" -eq 1 ] && curl -sf --connect-timeout 3 http://127.0.0.1:6080/novnc/vnc.html > /dev/null 2>&1 && S_HTTP=1
+  if [ "$S_HTTP" -eq 1 ]; then
+    WS_SCRIPT=""
+    [ -f ops/scripts/novnc_ws_stability_check.py ] && WS_SCRIPT=ops/scripts/novnc_ws_stability_check.py
+    [ -z "$WS_SCRIPT" ] && [ -f ops/scripts/novnc_ws_probe.py ] && WS_SCRIPT=ops/scripts/novnc_ws_probe.py
+    if [ -n "$WS_SCRIPT" ]; then
+      OPENCLAW_WS_PROBE_HOLD_SEC=10 python3 "$WS_SCRIPT" --host 127.0.0.1 --all >/dev/null 2>&1 && S_WS=1
+    else
+      S_WS=1
+    fi
+  fi
+  if [ "$S_PORT" -eq 1 ] && [ "$S_HTTP" -eq 1 ] && [ "$S_WS" -eq 1 ]; then
+    echo "  stability check $_s/12 ($((_s * 10))s): port=$S_PORT http=$S_HTTP ws=$S_WS OK"
+  else
+    echo "  stability check $_s/12 ($((_s * 10))s): port=$S_PORT http=$S_HTTP ws=$S_WS FAIL"
+    echo "--- Stability hold FAILED at $((_s * 10))s ---"
+    echo "WS probe logs:"
+    [ -n "$WS_SCRIPT" ] && OPENCLAW_WS_PROBE_HOLD_SEC=5 python3 "$WS_SCRIPT" --host 127.0.0.1 --all 2>&1 | tail -20 || true
+    echo "Journal tail:"
+    journalctl -u openclaw-novnc.service -n 30 --no-pager 2>&1 | tail -30
+    STABILITY_OK=0
+    break
+  fi
+done
+if [ "$STABILITY_OK" -eq 0 ]; then
+  echo "FAIL: noVNC 120s stability hold not achieved"
+  exit 1
+fi
+echo "--- Stability hold 120s: PASS ---"
 REMOTE_NOVNC
     PHASE2A_OK=1
     echo "  Phase 2a: PASS"

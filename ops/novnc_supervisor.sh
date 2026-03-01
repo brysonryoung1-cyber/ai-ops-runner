@@ -91,7 +91,7 @@ if [ -f "$LOCK_FILE" ]; then
 fi
 
 if [ -z "$XVFB_PID" ]; then
-  Xvfb "$DISPLAY_NUM" -screen 0 1280x720x24 -ac -nolisten tcp &
+  Xvfb "$DISPLAY_NUM" -screen 0 1280x720x24 -ac -nolisten tcp -extension MIT-SHM &
   XVFB_PID=$!
   echo "Xvfb starting on $DISPLAY_NUM (pid $XVFB_PID)" >&2
 fi
