@@ -99,6 +99,9 @@ class BrowserGatewaySession:
         self.timeout_sec = timeout_sec
         self.last_frame_ts: Optional[float] = None
         self.last_input_ts: Optional[float] = None
+        self.last_input_error: Optional[str] = None
+        self.last_input_http_error: Optional[str] = None
+        self.last_cdp_dispatch_error: Optional[str] = None
         self.viewers: set[web.WebSocketResponse] = set()
         self.cdp_ws: Optional[object] = None
         self.frame_buffer: Optional[bytes] = None
@@ -108,6 +111,7 @@ class BrowserGatewaySession:
         self._artifact_dir = _artifacts_root() / "browser_gateway" / session_id
         self._artifact_dir.mkdir(parents=True, exist_ok=True)
         self._log_lines: list[str] = []
+        self._invalid_token_log_ts: float = 0.0
 
     def _log(self, msg: str) -> None:
         line = f"[{_now_iso()}] {msg}"
@@ -293,8 +297,10 @@ class BrowserGatewaySession:
     async def process_cdp_loop(self) -> None:
         """Main loop: read CDP messages, relay frames to viewers."""
         if not self.cdp_ws:
+            log.warning("[%s] process_cdp_loop exiting: no cdp_ws", self.session_id[:8])
             return
 
+        exit_reason = "unknown"
         try:
             async for msg in self.cdp_ws:
                 if msg.type == WSMsgType.TEXT:
@@ -327,19 +333,35 @@ class BrowserGatewaySession:
                                 dead.add(ws)
                         self.viewers -= dead
 
+                    elif method == "Inspector.detached":
+                        exit_reason = f"CDP Inspector.detached: {data.get('params', {}).get('reason', 'unknown')}"
+                        self.last_cdp_dispatch_error = exit_reason
+                        self._log(exit_reason)
+                        break
+
                 elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
-                    self._log("CDP WebSocket closed/error")
+                    exit_reason = f"CDP WebSocket {msg.type.name}"
+                    self.last_cdp_dispatch_error = exit_reason
+                    self._log(exit_reason)
                     break
 
         except Exception as e:
+            exit_reason = f"CDP loop exception: {e}"
+            self.last_cdp_dispatch_error = str(e)[:200]
             self._log(f"CDP loop error: {e}")
         finally:
             self.status = "DISCONNECTED"
+            log.info("[%s] process_cdp_loop exited: %s", self.session_id[:8], exit_reason)
             self._write_session_json()
 
     async def dispatch_input(self, event: dict) -> bool:
         """Forward mouse/keyboard input to Chrome via CDP."""
+        has_ws = self.cdp_ws is not None
         if not self.cdp_ws or self.status != "LIVE":
+            reason = f"status={self.status}, has_ws={has_ws}"
+            self.last_cdp_dispatch_error = reason
+            self.last_input_error = f"Dispatch blocked: {reason}"
+            log.warning("[%s] dispatch_input rejected: %s", self.session_id[:8], reason)
             return False
 
         evt_type = event.get("type", "")
@@ -385,13 +407,18 @@ class BrowserGatewaySession:
                     },
                 })
             else:
+                self.last_input_error = f"Unknown event type: {evt_type}"
                 return False
 
             self.cdp_msg_id += 1
             self.last_input_ts = time.time()
+            self.last_input_error = None
             return True
 
         except Exception as e:
+            err_str = str(e)[:200]
+            self.last_input_error = f"CDP dispatch exception: {err_str}"
+            self.last_cdp_dispatch_error = err_str
             self._log(f"Input dispatch error: {e}")
             return False
 
@@ -440,6 +467,9 @@ class BrowserGatewaySession:
             "created_at": self.created_at,
             "last_frame_ts": self.last_frame_ts,
             "last_input_ts": self.last_input_ts,
+            "last_input_error": self.last_input_error,
+            "last_input_http_error": self.last_input_http_error,
+            "last_cdp_dispatch_error": self.last_cdp_dispatch_error,
             "viewer_count": len(self.viewers),
             "has_frame": self.frame_buffer is not None,
         }
@@ -450,6 +480,7 @@ class BrowserGatewayServer:
 
     def __init__(self):
         self.sessions: dict[str, BrowserGatewaySession] = {}
+        self._last_invalid_token_log: float = 0.0
         self.app = web.Application()
         self._setup_routes()
 
@@ -555,19 +586,30 @@ class BrowserGatewayServer:
     async def handle_input(self, req: web.Request) -> web.Response:
         session = self._get_session_by_token(req)
         if not session:
+            now = time.time()
+            if now - self._last_invalid_token_log > 5.0:
+                log.warning("Invalid token on /session/input (rate-limited log)")
+                self._last_invalid_token_log = now
             return web.json_response({"ok": False, "error": "Invalid token"}, status=401)
 
         try:
             event = await req.json()
         except Exception:
+            session.last_input_http_error = "400 bad payload"
             return web.json_response({"ok": False, "error": "Invalid JSON"}, status=400)
 
         ok = await session.dispatch_input(event)
+        if not ok:
+            session.last_input_http_error = f"dispatch failed: {session.last_input_error or 'unknown'}"
         return web.json_response({"ok": ok})
 
     async def handle_stream(self, req: web.Request) -> web.WebSocketResponse:
         session = self._get_session_by_token(req)
         if not session:
+            now = time.time()
+            if now - self._last_invalid_token_log > 5.0:
+                log.warning("Invalid token on /stream (rate-limited log)")
+                self._last_invalid_token_log = now
             ws = web.WebSocketResponse()
             await ws.prepare(req)
             await ws.send_json({"error": "Invalid token"})
