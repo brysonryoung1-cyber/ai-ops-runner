@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# openclaw_fix_cups_localhost.sh — Idempotent: stop, disable, mask CUPS to eliminate public :631 binds.
+# openclaw_fix_cups_localhost.sh — Idempotent: mask, stop, kill CUPS to eliminate public :631 binds.
 set -euo pipefail
 
 echo "=== openclaw_fix_cups_localhost.sh ==="
 
 CUPS_FOUND=0
 
-for unit in cups.service cups.socket cups-browsed.service; do
+# Phase 1: Mask first to prevent socket/dbus re-activation, then stop
+for unit in cups.service cups.socket cups-browsed.service cups.path; do
   if systemctl list-unit-files "$unit" >/dev/null 2>&1 && \
      systemctl list-unit-files "$unit" 2>/dev/null | grep -q "$unit"; then
     CUPS_FOUND=1
-    echo "  Stopping + disabling + masking $unit"
+    echo "  Masking + stopping $unit"
+    systemctl mask "$unit" 2>/dev/null || true
     systemctl stop "$unit" 2>/dev/null || true
     systemctl disable "$unit" 2>/dev/null || true
-    systemctl mask "$unit" 2>/dev/null || true
   fi
 done
 
@@ -22,15 +23,19 @@ if [ "$CUPS_FOUND" -eq 0 ]; then
   exit 0
 fi
 
-# Kill any lingering cupsd process that survived unit stop
-if pgrep -x cupsd >/dev/null 2>&1; then
-  echo "  Killing lingering cupsd process(es)..."
-  pkill -x cupsd 2>/dev/null || true
+# Phase 2: Kill any lingering cupsd process (mask prevents respawn)
+for _kill_attempt in 1 2 3; do
+  if ! pgrep -x cupsd >/dev/null 2>&1; then
+    break
+  fi
+  echo "  Killing cupsd (attempt $_kill_attempt)..."
+  if [ "$_kill_attempt" -le 2 ]; then
+    pkill -x cupsd 2>/dev/null || true
+  else
+    pkill -9 -x cupsd 2>/dev/null || true
+  fi
   sleep 2
-  # Force-kill if still alive
-  pgrep -x cupsd >/dev/null 2>&1 && kill -9 "$(pgrep -x cupsd)" 2>/dev/null || true
-  sleep 1
-fi
+done
 
 echo "  Verifying no cupsd binds on :631..."
 CUPS_BINDS="$(ss -tlnp 2>/dev/null | grep -E ':(631)\b' | grep -i cupsd || true)"
