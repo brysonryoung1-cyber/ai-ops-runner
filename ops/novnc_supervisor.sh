@@ -185,7 +185,7 @@ WATCHDOG_PID=$!
 # ── 5) Loop: x11vnc + websockify with auto-restart ──
 while true; do
   # Start x11vnc on localhost:<VNC_PORT> with -forever -shared and explicit -display
-  x11vnc -display "$DISPLAY_NUM" -rfbport "$VNC_PORT" -localhost -nopw -forever -shared -noxdamage -repeat -threads &
+  x11vnc -display "$DISPLAY_NUM" -rfbport "$VNC_PORT" -localhost -nopw -forever -shared -noxdamage -repeat -threads -noshm &
   X11VNC_PID=$!
   sleep 1
   if ! kill -0 "$X11VNC_PID" 2>/dev/null; then
