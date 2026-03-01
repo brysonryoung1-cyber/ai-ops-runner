@@ -27,6 +27,9 @@ ATTEMPT=0
 
 # Hermetic: ship must never require noVNC on Mac. Interactive/noVNC selftests opt-in only.
 export OPENCLAW_RUN_INTERACTIVE_TESTS="${OPENCLAW_RUN_INTERACTIVE_TESTS:-0}"
+# Human gate: production feature flag for Soma interactive capture (distinct from test flag).
+# ship.sh on Mac defaults to 0; production VPS sets =1 via /etc/ai-ops-runner config.
+export OPENCLAW_ENABLE_HUMAN_GATE="${OPENCLAW_ENABLE_HUMAN_GATE:-0}"
 LOCK_DIR="$ROOT_DIR/.locks"
 LOCK_FILE="$LOCK_DIR/ship.lock"
 

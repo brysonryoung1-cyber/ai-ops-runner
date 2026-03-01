@@ -580,6 +580,14 @@ def _run_main(root: Path, out_dir: Path, run_id: str, result_state: dict[str, ob
                 append_summary_line(out_dir, f"[capture_interactive] done run_id={capture_run_id}")
                 continue
 
+            # Fail-closed: INTERACTIVE_DISABLED means human gate is not enabled — no session exists to poll
+            cap_error_class = cap_doc.get("error_class", "")
+            if cap_error_class == "INTERACTIVE_DISABLED":
+                write_stage(out_dir, "capture_interactive", "failed", last_error_class="INTERACTIVE_DISABLED")
+                remediation = cap_doc.get("remediation", "Set OPENCLAW_ENABLE_HUMAN_GATE=1")
+                set_result("FAILURE", stage="capture_interactive", error_class="INTERACTIVE_DISABLED", message=remediation)
+                return _fail_closed(out_dir, run_id, "INTERACTIVE_DISABLED", remediation)
+
             # capture_interactive failed → ensure Kajabi UI visible, self-heal loop, then WAITING_FOR_HUMAN
             write_stage(out_dir, "capture_interactive", "auth_needed", last_error_class=KAJABI_CAPTURE_INTERACTIVE_FAILED)
             artifact_dir = f"artifacts/novnc_debug/{run_id}"

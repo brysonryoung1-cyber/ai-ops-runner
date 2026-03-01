@@ -488,6 +488,71 @@ def test_is_auth_needed_error_expands_to_kajabi_not_logged_in(tmp_path):
     assert "vnc.html" in wfh["novnc_url"]
 
 
+def test_interactive_disabled_fails_closed_no_polling(tmp_path):
+    """When capture_interactive returns INTERACTIVE_DISABLED, auto_finish must fail-closed without polling session_check."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "config").mkdir()
+    (root / "artifacts" / "soma_kajabi" / "phase0").mkdir(parents=True)
+    (root / "artifacts" / "soma_kajabi" / "zane_finish_plan").mkdir(parents=True)
+    (root / "artifacts" / "soma_kajabi" / "auto_finish").mkdir(parents=True)
+    _setup_novnc_mock(root)
+
+    storage = tmp_path / "storage.json"
+    storage.write_text('{"cookies":[]}')
+
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    spec = importlib.util.spec_from_file_location(
+        "soma_kajabi_auto_finish",
+        REPO_ROOT / "ops" / "scripts" / "soma_kajabi_auto_finish.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["soma_kajabi_auto_finish"] = mod
+
+    session_check_called = False
+
+    def mock_run(cmd, timeout=600, stream_stderr=False):
+        cmd_str = " ".join(str(x) for x in cmd)
+        if "connectors_status" in cmd_str:
+            return 0, json.dumps({"kajabi": "connected"})
+        if "phase0_runner" in cmd_str:
+            return 1, json.dumps({"ok": False, "error_class": "KAJABI_CLOUDFLARE_BLOCKED"})
+        if "kajabi_capture_interactive" in cmd_str:
+            return 1, json.dumps({"ok": False, "error_class": "INTERACTIVE_DISABLED", "remediation": "Set OPENCLAW_ENABLE_HUMAN_GATE=1"})
+        return 1, "{}"
+
+    def mock_run_session_check(*a):
+        nonlocal session_check_called
+        session_check_called = True
+        return 1, json.dumps({"ok": False})
+
+    spec.loader.exec_module(mod)
+    mod.STORAGE_STATE_PATH = storage
+    mod.EXIT_NODE_CONFIG = tmp_path / "nonexistent_exit_node.txt"
+    mod._repo_root = lambda: root
+    mod._run = mock_run
+    mod._run_with_exit_node = lambda c, t: mock_run(c, t)
+    mod._run_session_check = mock_run_session_check
+    mod._run_self_heal = lambda *a, **k: None
+    mod._run_doctor_for_framebuffer = lambda *a: (True, "artifacts/novnc_debug/auto_finish_run")
+
+    with patch.dict(os.environ, {"SOMA_KAJABI_REAUTH_POLL_TIMEOUT": "5", "OPENCLAW_SKIP_NOVNC_AUDIT": "1"}):
+        rc = mod.main()
+
+    assert rc == 1, "auto_finish must exit 1 when INTERACTIVE_DISABLED"
+    assert not session_check_called, "session_check must NOT be called when INTERACTIVE_DISABLED (fail-closed)"
+
+    out_dir = next((root / "artifacts" / "soma_kajabi" / "auto_finish").iterdir())
+    assert (out_dir / "SUMMARY.json").exists()
+    summary = json.loads((out_dir / "SUMMARY.json").read_text())
+    assert summary["error_class"] == "INTERACTIVE_DISABLED"
+    assert (out_dir / "RESULT.json").exists()
+    result = json.loads((out_dir / "RESULT.json").read_text())
+    assert result["status"] == "FAILURE"
+    assert result.get("error_class") == "INTERACTIVE_DISABLED"
+
+
 def test_reauth_timeout_emits_artifact_bundle(tmp_path):
     """When session_check timeout occurs -> KAJABI_REAUTH_TIMEOUT + reauth_timeout_bundle.json emitted."""
     root = tmp_path / "repo"

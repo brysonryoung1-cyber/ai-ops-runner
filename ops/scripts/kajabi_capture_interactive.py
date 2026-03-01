@@ -171,12 +171,24 @@ def main() -> int:
     screenshots_dir = out_dir / "screenshots"
     screenshots_dir.mkdir(exist_ok=True)
 
-    # Opt-in: interactive/noVNC tests disabled by default (ship runs on Mac without noVNC backend).
-    if os.environ.get("OPENCLAW_RUN_INTERACTIVE_TESTS") != "1":
-        skip_msg = "SKIP: interactive/noVNC tests disabled (set OPENCLAW_RUN_INTERACTIVE_TESTS=1 to run)"
-        (out_dir / "instructions.txt").write_text(skip_msg)
-        print(skip_msg, file=sys.stderr)
-        return 0
+    # Human gate: OPENCLAW_ENABLE_HUMAN_GATE=1 enables interactive capture (production default for Soma).
+    # Legacy: OPENCLAW_RUN_INTERACTIVE_TESTS=1 also enables (backward compat).
+    human_gate_enabled = (
+        os.environ.get("OPENCLAW_ENABLE_HUMAN_GATE") == "1"
+        or os.environ.get("OPENCLAW_RUN_INTERACTIVE_TESTS") == "1"
+    )
+    if not human_gate_enabled:
+        error_payload = {
+            "status": "WAITING_FOR_HUMAN",
+            "error_class": "INTERACTIVE_DISABLED",
+            "run_id": run_id,
+            "remediation": "Set OPENCLAW_ENABLE_HUMAN_GATE=1 in the environment (production default for Soma lane)",
+            "message": "Interactive capture is disabled. The human gate cannot proceed without enabling OPENCLAW_ENABLE_HUMAN_GATE=1.",
+            "timestamp_utc": _now_iso(),
+        }
+        (out_dir / "WAITING_FOR_HUMAN.json").write_text(json.dumps(error_payload, indent=2))
+        print(json.dumps(error_payload), file=sys.stderr)
+        return 1
 
     # Restart noVNC + poll probe. Fail-closed if unavailable.
     script_dir = Path(__file__).resolve().parent
@@ -342,14 +354,27 @@ def main() -> int:
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
 
     if summary.get("ok"):
-        print(json.dumps({
+        result = {
             "ok": True,
+            "status": "SUCCESS",
             "artifact_dir": str(out_dir),
             "run_id": out_dir.name,
             "products_found": summary.get("products_found", []),
             "tailscale_url": tailscale_url,
-        }))
+        }
+        (out_dir / "RESULT.json").write_text(json.dumps(result, indent=2))
+        print(json.dumps(result))
         return 0
+    waiting_payload = {
+        "status": "WAITING_FOR_HUMAN",
+        "error_class": summary.get("error_class", "KAJABI_INTERACTIVE_CAPTURE_ERROR"),
+        "run_id": out_dir.name,
+        "artifact_dir": str(out_dir),
+        "message": summary.get("message", "Capture did not complete successfully"),
+        "tailscale_url": tailscale_url,
+        "timestamp_utc": _now_iso(),
+    }
+    (out_dir / "WAITING_FOR_HUMAN.json").write_text(json.dumps(waiting_payload, indent=2))
     print(json.dumps(summary))
     return 1
 

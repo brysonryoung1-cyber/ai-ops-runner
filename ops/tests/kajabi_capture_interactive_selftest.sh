@@ -48,11 +48,11 @@ python3 ./ops/scripts/kajabi_capture_interactive.py 2>/dev/null
 RC=$?
 set -e
 
-# Artifact dir should have been created with summary.json or instructions.txt
-if [ -f "$ARTIFACT_DIR/summary.json" ] || [ -f "$ARTIFACT_DIR/instructions.txt" ]; then
+# Artifact dir should have been created with summary.json, RESULT.json, or WAITING_FOR_HUMAN.json
+if [ -f "$ARTIFACT_DIR/summary.json" ] || [ -f "$ARTIFACT_DIR/RESULT.json" ] || [ -f "$ARTIFACT_DIR/WAITING_FOR_HUMAN.json" ] || [ -f "$ARTIFACT_DIR/instructions.txt" ]; then
   echo "  PASS: script creates artifacts"
 else
-  echo "  FAIL: no summary.json or instructions.txt in $ARTIFACT_DIR"
+  echo "  FAIL: no summary.json, RESULT.json, or WAITING_FOR_HUMAN.json in $ARTIFACT_DIR"
   ls -la "$ARTIFACT_DIR" 2>/dev/null || true
   exit 1
 fi

@@ -12,8 +12,8 @@ cd "$ROOT_DIR"
 
 echo "==> novnc_fast_precheck_selftest"
 
-if [ "${OPENCLAW_RUN_INTERACTIVE_TESTS:-0}" != "1" ]; then
-  echo "  SKIP: interactive/noVNC tests disabled (set OPENCLAW_RUN_INTERACTIVE_TESTS=1 to run)"
+if [ "${OPENCLAW_RUN_INTERACTIVE_TESTS:-0}" != "1" ] && [ "${OPENCLAW_ENABLE_HUMAN_GATE:-0}" != "1" ]; then
+  echo "  SKIP: interactive/noVNC tests disabled (set OPENCLAW_ENABLE_HUMAN_GATE=1 or OPENCLAW_RUN_INTERACTIVE_TESTS=1 to run)"
   echo "==> novnc_fast_precheck_selftest PASS"
   exit 0
 fi
