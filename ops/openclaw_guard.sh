@@ -122,7 +122,7 @@ if echo "$DOCTOR_OUTPUT" | grep -q "cupsd"; then
 fi
 
 if [ "$SSHD_PUBLIC" = "false" ] && [ "$CUPSD_PUBLIC" = "false" ]; then
-  log "SKIP REMEDIATION: neither sshd nor cupsd public-bound"
+  log "SKIP SSH REMEDIATION: sshd is not bound to a public address"
   log "  Doctor failure is from a different cause. Manual investigation needed."
   log_section ""
   exit 1
