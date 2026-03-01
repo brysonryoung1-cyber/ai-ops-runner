@@ -358,7 +358,7 @@ fi
 STEP="docker_compose"
 echo "==> Step 3b: docker compose up -d --build (OPENCLAW_BUILD_SHA=$OPENCLAW_BUILD_SHA)"
 export OPENCLAW_BUILD_SHA
-if ! OPENCLAW_BUILD_SHA="$GIT_HEAD" docker compose up -d --build 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/docker.log"; then
+if ! OPENCLAW_BUILD_SHA="$GIT_HEAD" docker compose up -d --build --remove-orphans --force-recreate 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/docker.log"; then
   write_fail "$STEP" "docker_compose_failed" "Fix Docker build/run and re-run deploy" "artifacts/deploy/$RUN_ID/docker.log"
   exit 2
 fi
