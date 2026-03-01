@@ -116,11 +116,59 @@ if command -v ss >/dev/null 2>&1; then
   fi
 fi
 
-if [ "$SSHD_PUBLIC" = "false" ]; then
-  log "SKIP SSH REMEDIATION: sshd is not bound to a public address"
+CUPSD_PUBLIC=false
+if echo "$DOCTOR_OUTPUT" | grep -q "cupsd"; then
+  CUPSD_PUBLIC=true
+fi
+
+if [ "$SSHD_PUBLIC" = "false" ] && [ "$CUPSD_PUBLIC" = "false" ]; then
+  log "SKIP REMEDIATION: neither sshd nor cupsd public-bound"
   log "  Doctor failure is from a different cause. Manual investigation needed."
   log_section ""
   exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Step 2c: CUPS remediation (if cupsd is the cause)
+# ---------------------------------------------------------------------------
+if [ "$CUPSD_PUBLIC" = "true" ]; then
+  log "Step 2c: REMEDIATING — cupsd public-bound on :631"
+  CUPS_FIX_RC=0
+  if [ -f "./ops/openclaw_fix_cups_localhost.sh" ]; then
+    CUPS_FIX_OUTPUT="$(sudo ./ops/openclaw_fix_cups_localhost.sh 2>&1)" || CUPS_FIX_RC=$?
+    echo "$CUPS_FIX_OUTPUT" | tail -10
+    log_section "$CUPS_FIX_OUTPUT"
+    if [ "$CUPS_FIX_RC" -ne 0 ]; then
+      log "CUPS REMEDIATION FAILED: openclaw_fix_cups_localhost.sh exited $CUPS_FIX_RC"
+      INCIDENT_DIR="$ROOT_DIR/artifacts/incidents/guard_cups_$(date -u +%Y%m%d_%H%M%S)"
+      mkdir -p "$INCIDENT_DIR" 2>/dev/null || true
+      echo "$CUPS_FIX_OUTPUT" > "$INCIDENT_DIR/cups_fix_output.txt" 2>/dev/null || true
+    else
+      log "CUPS REMEDIATION APPLIED: cups fix completed (rc=0)"
+    fi
+  else
+    log "SKIP CUPS REMEDIATION: openclaw_fix_cups_localhost.sh not found"
+  fi
+
+  if [ "$SSHD_PUBLIC" = "false" ]; then
+    log "Step 4 (cups-only): Re-running openclaw_doctor.sh (post-remediation)"
+    DOCTOR_RC2=0
+    DOCTOR_OUTPUT2="$(./ops/openclaw_doctor.sh 2>&1)" || DOCTOR_RC2=$?
+    echo "$DOCTOR_OUTPUT2"
+    if [ "$DOCTOR_RC2" -eq 0 ]; then
+      log "FINAL RESULT: PASS after CUPS remediation"
+      log_section ""
+      exit 0
+    else
+      log "FINAL RESULT: STILL FAILING after CUPS remediation (doctor rc=$DOCTOR_RC2)"
+      INCIDENT_DIR="$ROOT_DIR/artifacts/incidents/guard_cups_$(date -u +%Y%m%d_%H%M%S)"
+      mkdir -p "$INCIDENT_DIR" 2>/dev/null || true
+      echo "$DOCTOR_OUTPUT2" > "$INCIDENT_DIR/doctor_post.txt" 2>/dev/null || true
+      log "  Incident artifacts: $INCIDENT_DIR"
+      log_section ""
+      exit 1
+    fi
+  fi
 fi
 
 # ---------------------------------------------------------------------------

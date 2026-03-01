@@ -292,6 +292,20 @@ else
 fi
 echo ""
 
+# --- Step 2g: CUPS public-port remediation (fail-closed) ---
+echo "==> Step 2g: CUPS public-port remediation"
+if [ -f "$SCRIPT_DIR/openclaw_fix_cups_localhost.sh" ]; then
+  if sudo "$SCRIPT_DIR/openclaw_fix_cups_localhost.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/cups_fix.log"; then
+    echo "  CUPS fix: PASS"
+  else
+    write_fail "cups_fix" "cups_public_port" "CUPS still bound publicly after fix; manual intervention required" "artifacts/deploy/$RUN_ID/cups_fix.log"
+    exit 2
+  fi
+else
+  echo "  (openclaw_fix_cups_localhost.sh not found — skip)"
+fi
+echo ""
+
 # --- Step 3a: Explicit console build (fail-closed; no || true bypass) ---
 if [ -f "docker-compose.console.yml" ]; then
   STEP="console_build"
