@@ -36,6 +36,9 @@ def _check_provider_direct(
 
     state: OK, DEGRADED, or DOWN.
     last_error_class: transient_quota, transient_server, transient_network, non_transient, or None.
+
+    TODO(LLM_ROUTER): Route through router.generate(purpose="doctor") once central llm_router
+    consolidates all call paths for unified cost tracking.
     """
     provider = router._providers.get(provider_name)
     if not provider or not provider.is_configured():

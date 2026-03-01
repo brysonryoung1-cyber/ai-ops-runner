@@ -162,6 +162,7 @@ if python3 -c "from src.llm.review_gate import run_review" 2>/dev/null; then
   python3 -m src.llm.review_gate "$VERDICT_FILE" "$BUNDLE_FILE" || REVIEW_RC=$?
 else
   echo "  (LLM router not available, using direct OpenAI API call)" >&2
+  # TODO(LLM_ROUTER): Remove this fallback; require review_gate. Route all review through central llm_router.
   # LiteLLM / Direct API call path — uses REVIEW_BASE_URL and REVIEW_API_KEY
   python3 - "$VERDICT_FILE" "$BUNDLE_FILE" "$REVIEW_BASE_URL" "$REVIEW_API_KEY" "$REVIEW_MODEL" "$REVIEW_MAX_TOKENS" "$REVIEW_PATH_USED" <<'PYEOF' || REVIEW_RC=$?
 import json, sys, os

@@ -114,6 +114,7 @@ Question: {question}
 Respond with a concise answer (2-4 sentences). Cite artifact paths when relevant. No secrets."""
 
     try:
+        # TODO(LLM_ROUTER): Use model="" and let router resolve from purpose="general".
         req = LLMRequest(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],

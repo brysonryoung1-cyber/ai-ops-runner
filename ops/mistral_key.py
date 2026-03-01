@@ -316,6 +316,9 @@ def assert_mistral_api_key_valid() -> None:
     """Run a minimal Mistral API smoke call.  Raises RuntimeError on failure.
 
     Uses a lightweight chat completions request. Reports PASS/FAIL without leaking key.
+
+    TODO(LLM_ROUTER): Route through central llm_router (e.g. router.resolve_review_fallback +
+    provider.generate_text) for Mistral validation; use config fallback model, not open-mistral-7b.
     """
     tok = load_mistral_api_key()
     url = "https://api.mistral.ai/v1/chat/completions"
