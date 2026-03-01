@@ -4,6 +4,14 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 
 type ConnectionState = "CONNECTING" | "LIVE" | "RECONNECTING" | "EXPIRED" | "ERROR";
+type InputVerification = "IDLE" | "VERIFYING" | "VERIFIED" | "FAILED";
+
+interface GatewayStatus {
+  status?: string;
+  last_input_ts?: number | null;
+  last_input_error?: string | null;
+  last_cdp_dispatch_error?: string | null;
+}
 
 export default function BrowserViewerPage() {
   const params = useParams();
@@ -20,6 +28,59 @@ export default function BrowserViewerPage() {
   const reconnectAttemptRef = useRef(0);
   const maxReconnects = 5;
 
+  const [inputVerification, setInputVerification] = useState<InputVerification>("IDLE");
+  const [inputFailReason, setInputFailReason] = useState<string | null>(null);
+  const [hudStatus, setHudStatus] = useState<GatewayStatus>({});
+  const controlsEnabled = state === "LIVE" && inputVerification === "VERIFIED";
+
+  const fetchStatus = useCallback(async (): Promise<GatewayStatus> => {
+    try {
+      const resp = await fetch(
+        `/api/browser-gateway/status?session_id=${encodeURIComponent(sessionId)}`,
+        { signal: AbortSignal.timeout(3000) },
+      );
+      if (!resp.ok) return {};
+      return await resp.json();
+    } catch {
+      return {};
+    }
+  }, [sessionId]);
+
+  const runInputSelftest = useCallback(async () => {
+    setInputVerification("VERIFYING");
+    setInputFailReason(null);
+
+    const baselineStatus = await fetchStatus();
+    const baselineTs = baselineStatus.last_input_ts ?? 0;
+
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "mouseMoved", x: 1, y: 1 }));
+    } else {
+      setInputVerification("FAILED");
+      setInputFailReason("WebSocket not open for selftest");
+      return;
+    }
+
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 250));
+      const status = await fetchStatus();
+      if (status.last_input_ts && status.last_input_ts > baselineTs) {
+        setInputVerification("VERIFIED");
+        return;
+      }
+    }
+
+    const finalStatus = await fetchStatus();
+    const reason =
+      finalStatus.last_input_error ||
+      finalStatus.last_cdp_dispatch_error ||
+      "last_input_ts did not advance within 2s";
+    setInputVerification("FAILED");
+    setInputFailReason(reason);
+  }, [fetchStatus]);
+
   const connectWs = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
@@ -27,12 +88,14 @@ export default function BrowserViewerPage() {
     const wsUrl = `${protocol}//${window.location.host}/browser-gateway/stream?token=${encodeURIComponent(token)}`;
 
     setState("CONNECTING");
+    setInputVerification("IDLE");
     const ws = new WebSocket(wsUrl);
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 
     let receivedFrame = false;
     let gotError = false;
+    let isReconnect = reconnectAttemptRef.current > 0;
 
     const connectTimeout = setTimeout(() => {
       if (!receivedFrame && ws.readyState !== WebSocket.CLOSED) {
@@ -53,6 +116,11 @@ export default function BrowserViewerPage() {
           receivedFrame = true;
           clearTimeout(connectTimeout);
           setState("LIVE");
+          if (isReconnect || inputVerification !== "VERIFIED") {
+            runInputSelftest();
+          } else {
+            setInputVerification("VERIFIED");
+          }
         }
         const blob = new Blob([evt.data], { type: "image/jpeg" });
         const url = URL.createObjectURL(blob);
@@ -89,6 +157,7 @@ export default function BrowserViewerPage() {
       if (gotError) return;
       if (reconnectAttemptRef.current < maxReconnects) {
         setState("RECONNECTING");
+        setInputVerification("IDLE");
         reconnectAttemptRef.current++;
         const delay = Math.min(1000 * Math.pow(2, reconnectAttemptRef.current), 10000);
         setTimeout(connectWs, delay);
@@ -101,14 +170,15 @@ export default function BrowserViewerPage() {
       clearTimeout(connectTimeout);
       setLastError("WebSocket connection error — check that Browser Gateway is running");
     };
-  }, [token]);
+  }, [token, runInputSelftest, inputVerification]);
 
   useEffect(() => {
     connectWs();
     return () => {
       wsRef.current?.close();
     };
-  }, [connectWs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -117,6 +187,21 @@ export default function BrowserViewerPage() {
     }, 1000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (state !== "LIVE" && state !== "RECONNECTING") return;
+    let cancelled = false;
+    const poll = async () => {
+      while (!cancelled) {
+        const s = await fetchStatus();
+        if (cancelled) break;
+        setHudStatus(s);
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    };
+    poll();
+    return () => { cancelled = true; };
+  }, [state, fetchStatus]);
 
   const sendInput = useCallback((event: Record<string, unknown>) => {
     const ws = wsRef.current;
@@ -138,26 +223,29 @@ export default function BrowserViewerPage() {
   }, []);
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!controlsEnabled) return;
     e.preventDefault();
     const coords = getCanvasCoords(e);
     sendInput({ type: "mousePressed", ...coords, button: "left", clickCount: 1 });
-  }, [getCanvasCoords, sendInput]);
+  }, [getCanvasCoords, sendInput, controlsEnabled]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!controlsEnabled) return;
     e.preventDefault();
     const coords = getCanvasCoords(e);
     sendInput({ type: "mouseReleased", ...coords, button: "left", clickCount: 1 });
-  }, [getCanvasCoords, sendInput]);
+  }, [getCanvasCoords, sendInput, controlsEnabled]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!controlsEnabled) return;
     if (e.buttons === 0) return;
     const coords = getCanvasCoords(e);
     sendInput({ type: "mouseMoved", ...coords });
-  }, [getCanvasCoords, sendInput]);
+  }, [getCanvasCoords, sendInput, controlsEnabled]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (state !== "LIVE") return;
+      if (!controlsEnabled) return;
       e.preventDefault();
       sendInput({
         type: "keyDown",
@@ -172,7 +260,7 @@ export default function BrowserViewerPage() {
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (state !== "LIVE") return;
+      if (!controlsEnabled) return;
       e.preventDefault();
       sendInput({
         type: "keyUp",
@@ -188,7 +276,7 @@ export default function BrowserViewerPage() {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [state, sendInput]);
+  }, [controlsEnabled, sendInput]);
 
   const handleRestart = async () => {
     setState("CONNECTING");
@@ -219,6 +307,12 @@ export default function BrowserViewerPage() {
     ERROR: "bg-red-500",
   };
 
+  const wsReadyState = wsRef.current?.readyState ?? -1;
+  const wsStateLabel = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"][wsReadyState] ?? "NONE";
+
+  const truncate = (s: string | null | undefined, n: number) =>
+    s && s.length > n ? s.slice(0, n) + "…" : s ?? "—";
+
   return (
     <div className="min-h-screen bg-black flex flex-col">
       <header className="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-800">
@@ -240,12 +334,41 @@ export default function BrowserViewerPage() {
         </div>
       </header>
 
+      {(state === "LIVE" || state === "RECONNECTING") && (
+        <div
+          data-testid="gateway-hud"
+          className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-1.5 bg-gray-950 border-b border-gray-800 text-[11px] font-mono text-white/60"
+        >
+          <span>
+            status:{" "}
+            <span className={hudStatus.status === "LIVE" ? "text-green-400" : "text-amber-400"}>
+              {hudStatus.status ?? state}
+            </span>
+          </span>
+          <span>last_input_ts: {hudStatus.last_input_ts ? new Date(hudStatus.last_input_ts * 1000).toLocaleTimeString() : "—"}</span>
+          <span>input_err: {truncate(hudStatus.last_input_error, 60)}</span>
+          <span>cdp_err: {truncate(hudStatus.last_cdp_dispatch_error, 60)}</span>
+          <span>ws: {wsStateLabel}</span>
+          <span>
+            input:{" "}
+            <span className={
+              inputVerification === "VERIFIED" ? "text-green-400" :
+              inputVerification === "FAILED" ? "text-red-400" :
+              inputVerification === "VERIFYING" ? "text-amber-400" :
+              "text-white/40"
+            }>
+              {inputVerification}
+            </span>
+          </span>
+        </div>
+      )}
+
       <main className="flex-1 flex items-center justify-center p-2 relative">
         {state === "LIVE" || state === "RECONNECTING" ? (
           <canvas
             ref={canvasRef}
-            className="max-w-full max-h-[calc(100vh-80px)] cursor-crosshair"
-            style={{ imageRendering: "auto" }}
+            className={`max-w-full max-h-[calc(100vh-80px)] ${controlsEnabled ? "cursor-crosshair" : "cursor-not-allowed opacity-80"}`}
+            style={{ imageRendering: "auto", pointerEvents: controlsEnabled ? "auto" : "none" }}
             onMouseDown={handleMouseDown}
             onMouseUp={handleMouseUp}
             onMouseMove={handleMouseMove}
@@ -253,6 +376,35 @@ export default function BrowserViewerPage() {
             tabIndex={0}
           />
         ) : null}
+
+        {inputVerification === "VERIFYING" && (
+          <div
+            data-testid="input-verifying-overlay"
+            className="absolute inset-0 flex items-center justify-center bg-black/60 z-10"
+          >
+            <div className="flex items-center gap-3 px-5 py-3 rounded-xl bg-gray-900 border border-gray-700">
+              <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+              <span className="text-sm text-white/80">Verifying input…</span>
+            </div>
+          </div>
+        )}
+
+        {inputVerification === "FAILED" && (
+          <div
+            data-testid="input-failed-banner"
+            className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 px-5 py-3 rounded-xl bg-red-900/80 border border-red-700"
+          >
+            <span className="text-sm text-red-200">
+              Input not verified: {inputFailReason ?? "unknown"}
+            </span>
+            <button
+              onClick={() => runInputSelftest()}
+              className="px-3 py-1 text-xs font-medium bg-red-700 hover:bg-red-600 text-white rounded-lg transition-colors"
+            >
+              Retry verification
+            </button>
+          </div>
+        )}
 
         {state === "CONNECTING" && (
           <div className="text-center">
