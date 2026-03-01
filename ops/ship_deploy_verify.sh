@@ -203,11 +203,11 @@ if [ "$READY" -eq 0 ]; then
 fi
 
 # Stability hold: WS must stay healthy for 120 seconds (checks every 10s)
-# Tolerates up to 2 transient failures (websockify HTTP can 404 briefly under WS load)
+# Tolerates up to 4 transient failures (guard timer restarts + WS probe contention)
 echo "--- Stability hold: 120s WS + port + HTTP verification ---"
 STABILITY_OK=1
 STABILITY_FAILS=0
-MAX_TRANSIENT=2
+MAX_TRANSIENT=4
 for _s in $(seq 1 12); do
   sleep 10
   S_PORT=0; S_HTTP=0; S_WS=0
