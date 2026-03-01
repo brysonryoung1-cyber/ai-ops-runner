@@ -22,6 +22,16 @@ if [ "$CUPS_FOUND" -eq 0 ]; then
   exit 0
 fi
 
+# Kill any lingering cupsd process that survived unit stop
+if pgrep -x cupsd >/dev/null 2>&1; then
+  echo "  Killing lingering cupsd process(es)..."
+  pkill -x cupsd 2>/dev/null || true
+  sleep 2
+  # Force-kill if still alive
+  pgrep -x cupsd >/dev/null 2>&1 && kill -9 "$(pgrep -x cupsd)" 2>/dev/null || true
+  sleep 1
+fi
+
 echo "  Verifying no cupsd binds on :631..."
 CUPS_BINDS="$(ss -tlnp 2>/dev/null | grep -E ':(631)\b' | grep -i cupsd || true)"
 if [ -n "$CUPS_BINDS" ]; then
