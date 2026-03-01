@@ -46,8 +46,43 @@ fi
 
 # 2. Restart services (novnc first, then frontdoor)
 echo "Restarting openclaw-novnc..."
-systemctl restart openclaw-novnc 2>/dev/null || true
-sleep 3
+if ! systemctl restart openclaw-novnc 2>/dev/null; then
+  echo "  restart failed; attempting shm_fix recovery..."
+  [ -f "$ROOT_DIR/ops/scripts/novnc_shm_fix.sh" ] && bash "$ROOT_DIR/ops/scripts/novnc_shm_fix.sh" 2>&1 | tail -5
+  systemctl restart openclaw-novnc 2>/dev/null || true
+fi
+
+# Bounded readiness loop: require port + HTTP + WS probe (<=60s)
+NOVNC_READY=0
+for _readiness_i in $(seq 1 30); do
+  PORT_OK=0; HTTP_OK=0; WS_OK=0
+  ss -tln 2>/dev/null | grep -qE ':6080[^0-9]|:6080$' && PORT_OK=1
+  [ "$PORT_OK" -eq 1 ] && curl -sf --connect-timeout 3 http://127.0.0.1:6080/novnc/vnc.html > /dev/null 2>&1 && HTTP_OK=1
+  if [ "$HTTP_OK" -eq 1 ]; then
+    WS_PROBE_SCRIPT=""
+    [ -f "$ROOT_DIR/ops/scripts/novnc_ws_stability_check.py" ] && WS_PROBE_SCRIPT="$ROOT_DIR/ops/scripts/novnc_ws_stability_check.py"
+    [ -z "$WS_PROBE_SCRIPT" ] && [ -f "$ROOT_DIR/ops/scripts/novnc_ws_probe.py" ] && WS_PROBE_SCRIPT="$ROOT_DIR/ops/scripts/novnc_ws_probe.py"
+    if [ -n "$WS_PROBE_SCRIPT" ]; then
+      OPENCLAW_WS_PROBE_HOLD_SEC=10 python3 "$WS_PROBE_SCRIPT" --host 127.0.0.1 --all >/dev/null 2>&1 && WS_OK=1
+    else
+      WS_OK=1
+    fi
+  fi
+  if [ "$PORT_OK" -eq 1 ] && [ "$HTTP_OK" -eq 1 ] && [ "$WS_OK" -eq 1 ]; then
+    NOVNC_READY=1
+    echo "  noVNC ready (port=$PORT_OK http=$HTTP_OK ws=$WS_OK) after ${_readiness_i} iterations"
+    break
+  fi
+  sleep 2
+done
+
+if [ "$NOVNC_READY" -eq 0 ]; then
+  echo "  FAIL: noVNC readiness not achieved after 30 iterations (port=$PORT_OK http=$HTTP_OK ws=$WS_OK)" >&2
+  mkdir -p "$PROOF_DIR"
+  systemctl status openclaw-novnc.service --no-pager > "$PROOF_DIR/readiness_fail_status.txt" 2>&1 || true
+  journalctl -u openclaw-novnc.service -n 100 --no-pager > "$PROOF_DIR/readiness_fail_journal.txt" 2>&1 || true
+fi
+
 echo "Restarting openclaw-frontdoor..."
 systemctl restart openclaw-frontdoor 2>/dev/null || true
 sleep 2

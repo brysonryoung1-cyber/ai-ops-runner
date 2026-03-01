@@ -1,6 +1,7 @@
 [Unit]
 Description=OpenClaw noVNC (Xvfb + x11vnc + websockify) for Kajabi interactive capture
-After=network.target
+Wants=network-online.target
+After=network-online.target network.target
 
 [Service]
 Type=simple
@@ -37,5 +38,4 @@ StandardError=journal
 SyslogIdentifier=openclaw-novnc
 
 [Install]
-# Not enabled by default; started on demand by kajabi_capture_interactive
 WantedBy=multi-user.target

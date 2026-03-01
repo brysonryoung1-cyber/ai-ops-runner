@@ -159,20 +159,57 @@ REMOTE_DEPLOY
     exit 2
   fi
   echo ""
-  # --- Phase 2a: Ensure noVNC readiness (shm_fix if needed, wait for 6080) ---
-  echo "==> Phase 2a: Ensure noVNC readiness (shm_fix + 6080 wait)"
-  ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o BatchMode=yes -- "$AIOPS_SSH" bash -se <<'REMOTE_NOVNC' 2>&1 | tail -8 || true
+  # --- Phase 2a: Ensure noVNC readiness (shm_fix if needed, wait for 6080 + HTTP 200 + ws_probe) ---
+  echo "==> Phase 2a: Ensure noVNC readiness (shm_fix + 6080 + vnc.html 200 + ws_probe 10s)"
+  PHASE2A_OK=0
+  if ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o BatchMode=yes -- "$AIOPS_SSH" bash -se <<'REMOTE_NOVNC' 2>&1 | tee "$PROOF_DIR/phase2a.log"; then
 cd /opt/ai-ops-runner
-if ! ss -tln 2>/dev/null | grep -qE ':6080[^0-9]|6080 '; then
+if ! ss -tln 2>/dev/null | grep -qE ':6080[^0-9]|:6080$'; then
+  echo "6080 not listening; running shm_fix..."
   sudo bash ./ops/scripts/novnc_shm_fix.sh 2>&1 | tail -5
   for _i in $(seq 1 30); do
-    ss -tln 2>/dev/null | grep -qE ':6080[^0-9]|6080 ' && break
+    ss -tln 2>/dev/null | grep -qE ':6080[^0-9]|:6080$' && break
     systemctl start openclaw-novnc 2>/dev/null || true
     sleep 2
   done
 fi
+READY=0
+for _j in $(seq 1 30); do
+  PORT_OK=0; HTTP_OK=0; WS_OK=0
+  ss -tln 2>/dev/null | grep -qE ':6080[^0-9]|:6080$' && PORT_OK=1
+  [ "$PORT_OK" -eq 1 ] && curl -sf --connect-timeout 3 http://127.0.0.1:6080/novnc/vnc.html > /dev/null 2>&1 && HTTP_OK=1
+  if [ "$HTTP_OK" -eq 1 ]; then
+    WS_SCRIPT=""
+    [ -f ops/scripts/novnc_ws_stability_check.py ] && WS_SCRIPT=ops/scripts/novnc_ws_stability_check.py
+    [ -z "$WS_SCRIPT" ] && [ -f ops/scripts/novnc_ws_probe.py ] && WS_SCRIPT=ops/scripts/novnc_ws_probe.py
+    if [ -n "$WS_SCRIPT" ]; then
+      OPENCLAW_WS_PROBE_HOLD_SEC=10 python3 "$WS_SCRIPT" --host 127.0.0.1 --all >/dev/null 2>&1 && WS_OK=1
+    else
+      WS_OK=1
+    fi
+  fi
+  if [ "$PORT_OK" -eq 1 ] && [ "$HTTP_OK" -eq 1 ] && [ "$WS_OK" -eq 1 ]; then
+    echo "noVNC ready: port=$PORT_OK http=$HTTP_OK ws_probe_10s=$WS_OK (iteration $_j)"
+    READY=1
+    break
+  fi
+  sleep 2
+done
+if [ "$READY" -eq 0 ]; then
+  echo "FAIL: noVNC readiness not achieved (port=$PORT_OK http=$HTTP_OK ws=$WS_OK)"
+  systemctl status openclaw-novnc.service --no-pager 2>&1 | tail -20
+  journalctl -u openclaw-novnc.service -n 50 --no-pager 2>&1 | tail -20
+  exit 1
+fi
 REMOTE_NOVNC
-  sleep 5
+    PHASE2A_OK=1
+    echo "  Phase 2a: PASS"
+  else
+    echo "ERROR: Phase 2a failed — noVNC not ready (6080 + vnc.html 200 + ws_probe 10s)" >&2
+    echo '{"overall":"FAIL","phase":"phase2a_novnc_readiness","run_id":"'"$RUN_ID"'"}' > "$PROOF_DIR/result.json"
+    exit 2
+  fi
+  sleep 3
   echo ""
   # --- Phase 2b: Force-run strict canary (require PASS with noVNC up) ---
   echo "==> Phase 2b: Strict canary (noVNC 6080 + WSS >=10s)"
