@@ -177,7 +177,7 @@ READY=0
 for _j in $(seq 1 30); do
   PORT_OK=0; HTTP_OK=0; WS_OK=0
   ss -tln 2>/dev/null | grep -qE ':6080[^0-9]|:6080$' && PORT_OK=1
-  [ "$PORT_OK" -eq 1 ] && curl -sf --connect-timeout 3 http://127.0.0.1:6080/novnc/vnc.html > /dev/null 2>&1 && HTTP_OK=1
+  [ "$PORT_OK" -eq 1 ] && curl -sf --connect-timeout 3 http://127.0.0.1:6080/vnc.html > /dev/null 2>&1 && HTTP_OK=1
   if [ "$HTTP_OK" -eq 1 ]; then
     WS_SCRIPT=""
     [ -f ops/scripts/novnc_ws_stability_check.py ] && WS_SCRIPT=ops/scripts/novnc_ws_stability_check.py
