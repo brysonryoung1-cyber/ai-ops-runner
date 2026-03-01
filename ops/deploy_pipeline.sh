@@ -171,7 +171,7 @@ if [ -f "$SCRIPT_DIR/install_openclaw_novnc.sh" ]; then
     echo "  WARNING: openclaw-novnc install failed (non-fatal; capture may fall back to legacy mode)" >&2
   else
     echo "  openclaw-novnc: installed"
-    # Start noVNC so canary can PASS (strict invariants require 6080 listening)
+    sudo systemctl enable openclaw-novnc.service || true
     if systemctl start openclaw-novnc 2>/dev/null; then
       echo "  openclaw-novnc: started (6080 required for canary)"
     else

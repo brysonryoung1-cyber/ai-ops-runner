@@ -26,6 +26,14 @@ if [ -f "$ROOT_DIR/ops/scripts/ws_upgrade_hop_probe.sh" ]; then
     bash "$ROOT_DIR/ops/scripts/ws_upgrade_hop_probe.sh" > "$OUT_DIR/hop_probe_before.log" 2>&1 || true
 fi
 
+# 1c. Auto-heal: if 6080 not listening, run shm_fix before routing fix
+if ! ss -tln 2>/dev/null | grep -qE ':6080[^0-9]|:6080$'; then
+  echo "  Port 6080 not listening; running novnc_shm_fix.sh preflight..."
+  if [ -f "$ROOT_DIR/ops/scripts/novnc_shm_fix.sh" ]; then
+    bash "$ROOT_DIR/ops/scripts/novnc_shm_fix.sh" 2>&1 | tee "$OUT_DIR/shm_fix_preflight.log" || true
+  fi
+fi
+
 # 2. Run routing fix (idempotent: restart novnc, frontdoor, serve)
 bash "$ROOT_DIR/ops/scripts/openclaw_novnc_routing_fix.sh" 2>&1 | tee "$OUT_DIR/routing_fix.log" || true
 # routing_fix can fail; we continue to capture after state

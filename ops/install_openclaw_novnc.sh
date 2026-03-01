@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # install_openclaw_novnc.sh — Idempotent systemd install for openclaw-novnc.
 # Run from repo root. Creates /etc/systemd/system/openclaw-novnc.service.
-# Unit is NOT enabled by default; kajabi_capture_interactive starts it on demand.
+# Unit is ENABLED by default for infra health (canary requires 6080 up).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -24,6 +24,7 @@ chmod +x "$ROOT_DIR/ops/novnc_supervisor.sh"
 sed "s|/opt/ai-ops-runner|$ROOT_DIR|g" "$ROOT_DIR/ops/systemd/openclaw-novnc.service" | sudo tee "$UNIT_PATH" >/dev/null
 
 sudo systemctl daemon-reload
+sudo systemctl enable openclaw-novnc.service
 sudo mkdir -p /run/openclaw-novnc
 sudo mkdir -p /run/openclaw
 
@@ -50,4 +51,4 @@ if [ -f "$ROOT_DIR/ops/sysctl/99-openclaw-novnc.conf" ]; then
   fi
 fi
 
-echo "openclaw-novnc: unit installed (start on demand via systemctl start openclaw-novnc)"
+echo "openclaw-novnc: unit installed and enabled (systemctl start openclaw-novnc)"
