@@ -535,6 +535,10 @@ class ModelRouter:
 
         return statuses
 
+    def get_provider(self, name: str) -> BaseProvider | None:
+        """Get a provider instance by name. Returns None if not initialized."""
+        return self._providers.get(name)
+
     @property
     def budget(self) -> BudgetConfig:
         """Return budget config (for external cost checks)."""

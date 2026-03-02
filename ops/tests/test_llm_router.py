@@ -54,6 +54,21 @@ from src.llm.budget import (
     DEFAULT_MAX_USD_PER_REVIEW,
 )
 from src.llm import review_gate
+from src.llm.llm_router import (
+    generate as llm_generate,
+    resolve_provider_model,
+    check_provider_health,
+    CORE_BRAIN,
+    REVIEW_BRAIN,
+    DOCTOR_BRAIN,
+    FAST_HELPER,
+    ALL_ROLES,
+    LLMRouterError,
+    ConfigError,
+    AuthError,
+    RateLimitError,
+    TransientError,
+)
 
 FAKE_OPENAI_KEY = "sk-test-FAKE-000000000000000000000000000000000000"
 FAKE_MOONSHOT_KEY = "msk-test-FAKE-0000000000000000000000000000000000"
@@ -1009,10 +1024,12 @@ class TestReviewFallback:
             fallback_error="Mistral API error: HTTP 500 — [REDACTED]",
             primary_transient_class="transient_quota",
         )
-        with mock.patch("src.llm.review_gate.get_router") as m_router:
-            m_router.return_value.generate.side_effect = exc
-            with pytest.raises(RuntimeError, match="FAILED.*fail-closed"):
-                review_gate.run_review(str(bundle_path), str(verdict_path))
+        with mock.patch("src.llm.review_gate.llm_generate") as m_gen:
+            m_gen.side_effect = exc
+            with mock.patch("src.llm.review_gate.get_router") as m_gr:
+                m_gr.return_value = mock.MagicMock()
+                with pytest.raises(RuntimeError, match="FAILED.*fail-closed"):
+                    review_gate.run_review(str(bundle_path), str(verdict_path))
         artifact = tmp_path / "review_fail_closed.json"
         assert artifact.exists()
         data = json.loads(artifact.read_text())
@@ -1416,3 +1433,343 @@ class TestTypes:
         rcc = ReviewCapsConfig()
         assert rcc.max_output_tokens == 600
         assert rcc.temperature == 0.0
+
+
+# ===========================================================================
+# 13. Central LLM router (llm_router.py) — role-based API
+# ===========================================================================
+
+
+class TestLLMRouterRoles:
+    """Test the llm_router.py role-based routing API."""
+
+    def test_all_roles_defined(self):
+        assert CORE_BRAIN in ALL_ROLES
+        assert REVIEW_BRAIN in ALL_ROLES
+        assert DOCTOR_BRAIN in ALL_ROLES
+        assert FAST_HELPER in ALL_ROLES
+        assert len(ALL_ROLES) == 4
+
+    def test_resolve_core_brain(self):
+        config = _make_config()
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_OPENAI_KEY}):
+            with mock.patch("src.llm.llm_router._get_router") as m_gr:
+                router = ModelRouter(config=config)
+                m_gr.return_value = router
+                provider_name, model = resolve_provider_model(CORE_BRAIN)
+        assert provider_name == "openai"
+        assert model == "gpt-4o-mini"
+
+    def test_resolve_review_brain(self):
+        config = _make_config()
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_OPENAI_KEY}):
+            with mock.patch("src.llm.llm_router._get_router") as m_gr:
+                router = ModelRouter(config=config)
+                m_gr.return_value = router
+                provider_name, model = resolve_provider_model(REVIEW_BRAIN)
+        assert provider_name == "openai"
+        assert model == CODEX_REVIEW_MODEL
+
+    def test_resolve_unknown_role_raises(self):
+        with pytest.raises(ConfigError, match="Unknown role"):
+            resolve_provider_model("unknown_role")
+
+    def test_generate_core_brain_happy_path(self):
+        config = _make_config()
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_OPENAI_KEY}):
+            with mock.patch("src.llm.llm_router._get_router") as m_gr:
+                router = ModelRouter(config=config)
+                m_gr.return_value = router
+                router._providers["openai"].generate_text = mock.Mock(
+                    return_value=_fake_openai_response("Hello!")
+                )
+                response = llm_generate(
+                    role=CORE_BRAIN,
+                    messages=[{"role": "user", "content": "test"}],
+                    trace_id="test",
+                )
+        assert response.content == "Hello!"
+        assert response.provider == "openai"
+
+    def test_generate_review_brain_blocked_on_error(self):
+        """Review role must fail-closed when both providers fail."""
+        config = _make_config()
+        with mock.patch.dict(os.environ, {
+            "OPENAI_API_KEY": FAKE_OPENAI_KEY,
+            "MISTRAL_API_KEY": FAKE_MISTRAL_KEY,
+        }):
+            with mock.patch("src.llm.llm_router._get_router") as m_gr:
+                router = ModelRouter(config=config)
+                m_gr.return_value = router
+                router._providers["openai"].generate_text = mock.Mock(
+                    side_effect=RuntimeError("HTTP 429 — rate limited"),
+                )
+                router._providers["mistral"].generate_text = mock.Mock(
+                    side_effect=RuntimeError("HTTP 500 — server error"),
+                )
+                with pytest.raises(ReviewFailClosedError):
+                    llm_generate(
+                        role=REVIEW_BRAIN,
+                        messages=[{"role": "user", "content": "test"}],
+                        trace_id="test",
+                    )
+
+    def test_generate_unknown_role_raises_config_error(self):
+        with pytest.raises(ConfigError, match="Unknown role"):
+            llm_generate(
+                role="nonexistent",
+                messages=[{"role": "user", "content": "test"}],
+            )
+
+    def test_generate_with_provider_override(self):
+        config = _make_config()
+        with mock.patch.dict(os.environ, {
+            "OPENAI_API_KEY": FAKE_OPENAI_KEY,
+            "MISTRAL_API_KEY": FAKE_MISTRAL_KEY,
+        }):
+            with mock.patch("src.llm.llm_router._get_router") as m_gr:
+                router = ModelRouter(config=config)
+                m_gr.return_value = router
+                router._providers["mistral"].generate_text = mock.Mock(
+                    return_value=_fake_mistral_response("pong"),
+                )
+                response = llm_generate(
+                    role=DOCTOR_BRAIN,
+                    messages=[{"role": "user", "content": "Hi"}],
+                    provider_override="mistral",
+                    model_override="codestral-2501",
+                    essential=True,
+                    trace_id="test",
+                )
+        assert response.provider == "mistral"
+
+    def test_generate_provider_override_not_configured_raises(self):
+        config = _make_config()
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_OPENAI_KEY}):
+            env_copy = dict(os.environ)
+            env_copy.pop("MISTRAL_API_KEY", None)
+            with mock.patch.dict(os.environ, env_copy, clear=False):
+                with mock.patch("src.llm.llm_router._get_router") as m_gr:
+                    router = ModelRouter(config=config)
+                    m_gr.return_value = router
+                    with pytest.raises(ConfigError, match="not configured"):
+                        llm_generate(
+                            role=DOCTOR_BRAIN,
+                            messages=[{"role": "user", "content": "Hi"}],
+                            provider_override="mistral",
+                            essential=True,
+                            trace_id="test",
+                        )
+
+
+class TestCheckProviderHealth:
+    """Test check_provider_health for doctor integration."""
+
+    def test_healthy_provider_returns_ok(self):
+        config = _make_config()
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_OPENAI_KEY}):
+            with mock.patch("src.llm.llm_router._get_router") as m_gr:
+                router = ModelRouter(config=config)
+                m_gr.return_value = router
+                router._providers["openai"].generate_text = mock.Mock(
+                    return_value=_fake_openai_response("Hi"),
+                )
+                state, err_class = check_provider_health("openai", "gpt-4o-mini")
+        assert state == "OK"
+        assert err_class is None
+
+    def test_missing_provider_returns_down(self):
+        config = _make_config()
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_OPENAI_KEY}):
+            env_copy = dict(os.environ)
+            env_copy.pop("MISTRAL_API_KEY", None)
+            with mock.patch.dict(os.environ, env_copy, clear=False):
+                with mock.patch("src.llm.llm_router._get_router") as m_gr:
+                    router = ModelRouter(config=config)
+                    m_gr.return_value = router
+                    state, err_class = check_provider_health("mistral", "codestral-2501")
+        assert state == "DOWN"
+        assert err_class == "missing_key"
+
+    def test_transient_error_returns_degraded(self):
+        config = _make_config()
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_OPENAI_KEY}):
+            with mock.patch("src.llm.llm_router._get_router") as m_gr:
+                router = ModelRouter(config=config)
+                m_gr.return_value = router
+                router._providers["openai"].generate_text = mock.Mock(
+                    side_effect=RuntimeError("HTTP 429 — rate limited"),
+                )
+                state, err_class = check_provider_health("openai", "gpt-4o-mini")
+        assert state == "DEGRADED"
+        assert err_class == "transient_quota"
+
+    def test_auth_error_returns_down(self):
+        config = _make_config()
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": FAKE_OPENAI_KEY}):
+            with mock.patch("src.llm.llm_router._get_router") as m_gr:
+                router = ModelRouter(config=config)
+                m_gr.return_value = router
+                router._providers["openai"].generate_text = mock.Mock(
+                    side_effect=RuntimeError("HTTP 401 — unauthorized"),
+                )
+                state, err_class = check_provider_health("openai", "gpt-4o-mini")
+        assert state == "DOWN"
+        assert err_class == "non_transient"
+
+
+class TestReviewGateViaCentralRouter:
+    """Test that review_gate correctly uses the central LLM router."""
+
+    def test_review_gate_blocked_on_router_error(self, tmp_path):
+        """review_gate must produce BLOCKED verdict when router fails."""
+        bundle_path = tmp_path / "bundle.txt"
+        bundle_path.write_text("diff --git a/foo b/foo\n+new line\n")
+        verdict_path = tmp_path / "verdict.json"
+
+        exc = ReviewFailClosedError(
+            "Review FAILED (fail-closed): primary error; fallback error",
+            primary_error="OpenAI HTTP 429",
+            fallback_error="Mistral HTTP 500",
+            primary_transient_class="transient_quota",
+        )
+        with mock.patch("src.llm.review_gate.llm_generate") as m_gen:
+            m_gen.side_effect = exc
+            with mock.patch("src.llm.review_gate.get_router") as m_gr:
+                m_gr.return_value = mock.MagicMock()
+                with pytest.raises(RuntimeError, match="FAILED.*fail-closed"):
+                    review_gate.run_review(str(bundle_path), str(verdict_path))
+
+    def test_review_gate_writes_verdict_on_success(self, tmp_path):
+        """review_gate must write valid verdict JSON on success."""
+        bundle_path = tmp_path / "bundle.txt"
+        bundle_path.write_text("diff --git a/foo b/foo\n+new line\n")
+        verdict_path = tmp_path / "verdict.json"
+
+        fake_resp = LLMResponse(
+            content='{"verdict":"APPROVED","blockers":[],"non_blocking":["looks good"],"security_checks":{"public_binds":"PASS","allowlist_bypass":"PASS","key_handling":"PASS","guard_doctor_intact":"PASS","lockout_risk":"PASS"},"tests_run":"all checks"}',
+            model="gpt-4o-mini",
+            provider="openai",
+            usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+        )
+        with mock.patch("src.llm.review_gate.llm_generate") as m_gen:
+            m_gen.return_value = fake_resp
+            with mock.patch("src.llm.review_gate.get_router") as m_gr:
+                mock_router = mock.MagicMock()
+                mock_router.budget.pricing = {}
+                m_gr.return_value = mock_router
+                result = review_gate.run_review(str(bundle_path), str(verdict_path))
+
+        assert result == "APPROVED"
+        assert verdict_path.exists()
+        verdict = json.loads(verdict_path.read_text())
+        assert verdict["verdict"] == "APPROVED"
+        assert verdict["meta"]["routed_via"] == "llm_router"
+
+
+class TestAskEngineViaCentralRouter:
+    """Test that ask_engine uses the central LLM router."""
+
+    def test_ask_engine_returns_answer_shape(self):
+        """ask_engine must return the expected shape regardless of LLM availability."""
+        import sys
+        repo_root = str(REPO_ROOT)
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from services.test_runner.test_runner.ask_engine import ask
+
+        result = ask(
+            question="What is the system status?",
+            state_pack_dir="nonexistent",
+            project_id="test",
+        )
+        assert "answer" in result
+        assert "citations" in result
+        assert "recommended_next_action" in result
+        assert "confidence" in result
+
+    def test_ask_engine_uses_core_brain(self):
+        """ask_engine must call llm_router.generate with CORE_BRAIN role."""
+        fake_resp = LLMResponse(
+            content="All systems operational.",
+            model="gpt-4o-mini",
+            provider="openai",
+            usage={"prompt_tokens": 50, "completion_tokens": 10, "total_tokens": 60},
+        )
+        with mock.patch("src.llm.llm_router.generate") as m_gen:
+            m_gen.return_value = fake_resp
+            # Need to re-import to pick up the mock
+            import importlib
+            import services.test_runner.test_runner.ask_engine as ae_mod
+            importlib.reload(ae_mod)
+            result = ae_mod._call_default_engine("status?", "context", ["c1"])
+        assert "All systems operational" in result["answer"]
+
+
+class TestDoctorViaCentralRouter:
+    """Test that doctor.py uses the central LLM router."""
+
+    def test_doctor_uses_check_provider_health(self, tmp_path):
+        """doctor must use check_provider_health from llm_router."""
+        from src.llm.doctor import run_provider_doctor
+
+        with mock.patch("src.llm.doctor.check_provider_health") as m_check:
+            m_check.return_value = ("OK", None)
+            with mock.patch("src.llm.doctor.get_router") as m_gr:
+                mock_router = mock.MagicMock()
+                mock_router._config.review_fallback.provider = "mistral"
+                mock_router._config.review_fallback.model = "codestral-2501"
+                m_gr.return_value = mock_router
+                result = run_provider_doctor(str(tmp_path))
+
+        assert result["providers"]["openai"]["state"] == "OK"
+        assert result["providers"]["mistral"]["state"] == "OK"
+        assert m_check.call_count == 2
+
+    def test_doctor_marks_degraded_on_failure(self, tmp_path):
+        """doctor must mark provider DEGRADED when check_provider_health reports it."""
+        from src.llm.doctor import run_provider_doctor
+
+        def side_effect(provider_name, model):
+            if provider_name == "openai":
+                return ("OK", None)
+            return ("DEGRADED", "transient_quota")
+
+        with mock.patch("src.llm.doctor.check_provider_health") as m_check:
+            m_check.side_effect = side_effect
+            with mock.patch("src.llm.doctor.get_router") as m_gr:
+                mock_router = mock.MagicMock()
+                mock_router._config.review_fallback.provider = "mistral"
+                mock_router._config.review_fallback.model = "codestral-2501"
+                m_gr.return_value = mock_router
+                result = run_provider_doctor(str(tmp_path))
+
+        assert result["providers"]["openai"]["state"] == "OK"
+        assert result["providers"]["mistral"]["state"] == "DEGRADED"
+        assert result["providers"]["mistral"]["last_error_class"] == "transient_quota"
+
+
+class TestLLMRouterErrorTaxonomy:
+    """Test error classification in the LLM router."""
+
+    def test_config_error_attributes(self):
+        err = ConfigError("missing key", role="doctor_brain")
+        assert err.error_code == "config_error"
+        assert err.role == "doctor_brain"
+        assert "missing key" in str(err)
+
+    def test_auth_error_attributes(self):
+        err = AuthError("unauthorized", role="review_brain")
+        assert err.error_code == "auth_error"
+
+    def test_rate_limit_error_attributes(self):
+        err = RateLimitError("429", role="core_brain")
+        assert err.error_code == "rate_limit"
+
+    def test_transient_error_attributes(self):
+        err = TransientError("timeout", role="core_brain")
+        assert err.error_code == "transient"
+
+    def test_base_error_is_runtime_error(self):
+        err = LLMRouterError("test")
+        assert isinstance(err, RuntimeError)

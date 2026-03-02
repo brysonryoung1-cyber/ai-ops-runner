@@ -313,10 +313,35 @@ def load_mistral_api_key_masked() -> str:
 
 
 def assert_mistral_api_key_valid() -> None:
-    """Run a minimal Mistral API smoke call.  Raises RuntimeError on failure.
+    """Run a minimal Mistral API smoke call via the central LLM router.
 
-    Uses a lightweight chat completions request. Reports PASS/FAIL without leaking key.
+    Uses the router's configured Mistral fallback model (from config/llm.json)
+    for validation. Reports PASS/FAIL without leaking key.
+
+    Falls back to direct HTTP call if the router is not importable.
     """
+    load_mistral_api_key()
+
+    # Use the central LLM router for Mistral validation
+    try:
+        _script_dir = os.path.dirname(os.path.abspath(__file__))
+        _repo_root = os.path.dirname(_script_dir)
+        if _repo_root not in sys.path:
+            sys.path.insert(0, _repo_root)
+        from src.llm.llm_router import check_provider_health
+        state, err_class = check_provider_health("mistral", "")
+        if state == "DOWN":
+            raise RuntimeError(
+                f"Mistral API validation failed via router: state={state}, "
+                f"error_class={err_class}"
+            )
+        if state == "DEGRADED":
+            _info(f"Mistral validation: DEGRADED (error_class={err_class})")
+        return
+    except ImportError:
+        pass
+
+    # Fallback: direct HTTP if router not importable
     tok = load_mistral_api_key()
     url = "https://api.mistral.ai/v1/chat/completions"
     payload = _json.dumps({

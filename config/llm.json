@@ -16,6 +16,10 @@
     "vision": {
       "provider": "openai",
       "model": "gpt-4o"
+    },
+    "doctor": {
+      "provider": "openai",
+      "model": "gpt-4o-mini"
     }
   },
   "reviewFallback": {

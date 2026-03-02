@@ -93,8 +93,7 @@ def _call_default_engine(question: str, context: str, citations: list[str]) -> d
     if repo not in sys.path:
         sys.path.insert(0, repo)
     try:
-        from src.llm.router import get_router
-        from src.llm.types import LLMRequest
+        from src.llm.llm_router import generate, CORE_BRAIN
     except Exception as e:
         return {
             "answer": f"LLM not available: {e}. Run system.state_pack and check artifacts.",
@@ -102,7 +101,6 @@ def _call_default_engine(question: str, context: str, citations: list[str]) -> d
             "recommended_next_action": {"action": "system.state_pack", "read_only": True},
             "confidence": "LOW",
         }
-    router = get_router()
     prompt = f"""You are OpenClaw ops assistant. Answer ONLY from the provided context. No speculation.
 If the context does not contain enough information, say so and suggest running system.state_pack or doctor.
 
@@ -114,16 +112,14 @@ Question: {question}
 Respond with a concise answer (2-4 sentences). Cite artifact paths when relevant. No secrets."""
 
     try:
-        req = LLMRequest(
-            model="gpt-4o-mini",
+        resp = generate(
+            role=CORE_BRAIN,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
             max_tokens=500,
-            purpose="general",
             trace_id="ask_openclaw",
             essential=True,
         )
-        resp = router.generate(req)
         answer = (getattr(resp, "content", None) or getattr(resp, "text", "") or "").strip()
         if not answer:
             answer = "No response from LLM. Check provider configuration."
