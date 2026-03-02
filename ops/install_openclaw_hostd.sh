@@ -21,15 +21,29 @@ sudo bash "$ROOT_DIR/ops/scripts/ensure_hostd_venv_playwright.sh"
 SECRETS_DIR="/etc/ai-ops-runner/secrets"
 DEPLOY_KEY="${SECRETS_DIR}/openclaw_ssh/vps_deploy_ed25519"
 HOSTD_ENV="${SECRETS_DIR}/openclaw_hostd.env"
+HOSTNAME_SHORT="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo "")"
 if [ -f "$DEPLOY_KEY" ]; then
   sudo mkdir -p "$SECRETS_DIR"
-  HOSTNAME_SHORT="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo "")"
   if [ "$HOSTNAME_SHORT" != "aiops-1" ] && [ "$ROOT_DIR" != "/opt/ai-ops-runner" ]; then
     if ! sudo grep -q "OPENCLAW_VPS_SSH_IDENTITY" "$HOSTD_ENV" 2>/dev/null; then
       echo "OPENCLAW_VPS_SSH_IDENTITY=$DEPLOY_KEY" | sudo tee -a "$HOSTD_ENV" >/dev/null
       echo "  Set OPENCLAW_VPS_SSH_IDENTITY in $HOSTD_ENV for Apply (remote SSH)"
     fi
   fi
+fi
+
+# Human gate is opt-in: never force-enable from installer runtime path.
+# If caller sets OPENCLAW_ENABLE_HUMAN_GATE explicitly, persist that value.
+if [ -n "${OPENCLAW_ENABLE_HUMAN_GATE:-}" ]; then
+  sudo mkdir -p "$(dirname "$HOSTD_ENV")"
+  sudo touch "$HOSTD_ENV"
+  if sudo grep -q '^OPENCLAW_ENABLE_HUMAN_GATE=' "$HOSTD_ENV" 2>/dev/null; then
+    sudo sed -i.bak "s/^OPENCLAW_ENABLE_HUMAN_GATE=.*/OPENCLAW_ENABLE_HUMAN_GATE=${OPENCLAW_ENABLE_HUMAN_GATE}/" "$HOSTD_ENV"
+  else
+    echo "OPENCLAW_ENABLE_HUMAN_GATE=${OPENCLAW_ENABLE_HUMAN_GATE}" | sudo tee -a "$HOSTD_ENV" >/dev/null
+  fi
+  sudo rm -f "${HOSTD_ENV}.bak"
+  echo "  Set OPENCLAW_ENABLE_HUMAN_GATE=${OPENCLAW_ENABLE_HUMAN_GATE} in $HOSTD_ENV (explicit opt-in)"
 fi
 
 sudo tee "$UNIT_PATH" >/dev/null <<EOF
