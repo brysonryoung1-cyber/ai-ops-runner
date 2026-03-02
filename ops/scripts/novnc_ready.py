@@ -170,6 +170,17 @@ def _capture_journal(artifact_dir: Path) -> Path:
     return path
 
 
+def _is_login_gate_active() -> bool:
+    """Check if a login window gate is active (suppress restarts)."""
+    try:
+        root = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(root))
+        from ops.lib.human_gate import is_gate_active
+        return is_gate_active("soma_kajabi")
+    except Exception:
+        return False
+
+
 def ensure_novnc_ready(artifact_dir: Path, run_id: str) -> tuple[bool, str, str | None, str | None]:
     """Ensure noVNC ready; return (ready, url, error_class, journal_artifact).
 
@@ -177,10 +188,13 @@ def ensure_novnc_ready(artifact_dir: Path, run_id: str) -> tuple[bool, str, str 
     ws_stability_local/tailnet verified + framebuffer.png exists. On doctor FAIL: run
     openclaw_novnc_restart, sleep 2, retry. Up to 5 attempts with artifacts each time.
     Only return novnc_url on PASS. Otherwise fail-closed with NOVNC_NOT_READY.
+
+    During active login window: run doctor once but suppress restarts/autorecover.
     """
     root = Path(__file__).resolve().parents[2]
     last_url = ""
     last_err: str | None = None
+    gate_active = _is_login_gate_active()
 
     for attempt in range(1, ENSURE_MAX_RETRIES + 1):
         attempt_run_id = f"{run_id}_attempt{attempt}" if attempt > 1 else run_id
@@ -191,15 +205,29 @@ def ensure_novnc_ready(artifact_dir: Path, run_id: str) -> tuple[bool, str, str 
         if doctor_ok and doctor_url:
             return True, doctor_url, None, None
 
+        if gate_active:
+            suppression = {
+                "remediation_suppressed": True,
+                "reason": "remediation suppressed due to active login window",
+                "attempt": attempt,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+            try:
+                import json as _json
+                (artifact_dir / "gate_suppression.json").write_text(_json.dumps(suppression, indent=2))
+            except Exception:
+                pass
+            break
+
         if attempt < ENSURE_MAX_RETRIES:
             _run_novnc_restart(root)
             time.sleep(ENSURE_RESTART_SLEEP)
 
-    # Exhausted retries: attempt autorecover once before fail-closed
-    if _run_autorecover(root, run_id):
-        final_ok, final_url, final_err = _run_doctor(artifact_dir, f"{run_id}_post_autorecover")
-        if final_ok and final_url:
-            return True, final_url, None, None
+    if not gate_active:
+        if _run_autorecover(root, run_id):
+            final_ok, final_url, final_err = _run_doctor(artifact_dir, f"{run_id}_post_autorecover")
+            if final_ok and final_url:
+                return True, final_url, None, None
 
     journal_path = _capture_journal(artifact_dir)
     try:

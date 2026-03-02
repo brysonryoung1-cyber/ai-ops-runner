@@ -19,6 +19,11 @@ interface SomaStatus {
   artifact_dir_url: string | null;
   doctor_framebuffer_url: string | null;
   doctor_artifact_dir_url: string | null;
+  human_gate_active: boolean;
+  human_gate_expires_at: string | null;
+  human_gate_run_id: string | null;
+  human_gate_novnc_url: string | null;
+  human_gate_reason: string | null;
 }
 
 const POLL_INTERVAL_MS = 30_000;
@@ -58,6 +63,11 @@ export default function GuidedHumanGateBanner() {
           artifact_dir_url: statusData.artifact_dir_url ?? null,
           doctor_framebuffer_url: statusData.doctor_framebuffer_url ?? null,
           doctor_artifact_dir_url: statusData.doctor_artifact_dir_url ?? null,
+          human_gate_active: statusData.human_gate_active === true,
+          human_gate_expires_at: statusData.human_gate_expires_at ?? null,
+          human_gate_run_id: statusData.human_gate_run_id ?? null,
+          human_gate_novnc_url: statusData.human_gate_novnc_url ?? null,
+          human_gate_reason: statusData.human_gate_reason ?? null,
         });
       } else {
         setStatus(null);
@@ -124,6 +134,16 @@ export default function GuidedHumanGateBanner() {
     navigator.clipboard.writeText(text);
   }, [status]);
 
+  const pinnedUrl = status?.human_gate_novnc_url ?? status?.novnc_url ?? null;
+  const gateExpiresAt = status?.human_gate_expires_at;
+  const gateExpiresLabel = gateExpiresAt
+    ? new Date(gateExpiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : null;
+
+  const handleCopyGateUrl = useCallback(() => {
+    if (pinnedUrl) navigator.clipboard.writeText(pinnedUrl);
+  }, [pinnedUrl]);
+
   if (!status || status.current_status !== "WAITING_FOR_HUMAN") return null;
 
   return (
@@ -132,20 +152,42 @@ export default function GuidedHumanGateBanner() {
         className="mb-6 p-5 rounded-2xl glass-surface border border-amber-500/40 bg-amber-500/5"
         data-testid="guided-human-gate-banner"
       >
-        <h3 className="text-base font-semibold text-amber-200 mb-2">Soma needs you: Kajabi login</h3>
+        <h3 className="text-base font-semibold text-amber-200 mb-2">
+          {status.human_gate_active
+            ? `Login required (expires at ${gateExpiresLabel ?? "…"})`
+            : "Soma needs you: Kajabi login"}
+        </h3>
         <p className="text-sm text-white/80 mb-2">
           Login+2FA, then open Products→Courses and confirm both libraries. Autopilot will resume automatically.
         </p>
         <p className="text-xs text-white/50 mb-4">HumanGateWatcher polls every 90s · No manual resume required</p>
         <div className="flex flex-wrap gap-3">
-          {status.novnc_url && (
-            <button
-              type="button"
-              onClick={handleOpenNovnc}
+          {pinnedUrl && (
+            <a
+              href={pinnedUrl}
+              target="_blank"
+              rel="noopener noreferrer"
               className="px-4 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 font-medium text-sm border border-amber-500/30"
             >
               Open noVNC
+            </a>
+          )}
+          {pinnedUrl && (
+            <button
+              type="button"
+              onClick={handleCopyGateUrl}
+              className="px-4 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-200 font-medium text-sm border border-amber-500/20"
+            >
+              Copy URL
             </button>
+          )}
+          {status.human_gate_run_id && (
+            <Link
+              href={`/runs?id=${encodeURIComponent(status.human_gate_run_id)}`}
+              className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white/90 font-medium text-sm border border-white/20"
+            >
+              Open gate run →
+            </Link>
           )}
           <GlassButton
             variant="secondary"

@@ -234,6 +234,13 @@ _collect_and_fail() {
 mkdir -p "$ART_DIR"
 TIMINGS_FILE="$ART_DIR/timings.json"
 
+# Check for active login window — suppress service restarts/hard-reset
+GATE_CHECK="$ROOT_DIR/ops/scripts/csr_human_gate_check.sh"
+FB_GATE_ACTIVE=0
+if [ -x "$GATE_CHECK" ] && "$GATE_CHECK" soma_kajabi >/dev/null 2>&1; then
+  FB_GATE_ACTIVE=1
+fi
+
 _timestamp() { date +%s.%N; }
 T_START=$(_timestamp)
 
@@ -253,6 +260,14 @@ with open('$TIMINGS_FILE', 'w') as f: json.dump(d, f, indent=2)
 " 2>/dev/null || true
   echo "{\"ok\":true,\"run_id\":\"$RUN_ID\",\"display\":\"$DISPLAY_NUM\",\"novnc_port\":$NOVNC_PORT}"
   exit 0
+fi
+
+# Suppress restarts/hard-reset during active login window
+if [ "$FB_GATE_ACTIVE" -eq 1 ]; then
+  echo "novnc_framebuffer_guard: $_fail_reason, restart/reset suppressed (active login window)" >&2
+  echo '{"remediation_suppressed":true,"reason":"remediation suppressed due to active login window","fail_reason":"'"$_fail_reason"'","timestamp_utc":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' > "$ART_DIR/gate_suppression.json"
+  echo "{\"ok\":false,\"run_id\":\"$RUN_ID\",\"fail_reason\":\"$_fail_reason\",\"remediation_suppressed\":true,\"artifact_dir\":\"artifacts/novnc_debug/$RUN_ID\"}"
+  exit 1
 fi
 
 # Remediate: restart service
