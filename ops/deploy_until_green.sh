@@ -191,6 +191,22 @@ for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
     echo "=== deploy_until_green PASS (attempt $attempt) ==="
     echo "Run ID: $LATEST_RUN_ID"
     echo "Artifacts: $DEPLOY_DIR/$LATEST_RUN_ID/"
+
+    # --- Post-deploy proof bundle (self-certification) ---
+    echo ""
+    echo "==> Running post-deploy proof bundle..."
+    BUNDLE_RC=0
+    OPENCLAW_DEPLOY_RUN_ID="$LATEST_RUN_ID" python3 "$SCRIPT_DIR/scripts/post_deploy_proof_bundle.py" 2>&1 || BUNDLE_RC=$?
+    BUNDLE_DIR="$(ls -1dt "$ARTIFACTS_DIR/post_deploy"/proof_* 2>/dev/null | head -1)"
+    if [ "$BUNDLE_RC" -ne 0 ]; then
+      echo "FAIL-CLOSED: post_deploy_proof_bundle FAILED (exit $BUNDLE_RC)" >&2
+      echo "  Bundle artifacts: ${BUNDLE_DIR:-<not created>}" >&2
+      write_triage "$LATEST_RUN_ID" "$attempt" "proof_bundle_failed" "post_deploy_proof_bundle" "Investigate proof bundle failures in ${BUNDLE_DIR:-artifacts/post_deploy/}"
+      echo "$DEPLOY_DIR/$LATEST_RUN_ID/triage.json"
+      exit 2
+    fi
+    echo "  Proof bundle: PASS"
+    echo "  Bundle: $BUNDLE_DIR"
     exit 0
   fi
 
