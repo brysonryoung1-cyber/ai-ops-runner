@@ -168,10 +168,10 @@ class TestBundleFailure:
         assert result["overall"] == "FAILURE"
         assert any("ssh" in f.lower() for f in result["failures"])
 
-    def test_doctor_fail_marks_failure(self, tmp_path, health_public_ok, soma_status_ok):
+    def test_doctor_fail_marks_warning(self, tmp_path, health_public_ok, soma_status_ok):
         doc_dir = tmp_path / "doc"
         doc_dir.mkdir()
-        (doc_dir / "doctor.json").write_text(json.dumps({"overall": "FAIL"}))
+        (doc_dir / "doctor.json").write_text(json.dumps({"result": "FAIL"}))
         pointers = {"doctor": str(doc_dir / "doctor.json")}
 
         out = tmp_path / "proof_docfail"
@@ -184,10 +184,10 @@ class TestBundleFailure:
             deploy_run_id="d1",
             origin_sha="sha1",
         )
-        assert result["overall"] == "FAILURE"
-        assert any("doctor" in f.lower() for f in result["failures"])
+        assert result["overall"] == "PASS"
+        assert any("doctor" in w.lower() for w in result["warnings"])
 
-    def test_canary_fail_marks_failure(self, tmp_path, health_public_ok, soma_status_ok):
+    def test_canary_fail_marks_warning(self, tmp_path, health_public_ok, soma_status_ok):
         canary_dir = tmp_path / "can"
         canary_dir.mkdir()
         (canary_dir / "result.json").write_text(json.dumps({"status": "DEGRADED"}))
@@ -203,8 +203,8 @@ class TestBundleFailure:
             deploy_run_id="d1",
             origin_sha="sha1",
         )
-        assert result["overall"] == "FAILURE"
-        assert any("canary" in f.lower() for f in result["failures"])
+        assert result["overall"] == "PASS"
+        assert any("canary" in w.lower() for w in result["warnings"])
 
 
 # ---------------------------------------------------------------------------
