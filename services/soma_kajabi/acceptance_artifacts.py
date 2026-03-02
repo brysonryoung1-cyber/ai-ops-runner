@@ -97,22 +97,52 @@ def _write_final_library_snapshot(accept_dir: Path, snapshot: dict) -> Path:
     return path
 
 
+def _normalize_manifest_status(raw_status: str) -> str:
+    """Normalize status to spec values: attached | raw_needs_review."""
+    s = (raw_status or "").strip().lower()
+    if s in ("attached", "mapped"):
+        return "attached"
+    return "raw_needs_review"
+
+
+def _transform_to_spec_manifest(rows: list[dict]) -> list[dict]:
+    """Transform Phase0 internal manifest rows to SOMA_LOCKED_SPEC §6 columns.
+
+    Spec columns: subject, timestamp, filename, mapped_lesson, status
+    """
+    out: list[dict] = []
+    for r in rows:
+        out.append({
+            "subject": r.get("subject", ""),
+            "timestamp": r.get("datetime", r.get("timestamp", "")),
+            "filename": r.get("file_name", r.get("filename", "")),
+            "mapped_lesson": r.get("proposed_lesson_title", r.get("mapped_lesson", "")),
+            "status": _normalize_manifest_status(r.get("status", "")),
+        })
+    return out
+
+
 def _write_video_manifest_artifact(accept_dir: Path, manifest_rows: list[dict], phase0_dir: Path) -> Path:
-    """Video Manifest: one row per Zane email video. Copy/transform from Phase0."""
+    """Video Manifest: one row per Zane email video, spec-compliant columns.
+
+    Reads Phase0 manifest (internal schema), transforms to SOMA_LOCKED_SPEC §6 columns:
+    subject, timestamp, filename, mapped_lesson, status (attached | raw_needs_review).
+    """
+    fieldnames = ["subject", "timestamp", "filename", "mapped_lesson", "status"]
+
     src = phase0_dir / "video_manifest.csv"
     if src.exists():
-        shutil.copy(src, accept_dir / "video_manifest.csv")
-        return accept_dir / "video_manifest.csv"
-    # Write from rows
-    fieldnames = [
-        "email_id", "subject", "file_name", "sha256", "rough_topic",
-        "proposed_module", "proposed_lesson_title", "proposed_description", "status",
-    ]
+        raw_rows = _load_video_manifest(src)
+    else:
+        raw_rows = manifest_rows
+
+    spec_rows = _transform_to_spec_manifest(raw_rows)
+
     path = accept_dir / "video_manifest.csv"
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
-        writer.writerows(manifest_rows)
+        writer.writerows(spec_rows)
     return path
 
 

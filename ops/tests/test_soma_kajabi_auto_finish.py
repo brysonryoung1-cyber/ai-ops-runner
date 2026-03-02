@@ -553,6 +553,199 @@ def test_interactive_disabled_fails_closed_no_polling(tmp_path):
     assert result.get("error_class") == "INTERACTIVE_DISABLED"
 
 
+def test_check_offer_urls_memberships_page_pass(tmp_path):
+    """_check_offer_urls returns ok when memberships_page.html contains both offer URLs."""
+    root = tmp_path / "repo"
+    discover_dir = root / "artifacts" / "soma_kajabi" / "discover" / "discover_20260301T000000Z_abc"
+    discover_dir.mkdir(parents=True)
+    html_content = """
+    <html><body>
+    <a href="/offers/q6ntyjef/checkout">Home Offer</a>
+    <a href="/offers/MHMmHyVZ/checkout">Practitioner Offer</a>
+    </body></html>
+    """
+    (discover_dir / "memberships_page.html").write_text(html_content)
+
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    spec = importlib.util.spec_from_file_location(
+        "soma_kajabi_auto_finish",
+        REPO_ROOT / "ops" / "scripts" / "soma_kajabi_auto_finish.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    status, passed = mod._check_offer_urls(root)
+    assert passed is True
+    assert status == "ok"
+
+
+def test_check_offer_urls_memberships_page_missing_offer(tmp_path):
+    """_check_offer_urls fails when memberships_page.html is missing an offer URL."""
+    root = tmp_path / "repo"
+    discover_dir = root / "artifacts" / "soma_kajabi" / "discover" / "discover_20260301T000000Z_abc"
+    discover_dir.mkdir(parents=True)
+    html_content = """
+    <html><body>
+    <a href="/offers/q6ntyjef/checkout">Home Offer</a>
+    </body></html>
+    """
+    (discover_dir / "memberships_page.html").write_text(html_content)
+
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    spec = importlib.util.spec_from_file_location(
+        "soma_kajabi_auto_finish",
+        REPO_ROOT / "ops" / "scripts" / "soma_kajabi_auto_finish.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    status, passed = mod._check_offer_urls(root)
+    assert passed is False
+    assert "FAIL" in status
+    assert "/offers/MHMmHyVZ/checkout" in status
+
+
+def test_check_offer_urls_no_memberships_page_returns_requires_human(tmp_path):
+    """_check_offer_urls returns REQUIRES_HUMAN_CONFIRMATION when no memberships_page.html exists."""
+    root = tmp_path / "repo"
+    discover_dir = root / "artifacts" / "soma_kajabi" / "discover" / "discover_20260301T000000Z_abc"
+    discover_dir.mkdir(parents=True)
+    # Only page.html (old products page), no memberships_page.html
+    (discover_dir / "page.html").write_text("<html><body>Products</body></html>")
+
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    spec = importlib.util.spec_from_file_location(
+        "soma_kajabi_auto_finish",
+        REPO_ROOT / "ops" / "scripts" / "soma_kajabi_auto_finish.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    status, passed = mod._check_offer_urls(root)
+    assert passed is True
+    assert status == "REQUIRES_HUMAN_CONFIRMATION"
+
+
+def test_check_offer_urls_no_discover_dir(tmp_path):
+    """_check_offer_urls returns REQUIRES_HUMAN_CONFIRMATION when no discover dir exists."""
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    spec = importlib.util.spec_from_file_location(
+        "soma_kajabi_auto_finish",
+        REPO_ROOT / "ops" / "scripts" / "soma_kajabi_auto_finish.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    status, passed = mod._check_offer_urls(root)
+    assert passed is True
+    assert status == "REQUIRES_HUMAN_CONFIRMATION"
+
+
+def test_fail_closed_includes_project_and_action(tmp_path):
+    """_fail_closed output includes project and action for structured logging."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "config").mkdir()
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    spec = importlib.util.spec_from_file_location(
+        "soma_kajabi_auto_finish",
+        REPO_ROOT / "ops" / "scripts" / "soma_kajabi_auto_finish.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod._repo_root = lambda: root
+
+    mod._fail_closed(out_dir, "test_run", "TEST_ERROR", "test message")
+
+    summary = json.loads((out_dir / "SUMMARY.json").read_text())
+    assert summary["project"] == "soma_kajabi"
+    assert summary["action"] == "soma_kajabi_auto_finish"
+    assert summary["run_id"] == "test_run"
+
+
+def test_mirror_fail_closed_default(tmp_path):
+    """Mirror gate defaults to FAIL (not PASS) when pass key is missing."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "config").mkdir()
+    _setup_ops_scripts(root)
+    (root / "artifacts" / "soma_kajabi" / "phase0").mkdir(parents=True)
+    (root / "artifacts" / "soma_kajabi" / "zane_finish_plan").mkdir(parents=True)
+    (root / "artifacts" / "soma_kajabi" / "auto_finish").mkdir(parents=True)
+
+    phase0_dir = root / "artifacts" / "soma_kajabi" / "phase0" / "phase0_test"
+    phase0_dir.mkdir()
+    (phase0_dir / "kajabi_library_snapshot.json").write_text(
+        json.dumps({"home": {"modules": [], "lessons": []}, "practitioner": {"modules": [], "lessons": []}})
+    )
+    (phase0_dir / "video_manifest.csv").write_text(
+        "email_id,subject,file_name,sha256,rough_topic,proposed_module,proposed_lesson_title,proposed_description,status\n"
+    )
+    finish_dir = root / "artifacts" / "soma_kajabi" / "zane_finish_plan" / "zane_test"
+    finish_dir.mkdir()
+    (finish_dir / "PUNCHLIST.md").write_text("# Punchlist\n")
+    (finish_dir / "PUNCHLIST.csv").write_text("id,category,priority,title\n")
+    (finish_dir / "SUMMARY.json").write_text('{"ok":true,"run_id":"zane_test"}')
+
+    storage = tmp_path / "storage.json"
+    storage.write_text('{"cookies":[]}')
+
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+
+    spec = importlib.util.spec_from_file_location(
+        "soma_kajabi_auto_finish",
+        REPO_ROOT / "ops" / "scripts" / "soma_kajabi_auto_finish.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["soma_kajabi_auto_finish"] = mod
+
+    def mock_run(cmd, timeout=600, stream_stderr=False):
+        cmd_str = " ".join(str(x) for x in cmd)
+        if "connectors_status" in cmd_str:
+            return 0, json.dumps({"kajabi": "connected"})
+        if "phase0_runner" in cmd_str:
+            return 0, json.dumps({"ok": True, "run_id": phase0_dir.name})
+        if "zane_finish_plan" in cmd_str:
+            return 0, json.dumps({"ok": True, "run_id": finish_dir.name})
+        return 1, "{}"
+
+    def mock_write_acceptance(root, run_id, phase0_dir):
+        accept_dir = root / "artifacts" / "soma_kajabi" / "acceptance" / run_id
+        accept_dir.mkdir(parents=True, exist_ok=True)
+        for name in ["final_library_snapshot.json", "video_manifest.csv", "mirror_report.json", "changelog.md"]:
+            (accept_dir / name).write_text("{}" if name.endswith(".json") else "test")
+        return accept_dir, {"exceptions_count": 0}
+
+    spec.loader.exec_module(mod)
+    mod.STORAGE_STATE_PATH = storage
+    mod.EXIT_NODE_CONFIG = tmp_path / "nonexistent.txt"
+    mod._repo_root = lambda: root
+    mod._run = mock_run
+    mod._run_with_exit_node = lambda c, t: mock_run(c, t)
+
+    from unittest.mock import patch as _patch
+    with _patch("services.soma_kajabi.acceptance_artifacts.write_acceptance_artifacts", side_effect=mock_write_acceptance):
+        rc = mod.main()
+
+    assert rc == 1
+    out_dir = next((root / "artifacts" / "soma_kajabi" / "auto_finish").iterdir())
+    summary = json.loads((out_dir / "SUMMARY.json").read_text())
+    assert summary["ok"] is False
+    assert summary["error_class"] == "MIRROR_EXCEPTIONS_NON_EMPTY"
+
+
 def test_reauth_timeout_emits_artifact_bundle(tmp_path):
     """When session_check timeout occurs -> KAJABI_REAUTH_TIMEOUT + reauth_timeout_bundle.json emitted."""
     root = tmp_path / "repo"

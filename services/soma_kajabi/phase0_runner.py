@@ -749,13 +749,21 @@ def main() -> int:
     else:
         from .connector_config import GMAIL_OAUTH_PATH
         oauth_path = cfg.get("gmail", {}).get("auth_secret_ref") or str(GMAIL_OAUTH_PATH)
-        _write_gmail_harvest_skipped(out_dir, f"oauth token not found at {oauth_path}")
+        skip_reason = f"Gmail OAuth token not found at {oauth_path}; video manifest will be empty."
+        _write_gmail_harvest_skipped(out_dir, skip_reason)
         emails = []
-        harvest_ok = True  # Skipped is not a failure for overall Phase0
+        harvest_ok = True
         harvest_next = None
         gmail_status_val = "skipped"
-        gmail_reason_val = f"oauth token not found at {oauth_path}"
+        gmail_reason_val = skip_reason
         _write_phase0_stage(out_dir, "phase0_harvest", "skipped")
+        print(json.dumps({
+            "gmail_harvest": "skipped",
+            "run_id": run_id,
+            "project": "soma_kajabi",
+            "action": "soma_kajabi_phase0",
+            "reason": skip_reason,
+        }), file=sys.stderr)
 
     # Manifest
     _write_phase0_stage(out_dir, "phase0_manifest", "running")
@@ -810,6 +818,8 @@ def main() -> int:
     out_doc: dict[str, Any] = {
         "ok": ok,
         "run_id": run_id,
+        "project": "soma_kajabi",
+        "action": "soma_kajabi_phase0",
         "artifact_paths": artifact_paths,
         "error_class": error_class,
         "recommended_next_action": rec,

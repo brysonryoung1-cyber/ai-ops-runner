@@ -33,6 +33,8 @@ from pathlib import Path
 STORAGE_STATE_PATH = Path("/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json")
 KAJABI_PRODUCTS_PATH = Path("/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_products.json")
 TARGET_PRODUCTS = ["Home User Library", "Practitioner Library"]
+MEMBERSHIPS_PAGE_URL = "https://zane-mccourtney.mykajabi.com/memberships-soma"
+REQUIRED_OFFER_URLS = ["/offers/q6ntyjef/checkout", "/offers/MHMmHyVZ/checkout"]
 
 
 def _now_iso() -> str:
@@ -189,7 +191,10 @@ def main() -> int:
             pass
 
         # Extract product links: name → slug/url (page is already on products list from bootstrap)
+        # Prefer role/text selectors, fall back to href selectors for resilience
         seen: set[str] = set()
+
+        # Strategy 1: Links containing product hrefs (stable — href structure is Kajabi platform)
         for el in page.query_selector_all('a[href*="/products/"], a[href*="/admin/products/"]'):
             try:
                 href = el.get_attribute("href") or ""
@@ -208,25 +213,71 @@ def main() -> int:
             except Exception:
                 pass
 
-        # Also try table rows / list items with product names
+        # Strategy 2: Rows with role="row" or table rows (ARIA-first, then structural)
         if len(products_map) < len(TARGET_PRODUCTS):
-            for row in page.query_selector_all('tr, [role="row"], [class*="product-row"], [class*="ProductRow"]'):
+            row_selectors = [
+                '[role="row"]',
+                'tr',
+                '[data-testid*="product"]',
+                '[class*="product-row"]',
+                '[class*="ProductRow"]',
+            ]
+            for row_sel in row_selectors:
+                if len(products_map) >= len(TARGET_PRODUCTS):
+                    break
+                for row in page.query_selector_all(row_sel):
+                    try:
+                        link = row.query_selector('a[href*="/products/"]')
+                        if not link:
+                            continue
+                        href = link.get_attribute("href") or ""
+                        text = (row.inner_text() or link.inner_text() or "").strip()[:150]
+                        slug = _extract_slug_from_url(href)
+                        if not slug:
+                            continue
+                        matched = _match_product_name(text, TARGET_PRODUCTS)
+                        if matched and matched not in products_map:
+                            base = site_origin or "https://zane-mccourtney.mykajabi.com"
+                            full_url = href if href.startswith("http") else f"{base}{href}" if href.startswith("/") else f"{base}/admin/products/{slug}"
+                            products_map[matched] = {"slug": slug, "url": full_url, "display_name": text}
+                    except Exception:
+                        pass
+
+        # Strategy 3: get_by_role for target product names (Playwright high-level API)
+        if len(products_map) < len(TARGET_PRODUCTS):
+            for target in TARGET_PRODUCTS:
+                if target in products_map:
+                    continue
                 try:
-                    link = row.query_selector('a[href*="/products/"]')
-                    if not link:
-                        continue
-                    href = link.get_attribute("href") or ""
-                    text = (row.inner_text() or link.inner_text() or "").strip()[:150]
-                    slug = _extract_slug_from_url(href)
-                    if not slug:
-                        continue
-                    matched = _match_product_name(text, TARGET_PRODUCTS)
-                    if matched and matched not in products_map:
-                        base = site_origin or "https://zane-mccourtney.mykajabi.com"
-                        full_url = href if href.startswith("http") else f"{base}{href}" if href.startswith("/") else f"{base}/admin/products/{slug}"
-                        products_map[matched] = {"slug": slug, "url": full_url, "display_name": text}
+                    link = page.get_by_role("link", name=target)
+                    if link.count() > 0:
+                        href = link.first.get_attribute("href") or ""
+                        slug = _extract_slug_from_url(href)
+                        if slug:
+                            base = site_origin or "https://zane-mccourtney.mykajabi.com"
+                            full_url = href if href.startswith("http") else f"{base}{href}" if href.startswith("/") else f"{base}/admin/products/{slug}"
+                            products_map[target] = {"slug": slug, "url": full_url, "display_name": target}
                 except Exception:
                     pass
+
+        # Capture memberships page for offer URL validation (SOMA_LOCKED_SPEC §9)
+        memberships_page_captured = False
+        try:
+            page.goto(MEMBERSHIPS_PAGE_URL, wait_until="load", timeout=30000)
+            page.wait_for_load_state("networkidle", timeout=10000)
+            memberships_content = page.content() or ""
+            (out_dir / "memberships_page.html").write_text(
+                memberships_content[:131072], encoding="utf-8"
+            )
+            safe_screenshot(page, str(out_dir / "memberships_screenshot.png"))
+            offer_urls_found = [u for u in REQUIRED_OFFER_URLS if u in memberships_content]
+            memberships_page_captured = True
+        except Exception:
+            try:
+                (out_dir / "memberships_page.html").write_text("(capture failed)", encoding="utf-8")
+            except Exception:
+                pass
+            offer_urls_found = []
 
         browser.close()
 
@@ -246,6 +297,9 @@ def main() -> int:
         "product_count": len(products_output),
         "targets_found": list(products_output.keys()),
         "targets_missing": [t for t in TARGET_PRODUCTS if t not in products_output],
+        "memberships_page_captured": memberships_page_captured,
+        "offer_urls_found": offer_urls_found,
+        "offer_urls_required": REQUIRED_OFFER_URLS,
     }
     (out_dir / "debug.json").write_text(json.dumps(debug_doc, indent=2))
     (out_dir / "products.json").write_text(json.dumps({"products": products_output, "captured_at": captured_at}, indent=2))
@@ -269,6 +323,8 @@ def main() -> int:
         "products_found": list(products_output.keys()),
         "products_missing": [t for t in TARGET_PRODUCTS if t not in products_output],
         "product_count": len(products_output),
+        "memberships_page_captured": memberships_page_captured,
+        "offer_urls_found": offer_urls_found,
     }))
     return 0
 

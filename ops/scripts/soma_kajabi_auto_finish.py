@@ -25,8 +25,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Required offer URLs per SOMA_LOCKED_SPEC (fail-closed if not found when checkable)
+# Required offer URLs per SOMA_LOCKED_SPEC (fail-closed if not found on memberships page)
 REQUIRED_OFFER_URLS = ["/offers/q6ntyjef/checkout", "/offers/MHMmHyVZ/checkout"]
+MEMBERSHIPS_PAGE_PATH = "/memberships-soma"
 
 KAJABI_CLOUDFLARE_BLOCKED = "KAJABI_CLOUDFLARE_BLOCKED"
 KAJABI_CAPTURE_INTERACTIVE_FAILED = "KAJABI_CAPTURE_INTERACTIVE_FAILED"
@@ -105,7 +106,12 @@ def _get_build_sha(root: Path) -> str:
 
 
 def _reauth_poll_timeout() -> int:
-    """25 min default; override via SOMA_KAJABI_REAUTH_POLL_TIMEOUT for tests."""
+    """25 min default; override via SOMA_KAJABI_REAUTH_POLL_TIMEOUT (seconds).
+
+    Configurable to extend for slow 2FA flows or reduce for tests.
+    On timeout, the run fails closed with KAJABI_REAUTH_TIMEOUT — re-trigger
+    soma_run_to_done to retry after the human has completed login.
+    """
     return int(os.environ.get("SOMA_KAJABI_REAUTH_POLL_TIMEOUT", str(25 * 60)))
 
 
@@ -180,22 +186,30 @@ def _parse_last_json_line(text: str) -> dict:
 
 
 def _check_offer_urls(root: Path) -> tuple[str, bool]:
-    """Check required offer URLs. Returns (status, pass).
+    """Check required offer URLs against the memberships page (per SOMA_LOCKED_SPEC §9).
+
+    Returns (status, pass).
     status: 'ok' | 'REQUIRES_HUMAN_CONFIRMATION' | 'FAIL:<reason>'
+
+    Prefers memberships_page.html (captured from /memberships-soma).
+    Falls back to REQUIRES_HUMAN_CONFIRMATION when no memberships page artifact exists.
+    Never checks the products admin page (page.html) — that was the wrong source.
     """
     discover_base = root / "artifacts" / "soma_kajabi" / "discover"
     if not discover_base.exists():
-        return "REQUIRES_HUMAN_CONFIRMATION", True  # Can't check, don't fail
-    dirs = sorted([d for d in discover_base.iterdir() if d.is_dir()], key=lambda d: d.name, reverse=True)
+        return "REQUIRES_HUMAN_CONFIRMATION", True
+    dirs = sorted(
+        [d for d in discover_base.iterdir() if d.is_dir()],
+        key=lambda d: d.name,
+        reverse=True,
+    )
     for d in dirs[:3]:
-        page_html = d / "page.html"
-        products_json = d / "products.json"
-        if page_html.exists():
-            content = page_html.read_text(errors="replace")
-            found = [u for u in REQUIRED_OFFER_URLS if u in content]
-            if len(found) < len(REQUIRED_OFFER_URLS):
-                missing = [u for u in REQUIRED_OFFER_URLS if u not in content]
-                return f"FAIL: Offer URLs not found on page: {missing}", False
+        memberships_html = d / "memberships_page.html"
+        if memberships_html.exists():
+            content = memberships_html.read_text(errors="replace")
+            missing = [u for u in REQUIRED_OFFER_URLS if u not in content]
+            if missing:
+                return f"FAIL: Offer URLs not found on memberships page: {missing}", False
             return "ok", True
     return "REQUIRES_HUMAN_CONFIRMATION", True
 
@@ -222,6 +236,8 @@ def _fail_closed(out_dir: Path, run_id: str, error_class: str, message: str) -> 
     summary = {
         "ok": False,
         "run_id": run_id,
+        "project": "soma_kajabi",
+        "action": "soma_kajabi_auto_finish",
         "error_class": error_class,
         "message": message,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
@@ -647,22 +663,26 @@ def _run_main(root: Path, out_dir: Path, run_id: str, result_state: dict[str, ob
                 time.sleep(SESSION_CHECK_POLL_INTERVAL)
 
             if not session_passed:
-                # Timeout: fail-closed with KAJABI_REAUTH_TIMEOUT + artifact bundle
+                timeout_min = _reauth_poll_timeout() // 60
+                timeout_msg = (
+                    f"Human reauth timed out. session_check did not PASS within {timeout_min} minutes. "
+                    "Complete Kajabi login via noVNC, then re-trigger soma_run_to_done to retry."
+                )
                 write_stage(out_dir, "session_check", "failed", last_error_class=KAJABI_REAUTH_TIMEOUT)
                 bundle = {
                     "run_id": run_id,
+                    "project": "soma_kajabi",
+                    "action": "soma_kajabi_auto_finish",
                     "error_class": KAJABI_REAUTH_TIMEOUT,
-                    "message": "Human reauth timed out. session_check did not PASS within 25 minutes.",
+                    "message": timeout_msg,
                     "artifact_dir": str(out_dir),
                     "waiting_for_human_artifact": str(out_dir / "WAITING_FOR_HUMAN.json"),
+                    "retry_action": "Re-trigger soma_run_to_done after completing Kajabi login.",
                     "timestamp_utc": datetime.now(timezone.utc).isoformat(),
                 }
                 (out_dir / "reauth_timeout_bundle.json").write_text(json.dumps(bundle, indent=2))
-                set_result("TIMEOUT", stage="session_check", error_class=KAJABI_REAUTH_TIMEOUT, message="Human reauth timed out. session_check did not PASS within 25 minutes.")
-                return _fail_closed(
-                    out_dir, run_id, KAJABI_REAUTH_TIMEOUT,
-                    "Human reauth timed out. session_check did not PASS within 25 minutes."
-                )
+                set_result("TIMEOUT", stage="session_check", error_class=KAJABI_REAUTH_TIMEOUT, message=timeout_msg)
+                return _fail_closed(out_dir, run_id, KAJABI_REAUTH_TIMEOUT, timeout_msg)
             # session_check PASS → retry phase0 (continue loop)
             continue
 
@@ -712,9 +732,14 @@ def _run_main(root: Path, out_dir: Path, run_id: str, result_state: dict[str, ob
                     append_summary_line(out_dir, "[session_check] PASS - resuming pipeline")
                     continue
                 time.sleep(SESSION_CHECK_POLL_INTERVAL)
+            timeout_min = _reauth_poll_timeout() // 60
+            timeout_msg = (
+                f"Human reauth timed out ({timeout_min} min). session_check did not PASS. "
+                "Complete Kajabi login via noVNC, then re-trigger soma_run_to_done to retry."
+            )
             write_stage(out_dir, "session_check", "failed", last_error_class=KAJABI_REAUTH_TIMEOUT)
-            set_result("TIMEOUT", stage="session_check", error_class=KAJABI_REAUTH_TIMEOUT, message="Human reauth timed out.")
-            return _fail_closed(out_dir, run_id, KAJABI_REAUTH_TIMEOUT, "Human reauth timed out. session_check did not PASS.")
+            set_result("TIMEOUT", stage="session_check", error_class=KAJABI_REAUTH_TIMEOUT, message=timeout_msg)
+            return _fail_closed(out_dir, run_id, KAJABI_REAUTH_TIMEOUT, timeout_msg)
         write_stage(out_dir, "phase0", "failed", last_error_class=error_class or "PHASE0_FAILED")
         set_result("FAILURE", stage="phase0", error_class=error_class or "PHASE0_FAILED", message=doc.get("recommended_next_action", phase0_out[:500]) or "Phase0 failed")
         return _fail_closed(
@@ -783,8 +808,8 @@ def _run_main(root: Path, out_dir: Path, run_id: str, result_state: dict[str, ob
         set_result("FAILURE", stage="acceptance_gate", error_class="ACCEPTANCE_ARTIFACTS_FAILED", message=str(e)[:200])
         return _fail_closed(out_dir, run_id, "ACCEPTANCE_ARTIFACTS_FAILED", str(e)[:200])
 
-    # ── E3) Fail-closed gates (mirror_exceptions empty required) ──
-    if not accept_summary.get("pass", True):
+    # ── E3) Fail-closed gates (mirror_exceptions must be empty per SOMA_LOCKED_SPEC §7) ──
+    if not accept_summary.get("pass", False):
         mirror_path = accept_dir / "mirror_report.json"
         diff_summary = ""
         if mirror_path.exists():
