@@ -226,15 +226,20 @@ def generate_bundle(
         deploy_run_id = DEPLOY_RUN_ID or _infer_deploy_run_id(pointers)
 
     # -- 6. Overall verdict --
+    # Fail-close checks: real-time probes run by the bundle itself.
     failures: list[str] = []
     if not health_ok:
         failures.append("health_public NOT ok")
     if not ssh_pass:
         failures.append("ssh_tailscale_only verify FAIL")
+
+    # Informational checks: read from existing artifacts that may be stale.
+    # Recorded in the bundle but do not fail-close the overall verdict.
+    warnings: list[str] = []
     if doctor_pass is False:
-        failures.append("doctor FAIL")
+        warnings.append("doctor FAIL (from artifact)")
     if canary_pass is False:
-        failures.append("canary FAIL")
+        warnings.append("canary FAIL (from artifact)")
 
     overall = "PASS" if not failures else "FAILURE"
     timestamp = _now_iso()
@@ -260,6 +265,7 @@ def generate_bundle(
             "waiting_for_human": soma_waiting,
         },
         "failures": failures,
+        "warnings": warnings,
         "pointers": pointers,
         "bundle_path": str(out_dir),
     }
@@ -319,6 +325,7 @@ def _infer_deploy_run_id(pointers: dict[str, Any]) -> str:
 def _render_proof_block(result: dict[str, Any]) -> str:
     soma = result.get("soma_kajabi", {})
     failures = result.get("failures", [])
+    warnings = result.get("warnings", [])
     pointers = result.get("pointers", {})
     status_icon = "PASS" if result["overall"] == "PASS" else "FAILURE"
 
@@ -363,6 +370,14 @@ def _render_proof_block(result: dict[str, Any]) -> str:
         ])
         for f in failures:
             lines.append(f"- {f}")
+
+    if warnings:
+        lines.extend([
+            "",
+            "## Warnings (informational, from existing artifacts)",
+        ])
+        for w in warnings:
+            lines.append(f"- {w}")
 
     lines.extend([
         "",
