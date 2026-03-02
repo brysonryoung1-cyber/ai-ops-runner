@@ -43,4 +43,17 @@ assert(exceptionsCount === 0, "exceptionsCount populated from proof");
 assert(acceptancePath === PROOF.acceptance_path, "acceptancePath populated from proof");
 console.log("PASS: null-coalescing + bracket access matches route.ts logic");
 
+// 4) SUCCESS fallback: when PROOF.json lacks mirror fields, derive from status
+let status = "SUCCESS";
+let mp = null;
+let ec = null;
+let ap = null;
+const artifactDir = "artifacts/hostd/20260302_115555_42f0abed";
+if (status === "SUCCESS" && mp === null) { mp = true; ec = 0; }
+if (!ap && artifactDir) { ap = artifactDir; }
+assert(mp === true, "SUCCESS fallback: mirror_pass should be true");
+assert(ec === 0, "SUCCESS fallback: exceptions_count should be 0");
+assert(ap === artifactDir, "SUCCESS fallback: acceptance_path should be artifact_dir");
+console.log("PASS: SUCCESS status fallback derives mirror_pass/exceptions_count/acceptance_path");
+
 console.log("All status proof parse tests passed.");

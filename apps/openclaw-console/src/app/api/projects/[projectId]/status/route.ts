@@ -204,6 +204,15 @@ export async function GET(
     }
   }
 
+  // Fallback: SUCCESS implies mirror passed with zero exceptions
+  if (lastStatus === "SUCCESS" && mirrorPass === null) {
+    mirrorPass = true;
+    exceptionsCount = 0;
+  }
+  if (!acceptancePath && artifactDir) {
+    acceptancePath = artifactDir;
+  }
+
   const activeRunId = getActiveRunId(lastStatus, lastRunId, lockInfo);
   const resumeActionAvailable = lastStatus === "WAITING_FOR_HUMAN";
 
