@@ -63,6 +63,15 @@ def test_install_openclaw_hostd_enables_hostd_watchdog_timer():
     ), "installer must enable hostd watchdog timer"
 
 
+def test_install_openclaw_hostd_does_not_force_enable_human_gate():
+    """Installer must not hardcode human gate enablement in runtime paths."""
+    with open(INSTALL_SCRIPT) as f:
+        content = f.read()
+    assert "OPENCLAW_ENABLE_HUMAN_GATE=1" not in content, (
+        "install_openclaw_hostd.sh must not force-enable OPENCLAW_ENABLE_HUMAN_GATE=1"
+    )
+
+
 def test_hostd_watchdog_no_secrets_in_script():
     """hostd_watchdog.sh must not log secrets (logger only, no raw env)."""
     with open(HOSTD_WATCHDOG_SCRIPT) as f:
