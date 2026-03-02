@@ -91,7 +91,8 @@ fi
 
 # --- Test 11: Review pipeline uses JSON response format ---
 # response_format may be in the bash script or the Python review_gate module
-REVIEW_GATE="$ROOT_DIR/src/llm/review_gate.py"
+_REPO_ROOT="$(cd "$OPS_DIR/.." && pwd)"
+REVIEW_GATE="$_REPO_ROOT/src/llm/review_gate.py"
 if grep -q "json_object\|response_format" "$REVIEW" 2>/dev/null || grep -q "json_object\|response_format" "$REVIEW_GATE" 2>/dev/null; then
   pass "Review pipeline requests JSON response format"
 else
