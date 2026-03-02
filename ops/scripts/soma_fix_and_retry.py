@@ -14,17 +14,11 @@ import sys
 import time
 from pathlib import Path
 
+# Shared trigger client — single source of truth for exec POST + status handling
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from ops.lib.exec_trigger import hq_request, trigger_exec  # noqa: E402
+
 HQ_BASE = os.environ.get("OPENCLAW_HQ_BASE", "http://127.0.0.1:8787")
-ADMIN_TOKEN = ""
-for p in (
-    "/etc/ai-ops-runner/secrets/openclaw_admin_token",
-    "/etc/ai-ops-runner/secrets/openclaw_console_token",
-    "/etc/ai-ops-runner/secrets/openclaw_api_token",
-    "/etc/ai-ops-runner/secrets/openclaw_token",
-):
-    if Path(p).exists():
-        ADMIN_TOKEN = Path(p).read_text().strip()
-        break
 
 DOCTOR_TIMEOUT = 90
 
@@ -41,26 +35,6 @@ def _repo_root() -> Path:
             break
         cwd = cwd.parent
     return Path(env or "/opt/ai-ops-runner")
-
-
-def _curl(method: str, path: str, data: dict | None = None, timeout: int = 30) -> tuple[int, str]:
-    import urllib.request
-    import urllib.error
-
-    url = f"{HQ_BASE.rstrip('/')}{path}"
-    headers = {"Content-Type": "application/json"}
-    if ADMIN_TOKEN:
-        headers["X-OpenClaw-Token"] = ADMIN_TOKEN
-    req = urllib.request.Request(url, method=method, headers=headers)
-    if data:
-        req.data = json.dumps(data).encode("utf-8")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8") if e.fp else ""
-    except Exception as e:
-        return -1, str(e)
 
 
 def _run_doctor(root: Path) -> bool:
@@ -86,11 +60,41 @@ def _run_doctor(root: Path) -> bool:
         return False
 
 
+def _trigger_soma_run_to_done() -> int:
+    """Trigger soma_run_to_done via the shared client. Returns exit code."""
+    tr = trigger_exec("soma_kajabi", "soma_run_to_done")
+    if tr.state == "ACCEPTED":
+        run_id = tr.run_id or ""
+        print(json.dumps({
+            "ok": True,
+            "run_id": run_id,
+            "status": "triggered",
+            "message": "soma_run_to_done triggered. Poll /api/runs?id=" + run_id,
+        }))
+        return 0
+    if tr.state == "ALREADY_RUNNING":
+        print(json.dumps({
+            "ok": False,
+            "error_class": "ALREADY_RUNNING",
+            "message": f"Run already in progress for project=soma_kajabi. Not starting a second run.",
+            "active_run_id": tr.run_id or "(unknown)",
+        }))
+        return 0
+    print(json.dumps({
+        "ok": False,
+        "error_class": "TRIGGER_FAILED",
+        "message": tr.message,
+        "project": "soma_kajabi",
+        "action": "soma_run_to_done",
+    }))
+    return 1
+
+
 def main() -> int:
     root = _repo_root()
 
     # 1. Check lock — if soma_run_to_done active, refuse
-    code, body = _curl("GET", "/api/exec?check=lock&action=soma_run_to_done", timeout=5)
+    code, body = hq_request("GET", "/api/exec?check=lock&action=soma_run_to_done", timeout=5)
     if code == 200:
         try:
             data = json.loads(body)
@@ -105,7 +109,7 @@ def main() -> int:
             pass
 
     # 2. Hostd reachable
-    code, _ = _curl("GET", "/api/exec?check=connectivity", timeout=10)
+    code, _ = hq_request("GET", "/api/exec?check=connectivity", timeout=10)
     if code != 200:
         print(json.dumps({
             "ok": False,
@@ -116,27 +120,11 @@ def main() -> int:
 
     # 3. Doctor (DEEP)
     if _run_doctor(root):
-        # Doctor PASS — trigger soma_run_to_done
-        code, body = _curl("POST", "/api/exec", data={"action": "soma_run_to_done"}, timeout=10)
-        if code in (200, 202):
-            try:
-                data = json.loads(body)
-                run_id = data.get("run_id", "")
-                print(json.dumps({
-                    "ok": True,
-                    "run_id": run_id,
-                    "status": "triggered",
-                    "message": "soma_run_to_done triggered. Poll /api/runs?id=" + run_id,
-                }))
-                return 0
-            except json.JSONDecodeError:
-                pass
-        print(json.dumps({"ok": False, "error_class": "TRIGGER_FAILED", "message": body[:200]}))
-        return 1
+        return _trigger_soma_run_to_done()
 
     # 4. Recovery chain: shm_fix → restart → doctor
-    code, _ = _curl("POST", "/api/exec", data={"action": "openclaw_novnc_shm_fix"}, timeout=200)
-    if code not in (200, 202):
+    tr = trigger_exec("system", "openclaw_novnc_shm_fix", timeout=200)
+    if tr.state == "FAILED":
         print(json.dumps({
             "ok": False,
             "error_class": "SHM_FIX_FAILED",
@@ -145,8 +133,8 @@ def main() -> int:
         return 1
 
     time.sleep(5)
-    code, _ = _curl("POST", "/api/exec", data={"action": "openclaw_novnc_restart"}, timeout=30)
-    if code not in (200, 202):
+    tr = trigger_exec("system", "openclaw_novnc_restart", timeout=30)
+    if tr.state == "FAILED":
         print(json.dumps({
             "ok": False,
             "error_class": "NOVNC_RESTART_FAILED",
@@ -164,23 +152,7 @@ def main() -> int:
         return 1
 
     # 5. Doctor PASS — trigger soma_run_to_done
-    code, body = _curl("POST", "/api/exec", data={"action": "soma_run_to_done"}, timeout=10)
-    if code in (200, 202):
-        try:
-            data = json.loads(body)
-            run_id = data.get("run_id", "")
-            print(json.dumps({
-                "ok": True,
-                "run_id": run_id,
-                "status": "triggered",
-                "message": "Recovery chain completed. soma_run_to_done triggered.",
-            }))
-            return 0
-        except json.JSONDecodeError:
-            pass
-
-    print(json.dumps({"ok": False, "error_class": "TRIGGER_FAILED", "message": body[:200]}))
-    return 1
+    return _trigger_soma_run_to_done()
 
 
 if __name__ == "__main__":
