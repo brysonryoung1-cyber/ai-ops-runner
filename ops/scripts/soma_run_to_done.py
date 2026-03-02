@@ -111,6 +111,24 @@ def _precheck_hostd() -> bool:
     return code == 200
 
 
+def _run_autorecover(root: Path) -> bool:
+    """Invoke novnc_autorecover.py once. Return True if it fixed the issue."""
+    autorecover = root / "ops" / "scripts" / "novnc_autorecover.py"
+    if not autorecover.exists():
+        return False
+    try:
+        r = subprocess.run(
+            [sys.executable, str(autorecover)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd=str(root),
+        )
+        return r.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
 def _precheck_novnc(root: Path, retry_after_restart: bool = True) -> bool:
     doctor = root / "ops" / "openclaw_novnc_doctor.sh"
     if not doctor.exists() or not os.access(doctor, os.X_OK):
@@ -141,6 +159,10 @@ def _precheck_novnc(root: Path, retry_after_restart: bool = True) -> bool:
         tr = trigger_exec("system", "openclaw_novnc_restart", timeout=10)
         if tr.state == "ACCEPTED":
             time.sleep(15)
+            if _run_doctor():
+                return True
+        # Restart+doctor failed: invoke autorecover once
+        if _run_autorecover(root):
             return _run_doctor()
     return False
 

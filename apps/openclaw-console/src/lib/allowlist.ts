@@ -51,7 +51,8 @@ export type ActionName =
   | "openclaw_novnc_shm_fix"
   | "openclaw_novnc_routing_fix"
   | "soma_novnc_oneclick_recovery"
-  | "soma_fix_and_retry";
+  | "soma_fix_and_retry"
+  | "openclaw_novnc_autorecover";
 
 export interface AllowedAction {
   name: ActionName;
@@ -442,6 +443,14 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
       "Deterministic recovery: shm_fix → restart noVNC → doctor (DEEP) → soma_run_to_done. One-click recovery.",
     remoteCommand: "cd /opt/ai-ops-runner && .venv-hostd/bin/python ./ops/scripts/soma_fix_and_retry.py",
     timeoutSec: 2400,
+  },
+  openclaw_novnc_autorecover: {
+    name: "openclaw_novnc_autorecover",
+    label: "noVNC Autorecover",
+    description:
+      "Automatic noVNC recovery: doctor→shm_fix→restart→routing_fix→restart→doctor(DEEP). Emits fixpack on unrecoverable failure.",
+    remoteCommand: "cd /opt/ai-ops-runner && python3 ./ops/scripts/novnc_autorecover.py",
+    timeoutSec: 180,
   },
 };
 

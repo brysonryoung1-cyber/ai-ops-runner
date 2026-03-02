@@ -181,11 +181,24 @@ echo ""
 if [ "$REMEDIATE" -eq 1 ]; then
   echo "==> Remediation: one reconcile cycle"
   PLAYBOOK="recover_hq_routing"
+  NOVNC_FAILURE=0
   if echo "$FAILED_INVARIANT" | grep -q "novnc\|ws_probe"; then
     PLAYBOOK="recover_novnc_ws"
+    NOVNC_FAILURE=1
   elif echo "$FAILED_INVARIANT" | grep -q "frontdoor\|serve"; then
     PLAYBOOK="reconcile_frontdoor_serve"
   fi
+
+  # For noVNC failures: run autorecover first (covers shm, routing, doctor)
+  if [ "$NOVNC_FAILURE" -eq 1 ] && [ -f "$ROOT_DIR/ops/scripts/novnc_autorecover.py" ]; then
+    echo "  Running novnc_autorecover..."
+    OPENCLAW_RUN_ID="${RUN_ID}_autorecover" python3 "$ROOT_DIR/ops/scripts/novnc_autorecover.py" > "$CANARY_DIR/autorecover.log" 2>&1 && {
+      echo "  novnc_autorecover: PASS"
+    } || {
+      echo "  novnc_autorecover: FAIL (falling through to playbook)"
+    }
+  fi
+
   case "$PLAYBOOK" in
     reconcile_frontdoor_serve) bash "$ROOT_DIR/ops/playbooks/reconcile_frontdoor_serve.sh" > "$CANARY_DIR/playbook.log" 2>&1 || true; tail -3 "$CANARY_DIR/playbook.log" 2>/dev/null || true ;;
     recover_novnc_ws)         bash "$ROOT_DIR/ops/playbooks/recover_novnc_ws.sh" > "$CANARY_DIR/playbook.log" 2>&1 || true; tail -3 "$CANARY_DIR/playbook.log" 2>/dev/null || true ;;
@@ -203,10 +216,17 @@ if [ "$REMEDIATE" -eq 1 ]; then
     echo "  Remediation: PASS (checks recovered)"
     REMEDIATE=0
   else
-    echo "  Remediation: FAIL (still degraded)"
+    echo "  Remediation: FAIL (still degraded after autorecover + playbook)"
     INC_ID="incident_canary_${RUN_ID}"
     write_incident "$INC_ID" "DEGRADED" "Canary failed: $FAILED_INVARIANT. Proof: $CANARY_DIR"
-    echo '{"status":"DEGRADED","run_id":"'"$RUN_ID"'","failed_invariant":"'"$FAILED_INVARIANT"'","incident_id":"'"$INC_ID"'","proof":"'"$CANARY_DIR"'/PROOF.md"}' > "$CANARY_DIR/result.json"
+    # Emit fixpack for noVNC failures so CSR can pick up structured triage
+    if [ "$NOVNC_FAILURE" -eq 1 ] && [ -f "$ROOT_DIR/ops/scripts/novnc_fixpack_emit.sh" ]; then
+      FIXPACK_DIR="$CANARY_DIR/fixpack"
+      mkdir -p "$FIXPACK_DIR"
+      bash "$ROOT_DIR/ops/scripts/novnc_fixpack_emit.sh" "$FIXPACK_DIR" "novnc_audit_failed" "canary_novnc_check" "run novnc_autorecover or escalate" \
+        "novnc_audit:$CANARY_DIR/novnc_audit.json" "novnc_audit_retry:$CANARY_DIR/novnc_audit_retry.json" 2>/dev/null || true
+    fi
+    echo '{"status":"DEGRADED","run_id":"'"$RUN_ID"'","failed_invariant":"'"$FAILED_INVARIANT"'","incident_id":"'"$INC_ID"'","proof":"'"$CANARY_DIR"'/PROOF.md","fixpack_path":"'"${FIXPACK_DIR:-}"'"}' > "$CANARY_DIR/result.json"
     # Notify: canary degraded (N consecutive failures tracked via incident ledger)
     CONSECUTIVE=$(ls -1dt "$ARTIFACTS/system/canary"/*/result.json 2>/dev/null | head -5 | while read f; do
       grep -q '"status":"DEGRADED"' "$f" 2>/dev/null && echo 1; done | wc -l)
