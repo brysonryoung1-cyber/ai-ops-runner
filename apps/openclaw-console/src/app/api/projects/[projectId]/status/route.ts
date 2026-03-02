@@ -213,6 +213,31 @@ export async function GET(
     acceptancePath = artifactDir;
   }
 
+  // Business DoD from latest business_dod artifact
+  let businessDodPass: boolean | null = null;
+  let businessDodPath: string | null = null;
+  const bdodRoot = join(artifactsRoot, "soma_kajabi", "business_dod");
+  if (existsSync(bdodRoot)) {
+    const bdodDirs = readdirSync(bdodRoot, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort()
+      .reverse();
+    for (const d of bdodDirs.slice(0, 5)) {
+      const checksPath = join(bdodRoot, d, "business_dod_checks.json");
+      if (existsSync(checksPath)) {
+        try {
+          const bdod = JSON.parse(readFileSync(checksPath, "utf-8"));
+          businessDodPass = bdod.pass ?? null;
+          businessDodPath = `artifacts/soma_kajabi/business_dod/${d}`;
+          break;
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+
   const activeRunId = getActiveRunId(lastStatus, lastRunId, lockInfo);
   const resumeActionAvailable = lastStatus === "WAITING_FOR_HUMAN";
 
@@ -265,5 +290,7 @@ export async function GET(
     artifact_dir_url: artifactDirUrl,
     doctor_framebuffer_url: doctorFramebufferUrl,
     doctor_artifact_dir_url: doctorArtifactDirUrl,
+    business_dod_pass: businessDodPass,
+    business_dod_path: businessDodPath,
   });
 }

@@ -838,6 +838,28 @@ def _run_main(root: Path, out_dir: Path, run_id: str, result_state: dict[str, ob
             set_result("FAILURE", stage="acceptance_gate", error_class="REQUIRED_ARTIFACTS_MISSING", message=f"Missing {name}")
             return _fail_closed(out_dir, run_id, "REQUIRED_ARTIFACTS_MISSING", f"Missing {name}")
 
+    # ── E4) Business DoD fail-closed gates (RAW module + no secrets) ──
+    try:
+        from services.soma_kajabi.verify_business_dod import (
+            check_raw_module_present,
+            check_no_secrets,
+        )
+        artifacts_root = root / "artifacts"
+        snapshot_for_bdod = accept_dir / "final_library_snapshot.json"
+        raw_check = check_raw_module_present(artifacts_root, snapshot_for_bdod)
+        if not raw_check["pass"]:
+            write_stage(out_dir, "acceptance_gate", "failed", last_error_class="RAW_MODULE_MISSING")
+            set_result("FAILURE", stage="acceptance_gate", error_class="RAW_MODULE_MISSING", message=raw_check.get("details", "RAW module not found"))
+            return _fail_closed(out_dir, run_id, "RAW_MODULE_MISSING", raw_check.get("details", "RAW module not found"))
+        secrets_check = check_no_secrets(artifacts_root)
+        if not secrets_check["pass"]:
+            write_stage(out_dir, "acceptance_gate", "failed", last_error_class="SECRETS_DETECTED_IN_ARTIFACTS")
+            set_result("FAILURE", stage="acceptance_gate", error_class="SECRETS_DETECTED_IN_ARTIFACTS", message=secrets_check.get("details", "Secrets detected")[:300])
+            return _fail_closed(out_dir, run_id, "SECRETS_DETECTED_IN_ARTIFACTS", secrets_check.get("details", "Secrets detected")[:300])
+        append_summary_line(out_dir, f"[business_dod] RAW module PASS, no-secrets PASS")
+    except Exception as e:
+        append_summary_line(out_dir, f"[business_dod] WARNING: could not run checks: {str(e)[:100]}")
+
     write_stage(out_dir, "acceptance_gate", "done")
     write_stage(out_dir, "done", "done")
     append_summary_line(out_dir, "[acceptance_gate] PASS mirror_exceptions=0")

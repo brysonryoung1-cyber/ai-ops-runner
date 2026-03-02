@@ -222,6 +222,14 @@
       "cmd_template": "cd ${ROOT_DIR} && ${ROOT_DIR}/.venv-hostd/bin/python -m services.soma_kajabi.connectors_status"
     },
     {
+      "id": "soma_kajabi_verify_business_dod",
+      "label": "Verify Business DoD",
+      "project_id": "soma_kajabi",
+      "timeout_sec": 120,
+      "cmd_template": "cd ${ROOT_DIR} && ${ROOT_DIR}/.venv-hostd/bin/python -m services.soma_kajabi.verify_business_dod",
+      "description": "Run deterministic Business DoD validators (8 checks). Writes artifacts to artifacts/soma_kajabi/business_dod/<run_id>/."
+    },
+    {
       "id": "soma_kajabi_bootstrap_start",
       "label": "Kajabi Bootstrap Start",
       "project_id": "soma_kajabi",

@@ -125,7 +125,7 @@ def find_latest_with_file(base: Path, filename: str) -> Path | None:
 # ---------------------------------------------------------------------------
 
 def resolve_pointers() -> dict[str, Any]:
-    """Resolve paths to latest doctor, canary, deploy, and dod artifacts."""
+    """Resolve paths to latest doctor, canary, deploy, dod, and business_dod artifacts."""
     pointers: dict[str, Any] = {}
 
     deploy_dir = find_latest_with_file(ARTIFACTS_ROOT / "deploy", "deploy_result.json")
@@ -150,6 +150,13 @@ def resolve_pointers() -> dict[str, Any]:
         pointers["canary_result"] = str(canary_dir / "result.json")
         pointers["canary_proof"] = str(canary_dir / "PROOF.md")
         pointers["canary_dir"] = str(canary_dir)
+
+    bdod_dir = find_latest_with_file(
+        ARTIFACTS_ROOT / "soma_kajabi" / "business_dod", "business_dod_checks.json"
+    )
+    if bdod_dir:
+        pointers["business_dod"] = str(bdod_dir / "business_dod_checks.json")
+        pointers["business_dod_dir"] = str(bdod_dir)
 
     return pointers
 
@@ -214,11 +221,23 @@ def generate_bundle(
     soma_stage = soma_status.get("stage") or soma_status.get("state") or "unknown"
     soma_waiting = soma_stage in ("WAITING_FOR_HUMAN", "waiting_for_human")
 
-    # Doctor / canary pass flags
+    # Doctor / canary / business_dod pass flags
     doctor_pass = _check_artifact_pass(pointers.get("doctor"), "result")
     if doctor_pass is None:
         doctor_pass = _check_artifact_pass(pointers.get("doctor"), "overall")
     canary_pass = _check_artifact_pass(pointers.get("canary_result"), "status", expected="PASS")
+
+    business_dod_pass = _check_artifact_pass(pointers.get("business_dod"), "pass", expected="True")
+    business_dod_path = pointers.get("business_dod_dir", "")
+    business_dod_failed_checks: list[str] = []
+    if pointers.get("business_dod"):
+        try:
+            bdod_data = json.loads(Path(pointers["business_dod"]).read_text())
+            for cname, cval in (bdod_data.get("checks") or {}).items():
+                if not cval.get("pass"):
+                    business_dod_failed_checks.append(cname)
+        except Exception:
+            pass
 
     if not origin_sha:
         origin_sha = _git_origin_sha()
@@ -264,6 +283,9 @@ def generate_bundle(
             "stage": soma_stage,
             "waiting_for_human": soma_waiting,
         },
+        "business_dod_pass": business_dod_pass if business_dod_pass is not None else "UNKNOWN",
+        "business_dod_path": business_dod_path,
+        "business_dod_failed_checks": business_dod_failed_checks,
         "failures": failures,
         "warnings": warnings,
         "pointers": pointers,
@@ -355,6 +377,18 @@ def _render_proof_block(result: dict[str, Any]) -> str:
     ]
     if soma.get("waiting_for_human"):
         lines.append("- **note:** WAITING_FOR_HUMAN (recorded, not a bundle failure)")
+
+    bdod_pass = result.get("business_dod_pass", "UNKNOWN")
+    bdod_path = result.get("business_dod_path", "")
+    bdod_failed = result.get("business_dod_failed_checks", [])
+    lines.extend([
+        "",
+        "## Business DoD",
+        f"- **business_dod_pass:** {bdod_pass}",
+        f"- **business_dod_path:** `{bdod_path}`" if bdod_path else "- **business_dod_path:** N/A",
+    ])
+    if bdod_failed:
+        lines.append(f"- **failed_checks:** {', '.join(bdod_failed)}")
 
     lines.extend([
         "",
