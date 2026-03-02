@@ -1,12 +1,12 @@
 {
-  "approved_head_sha": "05fa47a838a1bf108e730269f31eb07f8a450f13",
-  "approved_tree_sha": "1c996242172627f177f0529e287422205244eeea",
-  "range_start_sha": "74efd9e5fb781da97b6ccba17430e74f95e6a352",
-  "range_end_sha": "05fa47a838a1bf108e730269f31eb07f8a450f13",
+  "approved_head_sha": "ef25e1b9e9b6c6f098fc6727047c6fbb371cfec1",
+  "approved_tree_sha": "321ed2bd92988792b0ce7444fe119d4f6d2b3540",
+  "range_start_sha": "05fa47a838a1bf108e730269f31eb07f8a450f13",
+  "range_end_sha": "ef25e1b9e9b6c6f098fc6727047c6fbb371cfec1",
   "simulated": false,
   "engine": "codex_cli",
   "model": "api",
-  "created_at": "2026-03-02T12:39:53Z",
-  "verdict_artifact_path": "review_packets/20260302_123945/CODEX_VERDICT.json",
-  "signature": "ae88dd8fe8d0ce14cc87b6954bb780f8e3f46e790077d01ac1dc0d4167e797e0"
+  "created_at": "2026-03-02T13:48:15Z",
+  "verdict_artifact_path": "review_packets/20260302_134812/CODEX_VERDICT.json",
+  "signature": "82df4677e17f601afc862f62729d732a9854ff164a05dbdb46b9b33723fc002d"
 }
