@@ -89,11 +89,13 @@ else
   fail "Script missing verdict file output"
 fi
 
-# --- Test 11: Script uses JSON response format ---
-if grep -q "json_object\|response_format" "$REVIEW"; then
-  pass "Script requests JSON response format"
+# --- Test 11: Review pipeline uses JSON response format ---
+# response_format may be in the bash script or the Python review_gate module
+REVIEW_GATE="$ROOT_DIR/src/llm/review_gate.py"
+if grep -q "json_object\|response_format" "$REVIEW" 2>/dev/null || grep -q "json_object\|response_format" "$REVIEW_GATE" 2>/dev/null; then
+  pass "Review pipeline requests JSON response format"
 else
-  fail "Script should request JSON response format"
+  fail "Review pipeline should request JSON response format"
 fi
 
 # --- Test 12: Script loads OpenAI key via ensure_openai_key ---
