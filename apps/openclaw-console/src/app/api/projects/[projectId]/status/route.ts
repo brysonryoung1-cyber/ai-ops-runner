@@ -167,9 +167,9 @@ export async function GET(
         try {
           const proof = JSON.parse(readFileSync(proofJson, "utf-8"));
           if (!lastRunId) lastRunId = proof.run_id ?? d;
-          if (mirrorPass === null) mirrorPass = proof.get("mirror_pass");
-          if (exceptionsCount === null) exceptionsCount = proof.get("exceptions_count");
-          if (!acceptancePath) acceptancePath = proof.get("acceptance_path");
+          if (mirrorPass === null) mirrorPass = proof["mirror_pass"];
+          if (exceptionsCount === null) exceptionsCount = proof["exceptions_count"];
+          if (!acceptancePath) acceptancePath = proof["acceptance_path"];
           proofPath = `artifacts/soma_kajabi/run_to_done/${d}/PROOF.md`;
           break;
         } catch {
