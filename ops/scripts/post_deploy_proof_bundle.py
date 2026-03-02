@@ -215,7 +215,9 @@ def generate_bundle(
     soma_waiting = soma_stage in ("WAITING_FOR_HUMAN", "waiting_for_human")
 
     # Doctor / canary pass flags
-    doctor_pass = _check_artifact_pass(pointers.get("doctor"), "overall")
+    doctor_pass = _check_artifact_pass(pointers.get("doctor"), "result")
+    if doctor_pass is None:
+        doctor_pass = _check_artifact_pass(pointers.get("doctor"), "overall")
     canary_pass = _check_artifact_pass(pointers.get("canary_result"), "status", expected="PASS")
 
     if not origin_sha:
@@ -280,12 +282,18 @@ def _check_artifact_pass(
     key: str,
     expected: str = "PASS",
 ) -> bool | None:
-    """Read a JSON artifact and check if *key* == *expected*.  Returns None if missing."""
+    """Read a JSON artifact and check if *key* == *expected*.
+
+    Returns None if the file or the key is missing.
+    """
     if not path or not Path(path).is_file():
         return None
     try:
         data = json.loads(Path(path).read_text())
-        return str(data.get(key, "")).upper() == expected.upper()
+        val = data.get(key)
+        if val is None:
+            return None
+        return str(val).upper() == expected.upper()
     except Exception:
         return None
 
