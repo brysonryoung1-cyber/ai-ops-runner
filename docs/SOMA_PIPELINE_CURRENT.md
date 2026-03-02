@@ -88,6 +88,16 @@ The Soma pipeline manages the Zane Kajabi site (zane-mccourtney.mykajabi.com): H
 
 ---
 
+## Exec Trigger Client
+
+All project triggers use the **shared exec trigger client** (`ops/lib/exec_trigger.py`), with a default 90 s timeout and 409 "already running" handling. Soma's `run_to_done` is one consumer of this client.
+
+- **Default timeout**: 90 s (Host executor uses 10/20/40 s backoff, total ~70 s; 90 s ensures we never mark TRIGGER_FAILED while hostd is still probing).
+- **409 semantics**: HTTP 409 → `ALREADY_RUNNING` (non-fatal). The script reports "run already in progress" and exits cleanly instead of TRIGGER_FAILED.
+- **Platform invariant**: see `docs/EXEC_TRIGGER_CURRENT_STATE.md`.
+
+---
+
 ## Entrypoints
 
 | Type | Entrypoint | Action ID |

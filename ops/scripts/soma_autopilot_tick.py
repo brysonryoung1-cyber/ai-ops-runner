@@ -31,20 +31,18 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Shared trigger client — single source of truth for exec POST + status handling
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from ops.lib.exec_trigger import hq_request, trigger_exec  # noqa: E402
+
 CONFIG_FLAG = Path("/etc/ai-ops-runner/config/soma_autopilot_enabled.txt")
 HQ_BASE = os.environ.get("OPENCLAW_HQ_BASE", "http://127.0.0.1:8787")
-ADMIN_TOKEN = ""
-for p in (
-    "/etc/ai-ops-runner/secrets/openclaw_admin_token",
-    "/etc/ai-ops-runner/secrets/openclaw_console_token",
-    "/etc/ai-ops-runner/secrets/openclaw_api_token",
-    "/etc/ai-ops-runner/secrets/openclaw_token",
-):
-    if Path(p).exists():
-        ADMIN_TOKEN = Path(p).read_text().strip()
-        break
 MAX_INFRA_FAILURES = int(os.environ.get("OPENCLAW_SOMA_AUTOPILOT_MAX_INFRA_FAILURES", "3"))
 BACKOFF_SEC = int(os.environ.get("OPENCLAW_SOMA_AUTOPILOT_BACKOFF_SEC", "1800"))
+
+
+DOCTOR_FAST_TIMEOUT = 35
+DOCTOR_DEEP_TIMEOUT = 90
 
 
 def _repo_root() -> Path:
@@ -59,30 +57,6 @@ def _repo_root() -> Path:
             break
         cwd = cwd.parent
     return Path(env or "/opt/ai-ops-runner")
-
-
-def _curl(method: str, path: str, data: dict | None = None, timeout: int = 15) -> tuple[int, str]:
-    import urllib.request
-    import urllib.error
-
-    url = f"{HQ_BASE.rstrip('/')}{path}"
-    headers = {"Content-Type": "application/json"}
-    if ADMIN_TOKEN:
-        headers["X-OpenClaw-Token"] = ADMIN_TOKEN
-    req = urllib.request.Request(url, method=method, headers=headers)
-    if data:
-        req.data = json.dumps(data).encode("utf-8")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8") if e.fp else ""
-    except Exception as e:
-        return -1, str(e)
-
-
-DOCTOR_FAST_TIMEOUT = 35
-DOCTOR_DEEP_TIMEOUT = 90
 
 
 def _journal_indicates_shm(root: Path) -> bool:
@@ -148,7 +122,7 @@ def _run_novnc_doctor(root: Path, fast: bool = False) -> tuple[bool, str | None]
 
 def _is_soma_run_to_done_active() -> bool:
     """Check if soma_run_to_done is currently running (lock held)."""
-    code, body = _curl("GET", "/api/exec?check=lock&action=soma_run_to_done", timeout=5)
+    code, body = hq_request("GET", "/api/exec?check=lock&action=soma_run_to_done", timeout=5)
     if code != 200:
         return False
     try:
@@ -197,7 +171,6 @@ def _write_status_artifact(
 def main() -> int:
     root = _repo_root()
     state_dir = Path(os.environ.get("OPENCLAW_SOMA_AUTOPILOT_STATE_DIR", "/var/lib/ai-ops-runner/soma_autopilot"))
-    # Fallback to repo-local state when /var/lib not writable (e.g. Mac dev)
     try:
         state_dir.mkdir(parents=True, exist_ok=True)
     except (PermissionError, FileNotFoundError):
@@ -255,7 +228,7 @@ def main() -> int:
         return 0
 
     # 6. Hostd reachable (attempt recover if not)
-    code, _ = _curl("GET", "/api/exec?check=connectivity", timeout=10)
+    code, _ = hq_request("GET", "/api/exec?check=connectivity", timeout=10)
     if code != 200:
         try:
             subprocess.run(
@@ -264,7 +237,7 @@ def main() -> int:
                 timeout=10,
             )
             time.sleep(5)
-            code, _ = _curl("GET", "/api/exec?check=connectivity", timeout=10)
+            code, _ = hq_request("GET", "/api/exec?check=connectivity", timeout=10)
         except Exception:
             pass
         if code != 200:
@@ -278,13 +251,11 @@ def main() -> int:
     # 7. noVNC doctor FAST first — only run shm_fix if journal indicates shm
     doctor_ok, doctor_err = _run_novnc_doctor(root, fast=True)
     if not doctor_ok:
-        # Only run shm_fix when journal indicates shmget or /dev/shm constraint
         run_shm_fix = _journal_indicates_shm(root)
         if run_shm_fix:
-            _curl("POST", "/api/exec", data={"action": "openclaw_novnc_shm_fix"}, timeout=300)
+            trigger_exec("system", "openclaw_novnc_shm_fix", timeout=300)
             time.sleep(5)
-        # Restart only if service not active or ports missing (doctor_err hints)
-        _curl("POST", "/api/exec", data={"action": "openclaw_novnc_restart"}, timeout=60)
+        trigger_exec("system", "openclaw_novnc_restart", timeout=60)
         time.sleep(15)
         doctor_ok, _ = _run_novnc_doctor(root, fast=False)
         if not doctor_ok:
@@ -293,35 +264,34 @@ def main() -> int:
             )
             return 0
 
-    # 8. Trigger soma_run_to_done (doctor PASS)
-    code, body = _curl("POST", "/api/exec", data={"action": "soma_run_to_done"}, timeout=10)
-    if code == 409:
+    # 8. Trigger soma_run_to_done (doctor PASS) — uses shared trigger client
+    tr = trigger_exec("soma_kajabi", "soma_run_to_done")
+
+    if tr.state == "ALREADY_RUNNING":
         _write_status_artifact(root, "SKIP", current_status=last_status, error_class="active_run_exists")
         return 0
-    if code == 202:
-        try:
-            data = json.loads(body)
-            run_id = data.get("run_id", "")
-            _write_status_artifact(root, "TRIGGERED", run_id=run_id, current_status="running")
-            if fail_file.exists():
-                fail_file.write_text("0")
-            if blocked_file.exists():
-                blocked_file.unlink(missing_ok=True)
-            return 0
-        except json.JSONDecodeError:
-            pass
 
-    # Infra failure (502, 503, timeout, etc.)
+    if tr.state == "ACCEPTED":
+        run_id = tr.run_id or ""
+        _write_status_artifact(root, "TRIGGERED", run_id=run_id, current_status="running")
+        if fail_file.exists():
+            fail_file.write_text("0")
+        if blocked_file.exists():
+            blocked_file.unlink(missing_ok=True)
+        return 0
+
+    # FAILED (502, 503, timeout, etc.)
     fail_count = int(fail_file.read_text()) if fail_file.exists() else 0
     fail_count += 1
     fail_file.write_text(str(fail_count))
     last_fail_ts_file.write_text(str(int(time.time())))
-    err_class = "HOSTD_UNREACHABLE"
-    try:
-        d = json.loads(body)
-        err_class = d.get("error_class", str(code))
-    except (json.JSONDecodeError, TypeError):
-        err_class = f"HTTP_{code}" if code > 0 else "CONNECT_FAILED"
+    err_class = "TRIGGER_FAILED"
+    if tr.body:
+        err_class = tr.body.get("error_class", f"HTTP_{tr.status_code}" if tr.status_code > 0 else "CONNECT_FAILED")
+    elif tr.status_code > 0:
+        err_class = f"HTTP_{tr.status_code}"
+    else:
+        err_class = "CONNECT_FAILED"
     _write_status_artifact(
         root, "FAIL", error_class=err_class, fail_count=fail_count
     )

@@ -18,8 +18,11 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Shared trigger client — single source of truth for exec POST + status handling
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from ops.lib.exec_trigger import hq_request, trigger_exec  # noqa: E402
+
 HQ_BASE = os.environ.get("OPENCLAW_HQ_BASE", "http://127.0.0.1:8787")
-ADMIN_TOKEN = os.environ.get("OPENCLAW_ADMIN_TOKEN", "")
 POLL_INTERVAL = 12
 MAX_POLL_MINUTES = 35
 NOVNC_FAST_TIMEOUT = 90  # DEEP doctor: framebuffer warm-up (6×5s) + WS stability
@@ -55,27 +58,6 @@ def _get_build_sha(root: Path) -> str:
         return (r.stdout or "").strip() if r.returncode == 0 else ""
     except Exception:
         return ""
-
-
-def _curl(method: str, path: str, data: dict | None = None, timeout: int = 30) -> tuple[int, str]:
-    """Return (http_code, body)."""
-    import urllib.request
-    import urllib.error
-
-    url = f"{HQ_BASE.rstrip('/')}{path}"
-    headers = {"Content-Type": "application/json"}
-    if ADMIN_TOKEN:
-        headers["X-OpenClaw-Token"] = ADMIN_TOKEN
-    req = urllib.request.Request(url, method=method, headers=headers)
-    if data:
-        req.data = json.dumps(data).encode("utf-8")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8") if e.fp else ""
-    except Exception as e:
-        return -1, str(e)
 
 
 def _run(cmd: list[str], timeout: int = 600) -> tuple[int, str]:
@@ -122,7 +104,7 @@ def _precheck_drift(root: Path) -> bool:
 
 
 def _precheck_hostd() -> bool:
-    code, _ = _curl("GET", "/api/exec?check=connectivity", timeout=10)
+    code, _ = hq_request("GET", "/api/exec?check=connectivity", timeout=10)
     return code == 200
 
 
@@ -153,8 +135,8 @@ def _precheck_novnc(root: Path, retry_after_restart: bool = True) -> bool:
     if _run_doctor():
         return True
     if retry_after_restart:
-        code, _ = _curl("POST", "/api/exec", data={"action": "openclaw_novnc_restart"}, timeout=10)
-        if code in (200, 202):
+        tr = trigger_exec("system", "openclaw_novnc_restart", timeout=10)
+        if tr.state == "ACCEPTED":
             time.sleep(15)
             return _run_doctor()
     return False
@@ -188,27 +170,41 @@ def main() -> int:
         print(json.dumps({"ok": False, "error_class": "NOVNC_NOT_READY", "run_id": run_id, "project": "soma_kajabi", "action": "soma_run_to_done"}))
         return 1
 
-    # TRIGGER
-    code, body = _curl("POST", "/api/exec", data={"action": "soma_kajabi_auto_finish"}, timeout=5)
-    if code not in (200, 202):
-        try:
-            data = json.loads(body)
-            err = data.get("error_class", data.get("error", "unknown"))
-        except Exception:
-            err = body[:200]
+    # TRIGGER — uses shared exec trigger client (default 90s timeout, 409 = ALREADY_RUNNING)
+    tr = trigger_exec("soma_kajabi", "soma_kajabi_auto_finish")
+
+    if tr.state == "ALREADY_RUNNING":
+        active_run_id = tr.run_id or "(unknown)"
         (out_dir / "TRIGGER.json").write_text(
-            json.dumps({"http_code": code, "error": err}, indent=2)
+            json.dumps({"http_code": 409, "state": "ALREADY_RUNNING", "active_run_id": active_run_id}, indent=2)
         )
-        print(json.dumps({"ok": False, "error_class": "TRIGGER_FAILED", "run_id": run_id, "message": err}))
+        print(json.dumps({
+            "ok": False,
+            "error_class": "ALREADY_RUNNING",
+            "run_id": run_id,
+            "active_run_id": active_run_id,
+            "message": f"Run already in progress for project=soma_kajabi. Not starting a second run.",
+            "project": "soma_kajabi",
+            "action": "soma_run_to_done",
+        }))
+        return 0
+
+    if tr.state == "FAILED":
+        (out_dir / "TRIGGER.json").write_text(
+            json.dumps({"http_code": tr.status_code, "error": tr.message}, indent=2)
+        )
+        print(json.dumps({
+            "ok": False,
+            "error_class": "TRIGGER_FAILED",
+            "run_id": run_id,
+            "message": tr.message,
+            "project": "soma_kajabi",
+            "action": "soma_run_to_done",
+        }))
         return 1
 
-    try:
-        data = json.loads(body)
-    except json.JSONDecodeError:
-        print(json.dumps({"ok": False, "error_class": "TRIGGER_PARSE_FAILED", "run_id": run_id}))
-        return 1
-
-    auto_run_id = data.get("run_id")
+    # ACCEPTED
+    auto_run_id = tr.run_id
     if not auto_run_id:
         print(json.dumps({"ok": False, "error_class": "NO_RUN_ID", "run_id": run_id}))
         return 1
@@ -220,7 +216,7 @@ def main() -> int:
     result_data: dict | None = None
 
     while time.monotonic() - start < max_elapsed:
-        code, body = _curl("GET", f"/api/runs?id={auto_run_id}", timeout=15)
+        code, body = hq_request("GET", f"/api/runs?id={auto_run_id}", timeout=15)
         if code != 200:
             time.sleep(POLL_INTERVAL)
             continue
@@ -300,7 +296,6 @@ def main() -> int:
         accept_base = root / "artifacts" / "soma_kajabi" / "acceptance"
         accept_run_dir = None
 
-        # Primary: read acceptance path from auto_finish SUMMARY.json (canonical)
         if artifact_dir:
             summary_path = root / artifact_dir / "SUMMARY.json"
             if summary_path.exists():
@@ -314,7 +309,6 @@ def main() -> int:
                 except (json.JSONDecodeError, OSError):
                     pass
 
-        # Fallback: use auto_finish run_id to find acceptance dir
         if not accept_run_dir:
             hostd_run_id = Path(artifact_dir or "").name if artifact_dir else ""
             if hostd_run_id:
@@ -322,7 +316,6 @@ def main() -> int:
                 if candidate.exists():
                     accept_run_dir = candidate
 
-        # Last resort: latest acceptance dir
         if not accept_run_dir and accept_base.exists():
             dirs = sorted(
                 [d for d in accept_base.iterdir() if d.is_dir()],

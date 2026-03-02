@@ -17,27 +17,21 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Shared trigger client — single source of truth for exec POST + status handling
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+from ops.lib.exec_trigger import hq_request, trigger_exec  # noqa: E402
+
 HQ_BASE = os.environ.get("OPENCLAW_HQ_BASE", "http://127.0.0.1:8787")
 
 
-def _curl(method: str, path: str, data: dict | None = None, timeout: int = 60) -> tuple[int, dict]:
-    import urllib.request
-
-    url = f"{HQ_BASE.rstrip('/')}{path}"
-    req = urllib.request.Request(url, method=method)
-    req.add_header("Content-Type", "application/json")
-    body = json.dumps(data).encode() if data else None
-    try:
-        with urllib.request.urlopen(req, data=body, timeout=timeout) as r:
-            return r.status, json.loads(r.read().decode())
-    except Exception as e:
-        return 0, {"error": str(e)}
-
-
 def _get_soma_state() -> str:
-    code, data = _curl("GET", "/api/projects/soma_kajabi/status", timeout=15)
+    code, body = hq_request("GET", "/api/projects/soma_kajabi/status", timeout=15)
     if code != 200:
+        return "unknown"
+    try:
+        data = json.loads(body)
+    except (json.JSONDecodeError, TypeError):
         return "unknown"
     return (data.get("last_status") or data.get("current_status") or "unknown")
 
@@ -45,7 +39,6 @@ def _get_soma_state() -> str:
 def main() -> int:
     state = _get_soma_state()
     if state == "WAITING_FOR_HUMAN":
-        # Fix only; do NOT resume
         print("State=WAITING_FOR_HUMAN: running fix only (no resume)")
     else:
         print(f"State={state}: running fix then soma_run_to_done")
@@ -88,13 +81,16 @@ def main() -> int:
         print(f"Canonical noVNC URL: {novnc_url}")
         return 0
 
-    # 2. Resume soma_run_to_done
-    code, _ = _curl("POST", "/api/exec", data={"action": "soma_run_to_done"}, timeout=10)
-    if code in (200, 202):
+    # 2. Resume soma_run_to_done — uses shared trigger client
+    tr = trigger_exec("soma_kajabi", "soma_run_to_done")
+    if tr.state == "ACCEPTED":
         print("soma_run_to_done started")
         return 0
-    print(f"WARNING: soma_run_to_done returned {code}", file=sys.stderr)
-    return 0 if code in (200, 202, 404) else 1
+    if tr.state == "ALREADY_RUNNING":
+        print(f"Run already in progress for project=soma_kajabi. Not starting a second run.")
+        return 0
+    print(f"WARNING: soma_run_to_done trigger {tr.state} (HTTP {tr.status_code})", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":

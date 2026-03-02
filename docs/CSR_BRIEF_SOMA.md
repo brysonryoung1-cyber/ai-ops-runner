@@ -36,6 +36,7 @@
 | 4 | MEDIUM | `WAITING_FOR_HUMAN` resume: if session_check never PASS, 25 min timeout → `KAJABI_REAUTH_TIMEOUT`. No automatic retry after human fixes. | `soma_kajabi_auto_finish.py` |
 | 5 | MEDIUM | Phase0 Gmail harvest: when OAuth missing, writes `gmail_harvest_skipped`; video_manifest can be empty. Zane finish plan marks Gmail-dependent items BLOCKED. | `phase0_runner.py` |
 | 6 | LOW | `soma_kajabi_sync` mirror_report schema (actions, summary) differs from `acceptance_artifacts` mirror_report (exceptions, pass). Two different "mirror" concepts. | `soma_kajabi_sync/mirror.py`, `acceptance_artifacts.py` |
+| 7 | HIGH | TRIGGER timeout too short: soma_run_to_done uses 5s for POST /api/exec (soma_kajabi_auto_finish). HQ hostd probe can take 10s–90s → timeout → TRIGGER_FAILED. Refined by Incident 20260302004627-7010. | `soma_run_to_done.py` line 191 |
 
 ### C) LLM Integration Gaps
 
@@ -82,3 +83,18 @@ All HIGH and MEDIUM issues fixed. LOW items addressed or explicitly deferred.
 - **Exit node:** Optional `/etc/ai-ops-runner/config/soma_kajabi_exit_node.txt` for Mac laptop routing. If set, `with_exit_node.sh` wraps discover/snapshot/phase0.
 - **Hostd:** `soma_kajabi_auto_finish` runs via hostd. `.venv-hostd` must have Playwright + Chromium.
 - **Rate limits:** Kajabi/Cloudflare may throttle. No explicit backoff in discover/snapshot.
+
+---
+
+## Incident: TRIGGER_FAILED (run_id=20260302004627-7010) — RESOLVED
+
+- **Date/time:** 2026-03-02 (from run_id timestamp)
+- **Action:** soma_run_to_done
+- **Error_class:** TRIGGER_FAILED
+- **Root cause:** HOST_EXECUTOR — trigger-layer failure; soma_run_to_done could not dispatch soma_kajabi_auto_finish via HQ. 5s timeout on TRIGGER POST was too short for HQ hostd probe (10s–90s).
+- **Resolution:** Resolved via platform-wide shared exec trigger client (`ops/lib/exec_trigger.py`). Soma no longer has its own bespoke trigger timeout; it uses the shared client with a 90 s default timeout and correct 409 "already running" semantics.
+  - All project trigger scripts (`soma_run_to_done`, `soma_fix_and_retry`, `soma_autopilot_tick`, `soma_novnc_oneclick_recovery`) migrated to the shared client.
+  - Tests in `ops/tests/test_exec_trigger.py` enforce timeout ≥ 60 s invariant and validate 200/202/409/502/timeout behaviour.
+  - Platform invariant documented in `docs/EXEC_TRIGGER_CURRENT_STATE.md`.
+
+**Detailed report:** [docs/SOMA_INCIDENT_20260302004627-7010.md](SOMA_INCIDENT_20260302004627-7010.md)
