@@ -98,18 +98,17 @@ def evaluate_invariants(state_pack_dir: Path) -> dict:
     })
     evidence.append(invariants[-1]["evidence"])
 
-    # 3. serve.single_root == true and targets 127.0.0.1:8788
+    # 3. serve.single_root == true and targets frontdoor (8788 HTTP or 8443 TLS)
     serve_ok = False
     if tailscale_json:
-        # tailscale serve --json structure varies; check for single-root + 8788
         raw = str(tailscale_json)
-        serve_ok = "8788" in raw and ("127.0.0.1" in raw or "localhost" in raw)
+        serve_ok = ("8788" in raw or "8443" in raw) and ("127.0.0.1" in raw or "localhost" in raw)
     if not serve_ok and tailscale_txt:
-        serve_ok = "8788" in tailscale_txt and "127.0.0.1" in tailscale_txt
+        serve_ok = ("8788" in tailscale_txt or "8443" in tailscale_txt) and ("127.0.0.1" in tailscale_txt or "localhost" in tailscale_txt)
     invariants.append({
         "id": "serve_single_root_targets_frontdoor",
         "pass": serve_ok,
-        "reason": "OK" if serve_ok else "Tailscale Serve not single-root to 127.0.0.1:8788",
+        "reason": "OK" if serve_ok else "Tailscale Serve not single-root to 127.0.0.1:8788 or 127.0.0.1:8443",
         "evidence": f"artifacts/system/state_pack/{state_pack_dir.name}/tailscale_serve.txt",
     })
     evidence.append(invariants[-1]["evidence"])
