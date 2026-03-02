@@ -51,12 +51,25 @@ if [ -f "$ROOT_DIR/ops/scripts/ws_upgrade_hop_probe.sh" ]; then
     bash "$ROOT_DIR/ops/scripts/ws_upgrade_hop_probe.sh" > "$OUT_DIR/hop_probe_after.log" 2>&1 || true
 fi
 
+# 3c. Verify doctor PASS after routing_fix; if not, invoke autorecover once
+DOCTOR_OK=0
+if [ -x "$ROOT_DIR/ops/openclaw_novnc_doctor.sh" ]; then
+  OPENCLAW_RUN_ID="${RUN_ID}_verify" "$ROOT_DIR/ops/openclaw_novnc_doctor.sh" --fast > "$OUT_DIR/doctor_verify.log" 2>&1 && DOCTOR_OK=1
+fi
+if [ "$DOCTOR_OK" -eq 0 ] && [ -f "$ROOT_DIR/ops/scripts/novnc_autorecover.py" ]; then
+  echo "  Doctor still FAIL after routing_fix; running novnc_autorecover..."
+  OPENCLAW_RUN_ID="${RUN_ID}_autorecover" python3 "$ROOT_DIR/ops/scripts/novnc_autorecover.py" > "$OUT_DIR/autorecover.log" 2>&1 && DOCTOR_OK=1 || true
+fi
+
 # 4. Actions taken
+ACTIONS='["hop_probe_before", "openclaw_novnc_routing_fix", "hop_probe_after"'
+[ "$DOCTOR_OK" -eq 0 ] && ACTIONS="$ACTIONS, \"novnc_autorecover\""
+ACTIONS="$ACTIONS]"
 cat > "$OUT_DIR/actions_taken.json" << EOF
 {
   "playbook": "recover_novnc_ws",
   "run_id": "$RUN_ID",
-  "actions": ["hop_probe_before", "openclaw_novnc_routing_fix", "hop_probe_after"],
+  "actions": $ACTIONS,
   "timestamp_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF

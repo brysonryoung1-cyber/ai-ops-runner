@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -32,6 +33,26 @@ def novnc_display() -> str:
     return ":99"
 PROBE_TIMEOUT = 30
 JOURNAL_LINES = 200
+AUTORECOVER_TIMEOUT = 300
+
+
+def _run_autorecover(root: Path, run_id: str) -> bool:
+    """Invoke novnc_autorecover.py once. Return True if it fixed the issue."""
+    autorecover = root / "ops" / "scripts" / "novnc_autorecover.py"
+    if not autorecover.exists():
+        return False
+    try:
+        r = subprocess.run(
+            [sys.executable, str(autorecover)],
+            capture_output=True,
+            text=True,
+            timeout=AUTORECOVER_TIMEOUT,
+            cwd=str(root),
+            env={**os.environ, "OPENCLAW_RUN_ID": f"ready_{run_id}_autorecover"},
+        )
+        return r.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
 
 
 def _run_novnc_restart(root: Path) -> bool:
@@ -174,7 +195,12 @@ def ensure_novnc_ready(artifact_dir: Path, run_id: str) -> tuple[bool, str, str 
             _run_novnc_restart(root)
             time.sleep(ENSURE_RESTART_SLEEP)
 
-    # Exhausted retries: fail-closed with NOVNC_NOT_READY
+    # Exhausted retries: attempt autorecover once before fail-closed
+    if _run_autorecover(root, run_id):
+        final_ok, final_url, final_err = _run_doctor(artifact_dir, f"{run_id}_post_autorecover")
+        if final_ok and final_url:
+            return True, final_url, None, None
+
     journal_path = _capture_journal(artifact_dir)
     try:
         rel = str(journal_path.relative_to(root))
