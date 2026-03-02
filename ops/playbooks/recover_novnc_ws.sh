@@ -13,6 +13,18 @@ mkdir -p "$OUT_DIR"
 
 echo "=== playbook.recover_novnc_ws ($RUN_ID) ==="
 
+# Early exit: suppress during active login window
+GATE_CHECK="$ROOT_DIR/ops/scripts/csr_human_gate_check.sh"
+if [ -x "$GATE_CHECK" ] && "$GATE_CHECK" soma_kajabi >/dev/null 2>&1; then
+  GATE_INFO=$("$GATE_CHECK" soma_kajabi 2>/dev/null || true)
+  echo "  Login window active — recovery suppressed"
+  cat > "$OUT_DIR/gate_suppression.json" << GEOF
+{"remediation_suppressed": true, "reason": "remediation suppressed due to active login window", "gate_info": $GATE_INFO, "timestamp_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+GEOF
+  echo '{"ok":true,"suppressed":true,"reason":"active login window","artifact_dir":"artifacts/playbooks/recover_novnc_ws/'"$RUN_ID"'","run_id":"'"$RUN_ID"'"}'
+  exit 0
+fi
+
 # 1. State pack before
 OPENCLAW_RUN_ID="${RUN_ID}_before" "$ROOT_DIR/ops/scripts/state_pack.sh" 2>/dev/null | tail -1 > "$OUT_DIR/state_pack_before.json" || true
 SP_BEFORE=$(ls -1dt "$ARTIFACTS/system/state_pack"/*/ 2>/dev/null | head -1)

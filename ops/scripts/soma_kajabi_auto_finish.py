@@ -376,6 +376,25 @@ INSTRUCTION_LINE = (
 )
 
 
+def _set_human_gate(run_id: str, novnc_url: str, reason: str) -> None:
+    """Activate the login-window gate so remediation scripts suppress restarts."""
+    try:
+        from ops.lib.human_gate import write_gate, write_gate_artifact
+        gate = write_gate("soma_kajabi", run_id, novnc_url, reason)
+        write_gate_artifact("soma_kajabi", run_id, gate)
+    except Exception:
+        pass
+
+
+def _clear_human_gate() -> None:
+    """Deactivate the login-window gate (on resume or expiry)."""
+    try:
+        from ops.lib.human_gate import clear_gate
+        clear_gate("soma_kajabi")
+    except Exception:
+        pass
+
+
 def _enter_waiting_for_human(
     out_dir: Path,
     reason: str,
@@ -385,6 +404,7 @@ def _enter_waiting_for_human(
 ) -> None:
     """Enter WAITING_FOR_HUMAN mode. Write contract artifact. Print only novnc_url + instruction.
     novnc_url must be tailnet-verified (doctor PASS). artifact_dir is doctor run artifacts."""
+    run_id = out_dir.name
     payload = {
         "reason": reason,
         "novnc_url": novnc_url,
@@ -397,6 +417,7 @@ def _enter_waiting_for_human(
     if artifact_dir:
         payload["artifact_dir"] = artifact_dir
     (out_dir / "WAITING_FOR_HUMAN.json").write_text(json.dumps(payload, indent=2))
+    _set_human_gate(run_id, novnc_url, reason)
     print("\n--- WAITING_FOR_HUMAN ---")
     print("noVNC READY")
     print(novnc_url)
@@ -682,8 +703,10 @@ def _run_main(root: Path, out_dir: Path, run_id: str, result_state: dict[str, ob
                 }
                 (out_dir / "reauth_timeout_bundle.json").write_text(json.dumps(bundle, indent=2))
                 set_result("TIMEOUT", stage="session_check", error_class=KAJABI_REAUTH_TIMEOUT, message=timeout_msg)
+                _clear_human_gate()
                 return _fail_closed(out_dir, run_id, KAJABI_REAUTH_TIMEOUT, timeout_msg)
-            # session_check PASS → retry phase0 (continue loop)
+            # session_check PASS → clear gate + retry phase0 (continue loop)
+            _clear_human_gate()
             continue
 
         # Auth gate: NEVER hard-fail; always WAITING_FOR_HUMAN (HARD RULE)
@@ -730,6 +753,7 @@ def _run_main(root: Path, out_dir: Path, run_id: str, result_state: dict[str, ob
                 if sc_rc == 0 and sc_doc.get("ok"):
                     write_stage(out_dir, "session_check", "done")
                     append_summary_line(out_dir, "[session_check] PASS - resuming pipeline")
+                    _clear_human_gate()
                     continue
                 time.sleep(SESSION_CHECK_POLL_INTERVAL)
             timeout_min = _reauth_poll_timeout() // 60
@@ -739,6 +763,7 @@ def _run_main(root: Path, out_dir: Path, run_id: str, result_state: dict[str, ob
             )
             write_stage(out_dir, "session_check", "failed", last_error_class=KAJABI_REAUTH_TIMEOUT)
             set_result("TIMEOUT", stage="session_check", error_class=KAJABI_REAUTH_TIMEOUT, message=timeout_msg)
+            _clear_human_gate()
             return _fail_closed(out_dir, run_id, KAJABI_REAUTH_TIMEOUT, timeout_msg)
         write_stage(out_dir, "phase0", "failed", last_error_class=error_class or "PHASE0_FAILED")
         set_result("FAILURE", stage="phase0", error_class=error_class or "PHASE0_FAILED", message=doc.get("recommended_next_action", phase0_out[:500]) or "Phase0 failed")
@@ -977,6 +1002,7 @@ def _run_main(root: Path, out_dir: Path, run_id: str, result_state: dict[str, ob
         except (OSError, json.JSONDecodeError):
             pass
 
+    _clear_human_gate()
     set_result("SUCCESS")
     print(json.dumps(summary_json))
     return 0

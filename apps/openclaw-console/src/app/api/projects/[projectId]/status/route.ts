@@ -241,6 +241,30 @@ export async function GET(
   const activeRunId = getActiveRunId(lastStatus, lastRunId, lockInfo);
   const resumeActionAvailable = lastStatus === "WAITING_FOR_HUMAN";
 
+  // Human gate state (login window)
+  let humanGateActive = false;
+  let humanGateExpiresAt: string | null = null;
+  let humanGateRunId: string | null = null;
+  let humanGateNovncUrl: string | null = null;
+  let humanGateReason: string | null = null;
+  const stateRoot = process.env.OPENCLAW_STATE_ROOT || "/opt/ai-ops-runner/state";
+  const gateFilePath = join(stateRoot, "human_gate", "soma_kajabi.json");
+  if (existsSync(gateFilePath)) {
+    try {
+      const gateData = JSON.parse(readFileSync(gateFilePath, "utf-8"));
+      const expiresAt = gateData.expires_at;
+      if (expiresAt && new Date(expiresAt) > new Date()) {
+        humanGateActive = true;
+        humanGateExpiresAt = expiresAt;
+        humanGateRunId = gateData.run_id ?? null;
+        humanGateNovncUrl = gateData.novnc_url ?? null;
+        humanGateReason = gateData.reason ?? null;
+      }
+    } catch {
+      /* ignore malformed gate file */
+    }
+  }
+
   // Direct URLs for Guided Human Gate (single source of truth). Use /artifacts/[...path], NOT /artifacts?path=.
   let framebufferUrl: string | null = null;
   let artifactDirUrl: string | null = null;
@@ -292,5 +316,10 @@ export async function GET(
     doctor_artifact_dir_url: doctorArtifactDirUrl,
     business_dod_pass: businessDodPass,
     business_dod_path: businessDodPath,
+    human_gate_active: humanGateActive,
+    human_gate_expires_at: humanGateExpiresAt,
+    human_gate_run_id: humanGateRunId,
+    human_gate_novnc_url: humanGateNovncUrl,
+    human_gate_reason: humanGateReason,
   });
 }

@@ -37,6 +37,25 @@ POLL_INTERVAL = 10
 KAJABI_REAUTH_TIMEOUT = "KAJABI_REAUTH_TIMEOUT"
 
 
+def _set_human_gate(run_id: str, novnc_url: str, reason: str) -> None:
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+        from ops.lib.human_gate import write_gate, write_gate_artifact
+        gate = write_gate("soma_kajabi", run_id, novnc_url, reason)
+        write_gate_artifact("soma_kajabi", run_id, gate)
+    except Exception:
+        pass
+
+
+def _clear_human_gate() -> None:
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+        from ops.lib.human_gate import clear_gate
+        clear_gate("soma_kajabi")
+    except Exception:
+        pass
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -210,6 +229,7 @@ def main() -> int:
 
                     if cloudflare:
                         if not emitted_waiting:
+                            _set_human_gate(run_id, tailscale_url, "cloudflare_blocked_reauth")
                             print("\n--- WAITING_FOR_HUMAN ---", file=sys.stderr)
                             print("noVNC READY", file=sys.stderr)
                             print(tailscale_url, file=sys.stderr)
@@ -221,6 +241,7 @@ def main() -> int:
                         time.sleep(POLL_INTERVAL)
                         continue
                     if has_both and url_ok:
+                        _clear_human_gate()
                         STORAGE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
                         context.storage_state(path=str(STORAGE_STATE_PATH))
                         try:

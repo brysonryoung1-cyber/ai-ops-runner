@@ -110,6 +110,13 @@ print(json.dumps(local))
   OPENCLAW_NOVNC_PORT="$NOVNC_PORT" OPENCLAW_WS_STABILITY_HOLD_SEC="$ws_hold" python3 "$WS_CHECK" --all 2>/dev/null
 }
 
+# Suppress restarts during active login window
+GATE_CHECK="$ROOT_DIR/ops/scripts/csr_human_gate_check.sh"
+GATE_ACTIVE=0
+if [ -x "$GATE_CHECK" ] && "$GATE_CHECK" soma_kajabi >/dev/null 2>&1; then
+  GATE_ACTIVE=1
+fi
+
 WS_FAIL_REASON=""
 for attempt in $(seq 1 "$MAX_WS_RETRIES"); do
   if _run_ws_check | tee "$ART_DIR/ws_stability.json" | python3 -c "
@@ -143,6 +150,11 @@ except Exception as e:
 " 2>/dev/null)" || WS_FAIL_REASON="ws_check_failed"
 
   if [ "$attempt" -lt "$MAX_WS_RETRIES" ]; then
+    if [ "$GATE_ACTIVE" -eq 1 ]; then
+      echo "novnc_doctor: WS stability FAIL ($WS_FAIL_REASON), restart suppressed (active login window)" >&2
+      echo '{"remediation_suppressed":true,"reason":"remediation suppressed due to active login window","ws_fail":"'"$WS_FAIL_REASON"'"}' > "$ART_DIR/gate_suppression.json"
+      break
+    fi
     echo "novnc_doctor: WS stability FAIL ($WS_FAIL_REASON), restarting + retry $attempt/$MAX_WS_RETRIES" >&2
     systemctl restart openclaw-novnc 2>/dev/null || true
     sleep 3

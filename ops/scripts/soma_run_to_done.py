@@ -345,6 +345,14 @@ def main() -> int:
     if terminal_status == "WAITING_FOR_HUMAN":
         novnc_url = result_data.get("novnc_url", "")
         instruction = result_data.get("instruction_line", INSTRUCTION_LINE)
+        if novnc_url:
+            try:
+                sys.path.insert(0, str(root))
+                from ops.lib.human_gate import write_gate, write_gate_artifact
+                gate = write_gate("soma_kajabi", auto_run_id or run_id, novnc_url, "waiting_for_human_run_to_done")
+                write_gate_artifact("soma_kajabi", auto_run_id or run_id, gate)
+            except Exception:
+                pass
         proof = {
             "run_id": run_id,
             "auto_run_id": auto_run_id,
@@ -469,6 +477,13 @@ def main() -> int:
                         doc = json.loads(line)
                         novnc_url = doc.get("novnc_url", "")
             except (subprocess.TimeoutExpired, json.JSONDecodeError):
+                pass
+        if novnc_url:
+            try:
+                from ops.lib.human_gate import write_gate, write_gate_artifact
+                gate = write_gate("soma_kajabi", auto_run_id or run_id, novnc_url, "auth_gate_reclassified")
+                write_gate_artifact("soma_kajabi", auto_run_id or run_id, gate)
+            except Exception:
                 pass
         proof = {
             "run_id": run_id,

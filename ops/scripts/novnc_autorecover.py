@@ -158,6 +158,29 @@ def main() -> int:
     out_dir = root / "artifacts" / "novnc_autorecover" / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Suppress when login window gate is active (unless explicitly invoked by user)
+    if os.environ.get("OPENCLAW_FORCE_AUTORECOVER") != "1":
+        try:
+            sys.path.insert(0, str(root))
+            from ops.lib.human_gate import is_gate_active, read_gate
+            if is_gate_active("soma_kajabi"):
+                gate_info = read_gate("soma_kajabi").get("gate", {})
+                suppression = {
+                    "remediation_suppressed": True,
+                    "reason": "remediation suppressed due to active login window",
+                    "gate_expires_at": gate_info.get("expires_at", ""),
+                    "gate_run_id": gate_info.get("run_id", ""),
+                    "project_id": "soma_kajabi",
+                    "run_id": run_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                (out_dir / "gate_suppression.json").write_text(json.dumps(suppression, indent=2))
+                _write_result(out_dir, [], True, None, run_id)
+                print(json.dumps({"ok": True, "suppressed": True, "reason": "active login window"}))
+                return 0
+        except Exception:
+            pass
+
     steps: list[dict] = []
 
     def record(step_name: str, rc: int, detail: str = "") -> None:

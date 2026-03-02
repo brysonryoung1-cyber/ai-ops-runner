@@ -412,6 +412,12 @@ def main() -> int:
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
 
     if summary.get("ok"):
+        try:
+            sys.path.insert(0, str(root))
+            from ops.lib.human_gate import clear_gate
+            clear_gate("soma_kajabi")
+        except Exception:
+            pass
         summary_md = f"""# Session Check — PASS
 
 **Run ID**: {run_id}

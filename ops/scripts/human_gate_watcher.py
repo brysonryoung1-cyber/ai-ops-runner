@@ -253,7 +253,25 @@ def main() -> int:
         if not waiting_now or run_id_now != run_id:
             break
 
-        novnc_ready = _run_novnc_audit(root, run_id)
+        # When login gate is active, skip noVNC audit (which restarts services)
+        gate_active = False
+        try:
+            sys.path.insert(0, str(root))
+            from ops.lib.human_gate import is_gate_active
+            gate_active = is_gate_active("soma_kajabi")
+        except Exception:
+            pass
+
+        if gate_active:
+            novnc_ready = True  # assume ready; suppress restart
+            (gate_dir / "gate_suppression_note.json").write_text(json.dumps({
+                "remediation_suppressed": True,
+                "reason": "remediation suppressed due to active login window",
+                "cycle": cycle + 1,
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            }, indent=2))
+        else:
+            novnc_ready = _run_novnc_audit(root, run_id)
         session_ok, sc_doc = _run_session_check(root)
 
         elapsed = time.time() - start_time

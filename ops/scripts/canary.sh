@@ -179,6 +179,32 @@ echo ""
 
 # --- Remediation: one reconcile cycle if any failed ---
 if [ "$REMEDIATE" -eq 1 ]; then
+  # Suppress disruptive remediation during active login window
+  GATE_CHECK="$ROOT_DIR/ops/scripts/csr_human_gate_check.sh"
+  if [ -x "$GATE_CHECK" ] && "$GATE_CHECK" soma_kajabi >/dev/null 2>&1; then
+    GATE_INFO=$("$GATE_CHECK" soma_kajabi 2>/dev/null || true)
+    echo "  Login window active — remediation suppressed"
+    mkdir -p "$CANARY_DIR"
+    cat > "$CANARY_DIR/gate_suppression.json" << GEOF
+{"remediation_suppressed": true, "reason": "remediation suppressed due to active login window", "gate_info": $GATE_INFO, "failed_invariant": "$FAILED_INVARIANT", "timestamp_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+GEOF
+    echo '{"status":"DEGRADED","run_id":"'"$RUN_ID"'","failed_invariant":"'"$FAILED_INVARIANT"'","remediation_suppressed":true,"reason":"active login window","proof":"'"$CANARY_DIR"'/PROOF.md"}' > "$CANARY_DIR/result.json"
+    cat > "$CANARY_DIR/PROOF.md" << EOF
+# Canary DEGRADED (remediation suppressed)
+
+**Run ID:** $RUN_ID
+**Timestamp:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
+**Failed invariant:** $FAILED_INVARIANT
+**Suppression:** remediation suppressed due to active login window
+
+## Artifacts
+- invariants: $CANARY_DIR/invariants.json
+- gate_suppression: $CANARY_DIR/gate_suppression.json
+EOF
+    cat "$CANARY_DIR/result.json"
+    exit 1
+  fi
+
   echo "==> Remediation: one reconcile cycle"
   PLAYBOOK="recover_hq_routing"
   NOVNC_FAILURE=0

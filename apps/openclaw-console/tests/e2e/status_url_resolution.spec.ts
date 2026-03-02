@@ -57,6 +57,25 @@ test.describe("Status API URL resolution", () => {
     }
   });
 
+  test("GET /api/projects/soma_kajabi/status returns human_gate_* fields", async ({ request }) => {
+    const res = await request.get("/api/projects/soma_kajabi/status");
+    const data = await res.json();
+
+    expect(res.ok()).toBeTruthy();
+    expect(data).toHaveProperty("human_gate_active");
+    expect(typeof data.human_gate_active).toBe("boolean");
+    expect(data).toHaveProperty("human_gate_expires_at");
+    expect(data).toHaveProperty("human_gate_run_id");
+    expect(data).toHaveProperty("human_gate_novnc_url");
+    expect(data).toHaveProperty("human_gate_reason");
+
+    if (data.human_gate_active) {
+      expect(typeof data.human_gate_expires_at).toBe("string");
+      expect(typeof data.human_gate_run_id).toBe("string");
+      expect(typeof data.human_gate_novnc_url).toBe("string");
+    }
+  });
+
   test("novnc_url canonicalization: legacy http://:6080 => canonical https with path=/websockify", () => {
     const legacy = "http://aiops-1.tailc75c62.ts.net:6080/vnc.html?autoconnect=1";
     const canonical = toCanonicalNovncUrl(legacy);
