@@ -9,6 +9,7 @@ Artifacts: artifacts/soma_kajabi/run_to_done/<run_id>/{PROOF.md, PROOF.json}
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -23,8 +24,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from ops.lib.exec_trigger import hq_request, trigger_exec  # noqa: E402
 
 HQ_BASE = os.environ.get("OPENCLAW_HQ_BASE", "http://127.0.0.1:8787")
-POLL_INTERVAL = 12
+POLL_INTERVAL_INIT = 6
+POLL_INTERVAL_MAX = 24
 MAX_POLL_MINUTES = 35
+DEFAULT_MAX_POLLS = 120
 NOVNC_FAST_TIMEOUT = 90  # DEEP doctor: framebuffer warm-up (6×5s) + WS stability
 INSTRUCTION_LINE = (
     "Open the URL, complete Cloudflare/Kajabi login + 2FA, then go to Products → Courses "
@@ -142,7 +145,18 @@ def _precheck_novnc(root: Path, retry_after_restart: bool = True) -> bool:
     return False
 
 
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Soma Run to DONE orchestrator")
+    p.add_argument("--max-polls", type=int, default=DEFAULT_MAX_POLLS)
+    p.add_argument("--max-minutes", type=float, default=MAX_POLL_MINUTES)
+    return p.parse_args()
+
+
 def main() -> int:
+    args = _parse_args()
+    max_polls = args.max_polls
+    max_minutes = args.max_minutes
+
     root = _repo_root()
     run_id = f"run_to_done_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
     out_dir = root / "artifacts" / "soma_kajabi" / "run_to_done" / run_id
@@ -209,27 +223,38 @@ def main() -> int:
         print(json.dumps({"ok": False, "error_class": "NO_RUN_ID", "run_id": run_id}))
         return 1
 
-    # POLL
+    # POLL — exponential backoff governor
     start = time.monotonic()
-    max_elapsed = MAX_POLL_MINUTES * 60
+    max_elapsed = max_minutes * 60
     artifact_dir: str | None = None
     result_data: dict | None = None
+    poll_interval = POLL_INTERVAL_INIT
+    poll_count = 0
+    prev_status: str | None = None
 
-    while time.monotonic() - start < max_elapsed:
+    while time.monotonic() - start < max_elapsed and poll_count < max_polls:
+        poll_count += 1
         code, body = hq_request("GET", f"/api/runs?id={auto_run_id}", timeout=15)
         if code != 200:
-            time.sleep(POLL_INTERVAL)
+            time.sleep(poll_interval)
+            poll_interval = min(poll_interval * 2, POLL_INTERVAL_MAX)
             continue
 
         try:
             resp = json.loads(body)
             run_obj = resp.get("run", {})
         except json.JSONDecodeError:
-            time.sleep(POLL_INTERVAL)
+            time.sleep(poll_interval)
+            poll_interval = min(poll_interval * 2, POLL_INTERVAL_MAX)
             continue
 
         status = run_obj.get("status")
         artifact_dir = run_obj.get("artifact_dir")
+
+        # Reset backoff on state change
+        if status != prev_status:
+            poll_interval = POLL_INTERVAL_INIT
+            prev_status = status
 
         if artifact_dir:
             result_path = root / artifact_dir / "RESULT.json"
@@ -237,8 +262,26 @@ def main() -> int:
                 result_data = json.loads(result_path.read_text())
                 break
 
+        # Early stop: acceptance proof already available via status endpoint
+        if artifact_dir:
+            accept_base = root / "artifacts" / "soma_kajabi" / "acceptance"
+            if accept_base.exists():
+                summary_path = root / artifact_dir / "SUMMARY.json"
+                if summary_path.exists():
+                    try:
+                        sf = json.loads(summary_path.read_text())
+                        ap = (sf.get("artifact_dirs") or {}).get("acceptance", "")
+                        if ap:
+                            mr = root / ap / "mirror_report.json"
+                            if mr.exists():
+                                mr_data = json.loads(mr.read_text())
+                                if len(mr_data.get("exceptions", [])) == 0:
+                                    result_data = {"status": "SUCCESS", "early_stop": "acceptance_proof_available"}
+                                    break
+                    except (json.JSONDecodeError, OSError):
+                        pass
+
         if status and status not in ("running", "queued"):
-            # Terminal from run record
             artifact_dir = run_obj.get("artifact_dir")
             if artifact_dir:
                 result_path = root / artifact_dir / "RESULT.json"
@@ -246,7 +289,20 @@ def main() -> int:
                     result_data = json.loads(result_path.read_text())
             break
 
-        time.sleep(POLL_INTERVAL)
+        time.sleep(poll_interval)
+        poll_interval = min(poll_interval * 2, POLL_INTERVAL_MAX)
+
+    elapsed_sec = round(time.monotonic() - start, 1)
+
+    # Record poll metrics
+    poll_metrics = {
+        "poll_count": poll_count,
+        "elapsed_sec": elapsed_sec,
+        "max_polls": max_polls,
+        "max_minutes": max_minutes,
+        "final_interval": poll_interval,
+    }
+    (out_dir / "poll_metrics.json").write_text(json.dumps(poll_metrics, indent=2))
 
     if not result_data:
         (out_dir / "POLL.json").write_text(

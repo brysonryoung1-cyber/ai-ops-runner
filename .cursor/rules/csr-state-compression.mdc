@@ -1,0 +1,33 @@
+---
+description: CSR state compression — reduce model calls via deterministic gates and evidence bundles
+alwaysApply: true
+---
+
+# CSR State Compression
+
+## Before any work
+
+1. Run `ops/scripts/csr_state_gate.sh` (or check its exit code in deploy_until_green).
+   - Exit 0 → system is GREEN and recent. **Do not re-derive state.** Stop.
+   - Exit 1 → stale or not green. Proceed to triage.
+   - Exit 2 → no gate data. Proceed normally.
+
+2. If triage is needed, read `triage.json` and/or `evidence_bundle.json` first — never grep logs or scrape endpoints before checking these structured artifacts.
+
+## Evidence bundles
+
+- Generate with: `ops/scripts/csr_evidence_bundle.sh <triage_dir>`
+- Contains: error_class, retryable, failing_step, recommended_next_action, tail snippets (30 lines / 2 KB cap each).
+- **Never paste raw logs.** Always reference the evidence bundle or quote at most 30 tail lines.
+
+## Soma polling
+
+- `soma_run_to_done.py` uses exponential backoff (6s → 24s cap), resets on state change.
+- Respects `--max-polls` (default 120) and `--max-minutes` (default 35).
+- Records `poll_metrics.json` in the run artifact dir. Check this before assuming timeout.
+
+## Role gates
+
+- **Composer** (orchestrator): planning, sequencing, deciding what to deploy.
+- **Implementer** (Opus): code changes, script edits, test fixes.
+- Do not invoke Implementer for read-only status checks; Composer can read RESULT.json directly.

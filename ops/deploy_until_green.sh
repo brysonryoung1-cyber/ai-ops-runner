@@ -13,6 +13,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
+# --- Already-green short-circuit via state gate ---
+CSR_STATE_GATE_THRESHOLD_MIN="${CSR_STATE_GATE_THRESHOLD_MIN:-15}"
+CSR_ARTIFACTS_ROOT="${CSR_ARTIFACTS_ROOT:-$ROOT_DIR/artifacts}"
+export CSR_ARTIFACTS_ROOT CSR_STATE_GATE_THRESHOLD_MIN
+_gate_rc=0
+"$SCRIPT_DIR/scripts/csr_state_gate.sh" "$CSR_STATE_GATE_THRESHOLD_MIN" || _gate_rc=$?
+if [ "$_gate_rc" -eq 0 ]; then
+  echo "ALREADY_GREEN (recent PASS proof) — skipping deploy"
+  exit 0
+fi
+# gate exit 1 (not green/stale) or 2 (no gate): continue normal flow
+
 MAX_ATTEMPTS="${1:-3}"
 SLEEP_BETWEEN="${2:-30}"
 ARTIFACTS_DIR="$ROOT_DIR/artifacts"
