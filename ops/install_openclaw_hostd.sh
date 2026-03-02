@@ -21,14 +21,23 @@ sudo bash "$ROOT_DIR/ops/scripts/ensure_hostd_venv_playwright.sh"
 SECRETS_DIR="/etc/ai-ops-runner/secrets"
 DEPLOY_KEY="${SECRETS_DIR}/openclaw_ssh/vps_deploy_ed25519"
 HOSTD_ENV="${SECRETS_DIR}/openclaw_hostd.env"
+HOSTNAME_SHORT="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo "")"
 if [ -f "$DEPLOY_KEY" ]; then
   sudo mkdir -p "$SECRETS_DIR"
-  HOSTNAME_SHORT="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo "")"
   if [ "$HOSTNAME_SHORT" != "aiops-1" ] && [ "$ROOT_DIR" != "/opt/ai-ops-runner" ]; then
     if ! sudo grep -q "OPENCLAW_VPS_SSH_IDENTITY" "$HOSTD_ENV" 2>/dev/null; then
       echo "OPENCLAW_VPS_SSH_IDENTITY=$DEPLOY_KEY" | sudo tee -a "$HOSTD_ENV" >/dev/null
       echo "  Set OPENCLAW_VPS_SSH_IDENTITY in $HOSTD_ENV for Apply (remote SSH)"
     fi
+  fi
+fi
+
+# Soma human gate: on production (aiops-1), enable interactive capture for auto_finish
+if [ "$HOSTNAME_SHORT" = "aiops-1" ] || [ "$ROOT_DIR" = "/opt/ai-ops-runner" ]; then
+  sudo mkdir -p "$(dirname "$HOSTD_ENV")"
+  if ! sudo grep -q "OPENCLAW_ENABLE_HUMAN_GATE" "$HOSTD_ENV" 2>/dev/null; then
+    echo "OPENCLAW_ENABLE_HUMAN_GATE=1" | sudo tee -a "$HOSTD_ENV" >/dev/null
+    echo "  Set OPENCLAW_ENABLE_HUMAN_GATE=1 in $HOSTD_ENV (Soma production)"
   fi
 fi
 
