@@ -169,23 +169,23 @@ def main() -> int:
     # PRECHECK
     if not _precheck_drift(root):
         (out_dir / "PRECHECK.json").write_text(
-            json.dumps({"drift_deploy": "failed"}, indent=2)
+            json.dumps({"drift_deploy": "failed", "run_id": run_id}, indent=2)
         )
-        print(json.dumps({"ok": False, "error_class": "DRIFT_DEPLOY_FAILED", "run_id": run_id}))
+        print(json.dumps({"ok": False, "error_class": "DRIFT_DEPLOY_FAILED", "run_id": run_id, "project": "soma_kajabi", "action": "soma_run_to_done"}))
         return 1
 
     if not _precheck_hostd():
         (out_dir / "PRECHECK.json").write_text(
-            json.dumps({"hostd": "unreachable"}, indent=2)
+            json.dumps({"hostd": "unreachable", "run_id": run_id}, indent=2)
         )
-        print(json.dumps({"ok": False, "error_class": "HOSTD_UNREACHABLE", "run_id": run_id}))
+        print(json.dumps({"ok": False, "error_class": "HOSTD_UNREACHABLE", "run_id": run_id, "project": "soma_kajabi", "action": "soma_run_to_done"}))
         return 1
 
     if not _precheck_novnc(root):
         (out_dir / "PRECHECK.json").write_text(
-            json.dumps({"novnc": "not_ready"}, indent=2)
+            json.dumps({"novnc": "not_ready", "run_id": run_id}, indent=2)
         )
-        print(json.dumps({"ok": False, "error_class": "NOVNC_NOT_READY", "run_id": run_id}))
+        print(json.dumps({"ok": False, "error_class": "NOVNC_NOT_READY", "run_id": run_id, "project": "soma_kajabi", "action": "soma_run_to_done"}))
         return 1
 
     # TRIGGER
@@ -254,13 +254,15 @@ def main() -> int:
 
     if not result_data:
         (out_dir / "POLL.json").write_text(
-            json.dumps({"timeout": True, "auto_run_id": auto_run_id}, indent=2)
+            json.dumps({"timeout": True, "auto_run_id": auto_run_id, "run_id": run_id}, indent=2)
         )
         print(json.dumps({
             "ok": False,
             "error_class": "POLL_TIMEOUT",
             "run_id": run_id,
             "auto_run_id": auto_run_id,
+            "project": "soma_kajabi",
+            "action": "soma_run_to_done",
         }))
         return 1
 
@@ -295,13 +297,38 @@ def main() -> int:
         return 0
 
     if terminal_status == "SUCCESS":
-        accept_dir = root / "artifacts" / "soma_kajabi" / "acceptance"
-        # Find acceptance dir for this run (auto_finish run_id)
-        hostd_run_id = Path(artifact_dir or "").name if artifact_dir else ""
-        if hostd_run_id:
-            accept_run_dir = accept_dir / hostd_run_id
-        else:
-            dirs = sorted([d for d in accept_dir.iterdir() if d.is_dir()], key=lambda d: d.name, reverse=True)
+        accept_base = root / "artifacts" / "soma_kajabi" / "acceptance"
+        accept_run_dir = None
+
+        # Primary: read acceptance path from auto_finish SUMMARY.json (canonical)
+        if artifact_dir:
+            summary_path = root / artifact_dir / "SUMMARY.json"
+            if summary_path.exists():
+                try:
+                    af_summary = json.loads(summary_path.read_text())
+                    rel_path = (af_summary.get("artifact_dirs") or {}).get("acceptance", "")
+                    if rel_path:
+                        candidate = root / rel_path
+                        if candidate.exists():
+                            accept_run_dir = candidate
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+        # Fallback: use auto_finish run_id to find acceptance dir
+        if not accept_run_dir:
+            hostd_run_id = Path(artifact_dir or "").name if artifact_dir else ""
+            if hostd_run_id:
+                candidate = accept_base / hostd_run_id
+                if candidate.exists():
+                    accept_run_dir = candidate
+
+        # Last resort: latest acceptance dir
+        if not accept_run_dir and accept_base.exists():
+            dirs = sorted(
+                [d for d in accept_base.iterdir() if d.is_dir()],
+                key=lambda d: d.name,
+                reverse=True,
+            )
             accept_run_dir = dirs[0] if dirs else None
 
         mirror_pass = False
@@ -400,12 +427,17 @@ def main() -> int:
         "auto_run_id": auto_run_id,
         "status": terminal_status,
         "error_class": error_class,
+        "project": "soma_kajabi",
+        "action": "soma_run_to_done",
     }, indent=2))
     print(json.dumps({
         "ok": False,
         "status": terminal_status,
         "error_class": error_class,
         "run_id": run_id,
+        "auto_run_id": auto_run_id,
+        "project": "soma_kajabi",
+        "action": "soma_run_to_done",
         "artifact_dir": artifact_dir,
     }))
     return 1
