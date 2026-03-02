@@ -30,8 +30,8 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from src.llm.router import get_router
-from src.llm.types import LLMRequest, ReviewFailClosedError
+from src.llm.llm_router import generate as llm_generate, get_router, REVIEW_BRAIN
+from src.llm.types import LLMRequest, LLMResponse, ReviewFailClosedError
 from src.llm.budget import actual_cost, write_cost_telemetry
 from src.llm.provider import redact_for_log
 
@@ -79,22 +79,21 @@ def run_review(bundle_path: str, verdict_path: str) -> str:
         raise RuntimeError("Review bundle is empty")
 
     router = get_router()
-    request = LLMRequest(
-        model="",  # Router overrides with CODEX_REVIEW_MODEL
-        messages=[
-            {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
-            {"role": "user", "content": bundle},
-        ],
-        temperature=0.0,
-        purpose="review",
-        trace_id=f"review_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
-        response_format={"type": "json_object"},
-        project_id="openclaw",
-        action="review",
-    )
+    trace = f"review_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
 
     try:
-        response = router.generate(request)
+        response = llm_generate(
+            role=REVIEW_BRAIN,
+            messages=[
+                {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
+                {"role": "user", "content": bundle},
+            ],
+            temperature=0.0,
+            trace_id=trace,
+            response_format={"type": "json_object"},
+            project_id="openclaw",
+            action="review",
+        )
     except ReviewFailClosedError as exc:
         artifact_dir = str(Path(verdict_path).parent)
         fail_closed_path = Path(artifact_dir) / "review_fail_closed.json"
@@ -165,7 +164,7 @@ def run_review(bundle_path: str, verdict_path: str) -> str:
         estimated_cost_usd=0.0,  # pre-call estimate is in router logs
         actual_cost_usd=cost_usd,
         purpose="review",
-        trace_id=request.trace_id,
+        trace_id=trace,
         extra={
             "fallback_used": response.provider != "openai",
             "verdict": verdict["verdict"],

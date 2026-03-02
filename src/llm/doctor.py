@@ -22,50 +22,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from src.llm.router import get_router, _classify_transient
-from src.llm.types import LLMRequest
-
-# Minimal prompt for health check (single token-ish)
-DOCTOR_PROMPT = "Hi"
-
-
-def _check_provider_direct(
-    router, provider_name: str, model: str
-) -> tuple[str, str | None]:
-    """Run minimal completion for a provider (direct call). Returns (state, last_error_class).
-
-    state: OK, DEGRADED, or DOWN.
-    last_error_class: transient_quota, transient_server, transient_network, non_transient, or None.
-
-    TODO(LLM_ROUTER): Route through router.generate(purpose="doctor") once central llm_router
-    consolidates all call paths for unified cost tracking.
-    """
-    provider = router._providers.get(provider_name)
-    if not provider or not provider.is_configured():
-        return "DOWN", "missing_key"
-    request = LLMRequest(
-        model=model,
-        messages=[{"role": "user", "content": DOCTOR_PROMPT}],
-        temperature=0,
-        max_tokens=5,
-        purpose="general",
-        trace_id="doctor",
-        essential=True,
-        project_id="openclaw",
-        action="doctor",
-    )
-    try:
-        resp = provider.generate_text(request)
-        if resp and getattr(resp, "content", ""):
-            return "OK", None
-        return "DEGRADED", None
-    except RuntimeError as exc:
-        cls = _classify_transient(exc)
-        if cls == "non_transient":
-            return "DOWN", "non_transient"
-        return "DEGRADED", cls
-    except Exception:
-        return "DOWN", "non_transient"
+from src.llm.llm_router import check_provider_health, get_router
 
 
 def run_provider_doctor(artifact_dir: str | Path | None = None) -> dict:
@@ -85,15 +42,16 @@ def run_provider_doctor(artifact_dir: str | Path | None = None) -> dict:
     result = {"timestamp": datetime.datetime.utcnow().isoformat() + "Z", "providers": {}}
 
     # OpenAI (review primary)
-    state, err_class = _check_provider_direct(router, "openai", CODEX_REVIEW_MODEL)
+    state, err_class = check_provider_health("openai", CODEX_REVIEW_MODEL)
     result["providers"]["openai"] = {"state": state, "last_error_class": err_class}
 
     # Mistral (review fallback) — only if configured as fallback
-    if router._config and router._config.review_fallback and router._config.review_fallback.provider == "mistral":
-        state, err_class = _check_provider_direct(router, "mistral", router._config.review_fallback.model)
+    config = router._config
+    if config and config.review_fallback and config.review_fallback.provider == "mistral":
+        state, err_class = check_provider_health("mistral", config.review_fallback.model)
         result["providers"]["mistral"] = {"state": state, "last_error_class": err_class}
     else:
-        result["providers"]["mistral"] = {"state": "DOWN", "last_error_class": None}  # not configured as fallback
+        result["providers"]["mistral"] = {"state": "DOWN", "last_error_class": None}
 
     out_path = artifact_dir / "provider_status.json"
     with open(out_path, "w") as f:

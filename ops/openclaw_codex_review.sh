@@ -154,132 +154,18 @@ VERDICT_FILE="$ARTIFACTS_DIR/CODEX_VERDICT.json"
 
 echo "==> Submitting to OpenAI API for review (via LLM router)..."
 
-# Use the LLM router (purpose=review is hard-pinned to OpenAI, fail-closed).
-# Falls back to direct API call if router module is not available.
+# All reviews go through the central LLM router via src.llm.review_gate.
+# The router handles OpenAI (primary) + Mistral (fallback), budget caps,
+# cost telemetry, and fail-closed semantics.
 REVIEW_RC=0
 if python3 -c "from src.llm.review_gate import run_review" 2>/dev/null; then
-  # Router path: uses src.llm.review_gate (purpose=review -> OpenAI, always)
   python3 -m src.llm.review_gate "$VERDICT_FILE" "$BUNDLE_FILE" || REVIEW_RC=$?
 else
-  echo "  (LLM router not available, using direct OpenAI API call)" >&2
-  # TODO(LLM_ROUTER): Remove this fallback; require review_gate. Route all review through central llm_router.
-  # LiteLLM / Direct API call path — uses REVIEW_BASE_URL and REVIEW_API_KEY
-  python3 - "$VERDICT_FILE" "$BUNDLE_FILE" "$REVIEW_BASE_URL" "$REVIEW_API_KEY" "$REVIEW_MODEL" "$REVIEW_MAX_TOKENS" "$REVIEW_PATH_USED" <<'PYEOF' || REVIEW_RC=$?
-import json, sys, os
-
-verdict_file = sys.argv[1]
-bundle_file = sys.argv[2]
-base_url = sys.argv[3].rstrip("/")
-api_key = sys.argv[4]
-model = sys.argv[5]
-max_tokens = int(sys.argv[6])
-review_path = sys.argv[7]
-
-system_prompt = """You are a security-focused code reviewer for the ai-ops-runner repository (OpenClaw control plane).
-
-Review the diff below and output ONLY valid JSON matching this schema:
-{
-  "verdict": "APPROVED" or "BLOCKED",
-  "blockers": ["array of blocking issues"],
-  "non_blocking": ["array of suggestions"],
-  "security_checks": {
-    "public_binds": "PASS or FAIL — any new listeners on 0.0.0.0/:: ?",
-    "allowlist_bypass": "PASS or FAIL — any way to execute non-allowlisted commands?",
-    "key_handling": "PASS or FAIL — any secrets printed/logged/in argv?",
-    "guard_doctor_intact": "PASS or FAIL — guard/doctor logic disabled or weakened?",
-    "lockout_risk": "PASS or FAIL — SSH changes safe if Tailscale down?"
-  },
-  "tests_run": "summary of what you checked"
-}
-
-BLOCK only for:
-- Security regressions: public binds, allowlist bypass, secret exposure
-- Guard/doctor disablement or weakening
-- Lockout risk (SSH changes without Tailscale check)
-- Interactive prompts in runtime paths
-- Non-idempotent operations that could cause drift
-
-If no blocking issues, verdict MUST be "APPROVED"."""
-
-with open(bundle_file) as f:
-    bundle = f.read()
-
-if not api_key:
-    print("ERROR: No API key for review. Set REVIEW_API_KEY or OPENAI_API_KEY.", file=sys.stderr)
-    sys.exit(1)
-
-if model == "gpt-4o" and os.environ.get("OPENCLAW_ALLOW_EXPENSIVE_REVIEW") != "1":
-    print("ERROR: Review model is gpt-4o (expensive). Set OPENCLAW_ALLOW_EXPENSIVE_REVIEW=1 to allow, or use gpt-4o-mini (default). Fail-closed.", file=sys.stderr)
-    sys.exit(1)
-
-import urllib.request
-import urllib.error
-
-payload = {
-    "model": model,
-    "temperature": 0,
-    "max_tokens": max_tokens,
-    "response_format": {"type": "json_object"},
-    "messages": [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": bundle}
-    ]
-}
-
-endpoint = f"{base_url}/chat/completions"
-req = urllib.request.Request(
-    endpoint,
-    data=json.dumps(payload).encode("utf-8"),
-    headers={
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}"
-    },
-    method="POST"
-)
-
-try:
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        result = json.loads(resp.read().decode("utf-8"))
-except urllib.error.HTTPError as e:
-    body = e.read().decode("utf-8", errors="replace")[:500]
-    print(f"ERROR: Review API returned {e.code}: {body}", file=sys.stderr)
-    sys.exit(1)
-except Exception as e:
-    print(f"ERROR: Review API call failed: {e}", file=sys.stderr)
-    sys.exit(1)
-
-try:
-    content = result["choices"][0]["message"]["content"]
-    verdict = json.loads(content)
-except (KeyError, IndexError, json.JSONDecodeError) as e:
-    print(f"ERROR: Failed to parse API response: {e}", file=sys.stderr)
-    with open(verdict_file + ".raw", "w") as f:
-        json.dump(result, f, indent=2)
-    sys.exit(1)
-
-required = ["verdict", "blockers", "non_blocking"]
-for key in required:
-    if key not in verdict:
-        print(f"ERROR: Missing required key in verdict: {key}", file=sys.stderr)
-        sys.exit(1)
-
-if verdict["verdict"] not in ["APPROVED", "BLOCKED"]:
-    print(f"ERROR: Invalid verdict value: {verdict['verdict']}", file=sys.stderr)
-    sys.exit(1)
-
-verdict["meta"] = {
-    "model": model,
-    "max_tokens": max_tokens,
-    "review_path": review_path,
-    "timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z",
-    "type": "codex_diff_review"
-}
-
-with open(verdict_file, "w") as f:
-    json.dump(verdict, f, indent=2)
-
-print(verdict["verdict"])
-PYEOF
+  echo "ERROR: src.llm.review_gate not importable. Cannot proceed." >&2
+  echo "  The LLM router (review_gate) is REQUIRED for all code reviews." >&2
+  echo "  Ensure the repo is intact and src/llm/ modules are available." >&2
+  echo "  Fail-closed: review BLOCKED." >&2
+  REVIEW_RC=1
 fi
 
 if [ "$REVIEW_RC" -ne 0 ]; then

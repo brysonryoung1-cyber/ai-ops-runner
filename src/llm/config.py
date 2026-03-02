@@ -26,7 +26,7 @@ from src.llm.types import LLMConfig
 KNOWN_PROVIDERS = {"openai", "mistral", "moonshot", "ollama"}
 
 # Known purpose names
-KNOWN_PURPOSES = {"general", "review", "vision"}
+KNOWN_PURPOSES = {"general", "review", "vision", "doctor", "fast_helper"}
 
 # Required top-level keys in config
 REQUIRED_TOP_KEYS = {"enabledProviders", "defaults", "providers"}
