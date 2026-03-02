@@ -833,6 +833,142 @@ STUBEOF
 chmod +x "$STUB_BIN/ss"
 
 # ---------------------------------------------------------------------------
+# Test 21: Idempotent re-run — skips restart when already correct
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 21: Idempotent re-run (skip restart) ---"
+rm -rf "$TEST_ROOT/etc"
+rm -f "$SYSTEMCTL_STATE"
+create_systemctl_stub "no" "no" "no"
+
+# First run — creates config and restarts
+OUTPUT="$(PATH="$STUB_BIN:$PATH" OPENCLAW_TEST_ROOT="$TEST_ROOT" \
+  bash "$FIX_SCRIPT" 2>&1)" || {
+  fail "First run exited non-zero"
+}
+if [ -f "$SYSTEMCTL_STATE" ] && grep -q 'restart ssh.service' "$SYSTEMCTL_STATE"; then
+  pass "First run: sshd restarted"
+else
+  fail "First run: sshd not restarted"
+fi
+
+# Second run — config already correct, ss shows correct bind → skip restart
+rm -f "$SYSTEMCTL_STATE"
+OUTPUT="$(PATH="$STUB_BIN:$PATH" OPENCLAW_TEST_ROOT="$TEST_ROOT" \
+  bash "$FIX_SCRIPT" 2>&1)" || {
+  fail "Second run exited non-zero"
+}
+if echo "$OUTPUT" | grep -q "skipping restart\|skipping write"; then
+  pass "Second run: detected no change needed"
+else
+  fail "Second run: should detect config unchanged"
+fi
+if [ -f "$SYSTEMCTL_STATE" ] && grep -q 'restart ssh.service' "$SYSTEMCTL_STATE"; then
+  fail "Second run: sshd should NOT be restarted"
+else
+  pass "Second run: no restart command recorded (idempotent)"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 22: Tailscale readiness retry (eventually succeeds)
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 22: Tailscale readiness retry ---"
+TAILSCALE_CALL_COUNT="$TEST_ROOT/.tailscale_calls"
+rm -f "$TAILSCALE_CALL_COUNT"
+cat > "$STUB_BIN/tailscale" << STUBEOF
+#!/bin/sh
+COUNTER_FILE="$TAILSCALE_CALL_COUNT"
+COUNT=0
+if [ -f "\$COUNTER_FILE" ]; then
+  COUNT=\$(cat "\$COUNTER_FILE")
+fi
+COUNT=\$((COUNT + 1))
+echo \$COUNT > "\$COUNTER_FILE"
+if [ "\${1:-}" = "ip" ] && [ "\${2:-}" = "-4" ]; then
+  if [ "\$COUNT" -ge 2 ]; then
+    echo "100.100.50.1"
+  else
+    exit 1
+  fi
+fi
+STUBEOF
+chmod +x "$STUB_BIN/tailscale"
+
+rm -rf "$TEST_ROOT/etc"
+rm -f "$SYSTEMCTL_STATE"
+create_systemctl_stub "no" "no" "no"
+
+RC=0
+OUTPUT="$(PATH="$STUB_BIN:$PATH" OPENCLAW_TEST_ROOT="$TEST_ROOT" OPENCLAW_TS_READY_TIMEOUT=10 \
+  bash "$FIX_SCRIPT" 2>&1)" || RC=$?
+if [ "$RC" -eq 0 ]; then
+  pass "Script succeeds after Tailscale becomes ready on retry"
+else
+  fail "Script should succeed when Tailscale becomes ready (got rc=$RC)"
+fi
+if echo "$OUTPUT" | grep -q "Tailscale not ready\|became ready"; then
+  pass "Tailscale retry message present"
+else
+  fail "Missing Tailscale retry/ready message"
+fi
+
+# Restore tailscale stub
+cat > "$STUB_BIN/tailscale" << 'STUBEOF'
+#!/bin/sh
+if [ "${1:-}" = "ip" ] && [ "${2:-}" = "-4" ]; then
+  echo "100.100.50.1"
+elif [ "${1:-}" = "status" ]; then
+  exit 0
+fi
+STUBEOF
+chmod +x "$STUB_BIN/tailscale"
+
+# ---------------------------------------------------------------------------
+# Test 23: --verify mode (read-only check)
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Test 23: --verify mode ---"
+rm -rf "$TEST_ROOT/etc"
+rm -f "$SYSTEMCTL_STATE"
+create_systemctl_stub "no" "no" "no"
+
+# First run to create config
+OUTPUT="$(PATH="$STUB_BIN:$PATH" OPENCLAW_TEST_ROOT="$TEST_ROOT" \
+  bash "$FIX_SCRIPT" 2>&1)" || true
+
+# Now run --verify — should pass since config + bindings are correct
+RC=0
+OUTPUT="$(PATH="$STUB_BIN:$PATH" OPENCLAW_TEST_ROOT="$TEST_ROOT" \
+  bash "$FIX_SCRIPT" --verify 2>&1)" || RC=$?
+if [ "$RC" -eq 0 ]; then
+  pass "--verify returns 0 when correctly configured"
+else
+  fail "--verify should return 0 when configured (got rc=$RC)"
+fi
+if echo "$OUTPUT" | grep -q "RESULT: PASS"; then
+  pass "--verify prints PASS"
+else
+  fail "--verify missing PASS result"
+fi
+
+# Remove config and verify again — should fail
+rm -f "$TEST_ROOT/etc/ssh/sshd_config.d/99-tailscale-only.conf"
+RC=0
+OUTPUT="$(PATH="$STUB_BIN:$PATH" OPENCLAW_TEST_ROOT="$TEST_ROOT" \
+  bash "$FIX_SCRIPT" --verify 2>&1)" || RC=$?
+if [ "$RC" -ne 0 ]; then
+  pass "--verify returns non-zero when config missing"
+else
+  fail "--verify should return non-zero when config is gone"
+fi
+if echo "$OUTPUT" | grep -q "RESULT: FAIL"; then
+  pass "--verify prints FAIL when unconfigured"
+else
+  fail "--verify missing FAIL result"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""

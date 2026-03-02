@@ -106,6 +106,21 @@ if grep -q 'AddressFamily inet' "$FIX_SCRIPT"; then
 else
   fail "Missing AddressFamily inet"
 fi
+if grep -q '\-\-verify' "$FIX_SCRIPT"; then
+  pass "Fix script supports --verify mode"
+else
+  fail "Missing --verify mode support"
+fi
+if grep -q 'CONFIG_CHANGED\|skipping restart' "$FIX_SCRIPT"; then
+  pass "Fix script has idempotent restart skip"
+else
+  fail "Missing idempotent restart skip logic"
+fi
+if grep -q 'TS_READY_TIMEOUT\|OPENCLAW_TS_READY_TIMEOUT' "$FIX_SCRIPT"; then
+  pass "Fix script has Tailscale readiness retry"
+else
+  fail "Missing Tailscale readiness retry"
+fi
 
 # --- Test 5: deploy_pipeline.sh has Step 2e ---
 echo ""
