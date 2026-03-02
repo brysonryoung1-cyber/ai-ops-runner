@@ -139,6 +139,10 @@ safe_remediate() {
       echo "  Waiting ${SLEEP_BETWEEN}s for transient condition..." >&2
       sleep "$SLEEP_BETWEEN"
       ;;
+    *ssh_tailscale*|*tailscale_fix*)
+      echo "  Waiting ${SLEEP_BETWEEN}s for Tailscale readiness..." >&2
+      sleep "$SLEEP_BETWEEN"
+      ;;
     *) ;;
   esac
 }
