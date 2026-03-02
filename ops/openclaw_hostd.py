@@ -365,9 +365,6 @@ def run_action(action: str, run_id: str, params: dict | None = None) -> tuple[in
     stderr_path = os.path.join(art_dir, "stderr.txt")
     result_path = os.path.join(art_dir, "hostd_result.json")
     env = {**os.environ, "OPENCLAW_RUN_ID": run_id}
-    # Soma human gate: enable interactive capture for auto_finish (production default)
-    if action in ("soma_kajabi_auto_finish", "soma_kajabi_capture_interactive"):
-        env["OPENCLAW_ENABLE_HUMAN_GATE"] = "1"
     try:
         proc = subprocess.run(
             cmd,
