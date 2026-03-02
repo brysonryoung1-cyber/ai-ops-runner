@@ -33,6 +33,10 @@ export const ACTION_TO_HOSTD: Record<string, string> = {
   "pred_markets.mirror.run": "pred_markets.mirror.run",
   "pred_markets.report.daily": "pred_markets.report.daily",
   "pred_markets.report.health": "pred_markets.report.health",
+  "rollback": "rollback",
+  "rootd.systemctl_restart": "rootd.systemctl_restart",
+  "rootd.tailscale_serve_apply": "rootd.tailscale_serve_apply",
+  "serve_enforcer": "serve_enforcer",
   "sms_status": "sms_status",
   "soma_connectors_status": "soma_connectors_status",
   "soma_fix_and_retry": "soma_fix_and_retry",
@@ -54,6 +58,7 @@ export const ACTION_TO_HOSTD: Record<string, string> = {
   "soma_kajabi_session_warm_status": "soma_kajabi_session_warm_status",
   "soma_kajabi_snapshot_debug": "soma_kajabi_snapshot_debug",
   "soma_kajabi_unblock_and_run": "soma_kajabi_unblock_and_run",
+  "soma_kajabi_verify_business_dod": "soma_kajabi_verify_business_dod",
   "soma_last_errors": "soma_last_errors",
   "soma_mirror": "soma_mirror",
   "soma_novnc_oneclick_recovery": "soma_novnc_oneclick_recovery",
@@ -71,6 +76,6 @@ export const ACTION_TO_HOSTD: Record<string, string> = {
 
 /** Project ID -> set of allowlisted action ids for POST /api/projects/[projectId]/run */
 export const PROJECT_ACTIONS: Record<string, ReadonlySet<string>> = {
-  "soma_kajabi": new Set(["openclaw_novnc_restart", "soma_connectors_status", "soma_fix_and_retry", "soma_kajabi_auto_finish", "soma_kajabi_bootstrap_finalize", "soma_kajabi_bootstrap_start", "soma_kajabi_bootstrap_status", "soma_kajabi_capture_interactive", "soma_kajabi_discover", "soma_kajabi_gmail_connect_finalize", "soma_kajabi_gmail_connect_start", "soma_kajabi_gmail_connect_status", "soma_kajabi_reauth_and_resume", "soma_kajabi_session_check", "soma_kajabi_session_warm_disable", "soma_kajabi_session_warm_enable", "soma_kajabi_session_warm_status", "soma_kajabi_snapshot_debug", "soma_kajabi_unblock_and_run", "soma_novnc_oneclick_recovery", "soma_run_to_done", "soma_zane_finish_plan"]),
+  "soma_kajabi": new Set(["openclaw_novnc_restart", "soma_connectors_status", "soma_fix_and_retry", "soma_kajabi_auto_finish", "soma_kajabi_bootstrap_finalize", "soma_kajabi_bootstrap_start", "soma_kajabi_bootstrap_status", "soma_kajabi_capture_interactive", "soma_kajabi_discover", "soma_kajabi_gmail_connect_finalize", "soma_kajabi_gmail_connect_start", "soma_kajabi_gmail_connect_status", "soma_kajabi_reauth_and_resume", "soma_kajabi_session_check", "soma_kajabi_session_warm_disable", "soma_kajabi_session_warm_enable", "soma_kajabi_session_warm_status", "soma_kajabi_snapshot_debug", "soma_kajabi_unblock_and_run", "soma_kajabi_verify_business_dod", "soma_novnc_oneclick_recovery", "soma_run_to_done", "soma_zane_finish_plan"]),
 };
 
