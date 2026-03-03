@@ -28,6 +28,7 @@ RUN_ID="${OPENCLAW_RUN_ID:-$(date -u +%Y%m%d_%H%M%S)_fbguard}"
 NOVNC_PORT="${OPENCLAW_NOVNC_PORT:-${NOVNC_PORT:-6080}}"
 VNC_PORT="${OPENCLAW_NOVNC_VNC_PORT:-${VNC_PORT:-5900}}"
 DISPLAY_NUM="${OPENCLAW_NOVNC_DISPLAY:-${DISPLAY:-:99}}"
+XAUTH_FILE="${OPENCLAW_NOVNC_XAUTHORITY:-/run/openclaw-novnc/.X${DISPLAY_NUM#:}-auth}"
 XWD_FILE="/tmp/novnc_fb.xwd"
 ART_DIR="$ROOT_DIR/artifacts/novnc_debug/$RUN_ID"
 COLLECT_SCRIPT="$ROOT_DIR/ops/scripts/novnc_collect_diagnostics.sh"
@@ -95,7 +96,7 @@ _check_framebuffer() {
 
   for warmup_attempt in $(seq 1 "$FB_WARMUP_MAX"); do
     rm -f "$XWD_FILE"
-    if ! DISPLAY="$DISPLAY_NUM" xwd -root -silent -out "$XWD_FILE" 2>/dev/null; then
+    if ! DISPLAY="$DISPLAY_NUM" XAUTHORITY="${XAUTH_FILE}" xwd -root -silent -out "$XWD_FILE" 2>/dev/null; then
       _fail_reason="xwd_capture_failed"
       [ "$warmup_attempt" -lt "$FB_WARMUP_MAX" ] && sleep "$FB_WARMUP_SLEEP"
       continue
@@ -145,16 +146,16 @@ except Exception:
     if [ "$warmup_attempt" -lt "$FB_WARMUP_MAX" ]; then
       # Re-apply non-black background
       if command -v xsetroot >/dev/null 2>&1; then
-        DISPLAY="$DISPLAY_NUM" xsetroot -solid "#2b2b2b" 2>/dev/null || true
+        DISPLAY="$DISPLAY_NUM" XAUTHORITY="${XAUTH_FILE}" xsetroot -solid "#2b2b2b" 2>/dev/null || true
       fi
       # Ensure openbox running (restart if not)
       if ! pgrep -f "openbox" >/dev/null 2>&1 && command -v openbox >/dev/null 2>&1; then
-        DISPLAY="$DISPLAY_NUM" openbox --sm-disable 2>/dev/null &
+        DISPLAY="$DISPLAY_NUM" XAUTHORITY="${XAUTH_FILE}" openbox --sm-disable 2>/dev/null &
         sleep 2
       fi
       # Launch Chromium via kajabi_ui_ensure (paints Kajabi UI on DISPLAY)
       if [ -x "$KAJABI_ENSURE" ]; then
-        DISPLAY="$DISPLAY_NUM" "$KAJABI_ENSURE" 2>/dev/null || true
+        DISPLAY="$DISPLAY_NUM" XAUTHORITY="${XAUTH_FILE}" "$KAJABI_ENSURE" 2>/dev/null || true
         sleep 3
       fi
       # Save framebuffer artifact for this attempt (before retry)
