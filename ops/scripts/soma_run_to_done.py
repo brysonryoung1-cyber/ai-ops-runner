@@ -402,46 +402,121 @@ def main() -> int:
                 if candidate.exists():
                     accept_run_dir = candidate
 
-        if not accept_run_dir and accept_base.exists():
-            dirs = sorted(
-                [d for d in accept_base.iterdir() if d.is_dir()],
-                key=lambda d: d.name,
-                reverse=True,
-            )
-            accept_run_dir = dirs[0] if dirs else None
+        # Fail-closed: no "latest" fallback — acceptance must be from this run
+        if not accept_run_dir:
+            (out_dir / "PROOF.json").write_text(json.dumps({
+                "run_id": run_id,
+                "auto_run_id": auto_run_id,
+                "status": "FAILURE",
+                "error_class": "ACCEPTANCE_MISSING_FOR_RUN",
+                "build_sha": _get_build_sha(root),
+                "expected_paths": [
+                    str(accept_base / (Path(artifact_dir or "").name or "UNKNOWN")),
+                ],
+            }, indent=2))
+            print(json.dumps({
+                "ok": False,
+                "status": "FAILURE",
+                "error_class": "ACCEPTANCE_MISSING_FOR_RUN",
+                "run_id": run_id,
+                "auto_run_id": auto_run_id,
+                "project": "soma_kajabi",
+                "action": "soma_run_to_done",
+            }))
+            return 1
 
         mirror_pass = False
         exceptions_count = -1
-        if accept_run_dir and (accept_run_dir / "mirror_report.json").exists():
+        acceptance_rel = str(accept_run_dir.relative_to(root))
+
+        if (accept_run_dir / "mirror_report.json").exists():
             mr = json.loads((accept_run_dir / "mirror_report.json").read_text())
             excs = mr.get("exceptions", [])
             exceptions_count = len(excs)
             mirror_pass = exceptions_count == 0
+        else:
+            # mirror_report.json missing → fail-closed
+            (out_dir / "PROOF.json").write_text(json.dumps({
+                "run_id": run_id,
+                "auto_run_id": auto_run_id,
+                "status": "FAILURE",
+                "error_class": "ACCEPTANCE_MISSING_FOR_RUN",
+                "build_sha": _get_build_sha(root),
+                "acceptance_dir": acceptance_rel,
+                "message": "mirror_report.json not found in acceptance dir",
+            }, indent=2))
+            print(json.dumps({
+                "ok": False,
+                "status": "FAILURE",
+                "error_class": "ACCEPTANCE_MISSING_FOR_RUN",
+                "run_id": run_id,
+                "auto_run_id": auto_run_id,
+                "acceptance_dir": acceptance_rel,
+                "project": "soma_kajabi",
+                "action": "soma_run_to_done",
+            }))
+            return 1
+
+        # Fail-closed: mirror must PASS for SUCCESS
+        if not mirror_pass:
+            (out_dir / "PROOF.json").write_text(json.dumps({
+                "run_id": run_id,
+                "auto_run_id": auto_run_id,
+                "status": "FAILURE",
+                "error_class": "MIRROR_FAIL",
+                "build_sha": _get_build_sha(root),
+                "acceptance_dir": acceptance_rel,
+                "mirror_pass": False,
+                "mirror_exceptions_count": exceptions_count,
+            }, indent=2))
+            (out_dir / "PROOF.md").write_text(
+                f"# Soma Run to DONE — FAILURE (Mirror)\n\n"
+                f"- build_sha: {_get_build_sha(root)}\n"
+                f"- acceptance: {acceptance_rel}\n"
+                f"- Mirror PASS: False (exceptions_count={exceptions_count})\n"
+                f"- error_class: MIRROR_FAIL\n"
+            )
+            print(json.dumps({
+                "ok": False,
+                "status": "FAILURE",
+                "error_class": "MIRROR_FAIL",
+                "run_id": run_id,
+                "auto_run_id": auto_run_id,
+                "acceptance_dir": acceptance_rel,
+                "mirror_pass": False,
+                "mirror_exceptions_count": exceptions_count,
+                "project": "soma_kajabi",
+                "action": "soma_run_to_done",
+            }))
+            return 1
 
         proof = {
             "run_id": run_id,
             "auto_run_id": auto_run_id,
             "status": "SUCCESS",
             "build_sha": _get_build_sha(root),
-            "acceptance_path": str(accept_run_dir.relative_to(root)) if accept_run_dir else None,
-            "mirror_pass": mirror_pass,
-            "exceptions_count": exceptions_count,
+            "acceptance_path": acceptance_rel,
+            "acceptance_dir": acceptance_rel,
+            "mirror_pass": True,
+            "mirror_exceptions_count": 0,
+            "exceptions_count": 0,
         }
         (out_dir / "PROOF.json").write_text(json.dumps(proof, indent=2))
         (out_dir / "PROOF.md").write_text(
             f"# Soma Run to DONE — SUCCESS\n\n"
             f"- build_sha: {proof['build_sha']}\n"
             f"- acceptance: {proof['acceptance_path']}\n"
-            f"- Mirror PASS: {mirror_pass} (exceptions_count={exceptions_count})\n"
+            f"- Mirror PASS: True (exceptions_count=0)\n"
         )
         print(json.dumps({
             "ok": True,
             "status": "SUCCESS",
             "run_id": run_id,
             "auto_run_id": auto_run_id,
-            "acceptance_path": proof["acceptance_path"],
-            "mirror_pass": mirror_pass,
-            "exceptions_count": exceptions_count,
+            "acceptance_path": acceptance_rel,
+            "acceptance_dir": acceptance_rel,
+            "mirror_pass": True,
+            "mirror_exceptions_count": 0,
             "proof_artifact": f"artifacts/soma_kajabi/run_to_done/{run_id}/PROOF.json",
         }))
         return 0

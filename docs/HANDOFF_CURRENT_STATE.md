@@ -31,6 +31,8 @@ Docker smoke test passing. Full ops/review/ship framework active. ORB integratio
 
 ## OpenClaw Current State
 
+- **Soma Kajabi lane handoff:** [docs/HANDOFF_OPENCLAW_SOMA.md](HANDOFF_OPENCLAW_SOMA.md) — DoD, spec, ops loop, proof locations.
+
 ### Infrastructure Components
 
 | Component | Status | Location |
