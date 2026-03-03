@@ -67,6 +67,9 @@ log() {
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$msg" | tee -a "$LOG_FILE" >&2
 }
 
+# Bash 3.2 (macOS) compatibility: mapfile is bash 4+; we use read-loop. Log version; require bash >= 3 only.
+log "bash_version=${BASH_VERSION:-unknown}"
+
 SSH_OPTS=(
   -o ConnectTimeout=15
   -o StrictHostKeyChecking=accept-new
@@ -100,7 +103,8 @@ if [ "$health_state" = "OK" ]; then
   log "HQ UI reachable. Triggering soma_run_to_done via /api/exec."
   trigger_http_code="$(curl -sS --connect-timeout 5 --max-time 30 -X POST "${BASE_URL%/}/api/exec" -H "Content-Type: application/json" -d '{"action":"soma_run_to_done"}' -o "$TRIGGER_FILE" -w "%{http_code}" || true)"
 
-  mapfile -t trigger_fields < <(python3 - "$trigger_http_code" "$TRIGGER_FILE" <<'PY'
+  trigger_fields=()
+  while IFS= read -r line; do trigger_fields+=("$line"); done < <(python3 - "$trigger_http_code" "$TRIGGER_FILE" <<'PY'
 import sys
 from pathlib import Path
 
@@ -142,7 +146,8 @@ PY
         continue
       fi
 
-      mapfile -t run_fields < <(python3 - "$RUN_FILE" <<'PY'
+      run_fields=()
+      while IFS= read -r line; do run_fields+=("$line"); done < <(python3 - "$RUN_FILE" <<'PY'
 import sys
 from pathlib import Path
 
@@ -187,7 +192,8 @@ PY
         : > "$PROOF_PAYLOAD_FILE"
       fi
 
-      mapfile -t terminal_fields < <(python3 - "$run_status" "$PROOF_PAYLOAD_FILE" "$BASE_URL" <<'PY'
+      terminal_fields=()
+      while IFS= read -r line; do terminal_fields+=("$line"); done < <(python3 - "$run_status" "$PROOF_PAYLOAD_FILE" "$BASE_URL" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -233,7 +239,8 @@ if [ "$mode_used" = "remote_ssh" ]; then
   ssh_rc=0
   ssh "${SSH_OPTS[@]}" "$HOST" "set -euo pipefail; cd '$REPO_DIR'; python3 ops/scripts/soma_run_to_done.py" >"$REMOTE_OUTPUT_FILE" 2>>"$LOG_FILE" || ssh_rc=$?
 
-  mapfile -t ssh_fields < <(python3 - "$REMOTE_OUTPUT_FILE" "$BASE_URL" "$ssh_rc" <<'PY'
+  ssh_fields=()
+  while IFS= read -r line; do ssh_fields+=("$line"); done < <(python3 - "$REMOTE_OUTPUT_FILE" "$BASE_URL" "$ssh_rc" <<'PY'
 import json
 import sys
 from pathlib import Path
