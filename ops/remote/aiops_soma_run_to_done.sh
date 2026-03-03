@@ -56,6 +56,7 @@ HEALTH_FILE="$PROOF_DIR/health_public.json"
 TRIGGER_FILE="$PROOF_DIR/trigger_response.json"
 RUN_FILE="$PROOF_DIR/run_poll.json"
 PROOF_BROWSE_FILE="$PROOF_DIR/proof_browse.json"
+PRECHECK_BROWSE_FILE="$PROOF_DIR/precheck_browse.json"
 PROOF_PAYLOAD_FILE="$PROOF_DIR/proof_payload.json"
 RESULT_FILE="$PROOF_DIR/soma_run_to_done_result.json"
 REMOTE_OUTPUT_FILE="$PROOF_DIR/soma_remote_output.log"
@@ -185,6 +186,35 @@ proof = parse_artifact_browse_proof(body) or {}
 write_json_file(Path(sys.argv[2]), proof)
 print(json.dumps(proof))
 PY
+        else
+          precheck_rel_path="${artifact_dir#artifacts/}/PRECHECK.json"
+          precheck_query_path="$(python3 - "$precheck_rel_path" <<'PY'
+import sys
+from urllib.parse import quote
+
+print(quote(sys.argv[1], safe=""))
+PY
+)"
+          precheck_http_code="$(curl -sS --connect-timeout 5 --max-time 20 -o "$PRECHECK_BROWSE_FILE" -w "%{http_code}" "${BASE_URL%/}/api/artifacts/browse?path=${precheck_query_path}" || true)"
+          if [ "$precheck_http_code" = "200" ]; then
+            python3 - "$PRECHECK_BROWSE_FILE" "$PROOF_PAYLOAD_FILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+from ops.lib.aiops_remote_helpers import parse_artifact_browse_proof, write_json_file
+
+body = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+precheck = parse_artifact_browse_proof(body) or {}
+payload = {
+    "status": "FAIL",
+    "error_class": precheck.get("error_class") or "NOVNC_NOT_READY",
+    "novnc_readiness_artifact_dir": precheck.get("novnc_readiness_artifact_dir"),
+}
+write_json_file(Path(sys.argv[2]), payload)
+print(json.dumps(payload))
+PY
+          fi
         fi
       fi
 
@@ -281,24 +311,42 @@ from pathlib import Path
 
 from ops.lib.aiops_remote_helpers import utc_now_iso, write_json_file
 
+remote_payload = json.loads(sys.argv[7]) if sys.argv[7] else {}
 payload = {
     "local_run_id": sys.argv[2],
     "mode": sys.argv[3],
     "terminal_status": sys.argv[4],
     "novnc_url": sys.argv[5] or None,
     "remote_run_id": sys.argv[6] or None,
-    "remote_payload": json.loads(sys.argv[7]),
+    "remote_payload": remote_payload,
+    "novnc_readiness_artifact_dir": (
+      remote_payload.get("novnc_readiness_artifact_dir")
+      or remote_payload.get("readiness_artifact_dir")
+    ) if isinstance(remote_payload, dict) else None,
     "summary": sys.argv[8] or None,
     "finished_at": utc_now_iso(),
 }
 write_json_file(Path(sys.argv[1]), payload)
 PY
 else
-  python3 - "$RESULT_FILE" "$LOCAL_RUN_ID" "$mode_used" "$terminal_status" "$novnc_url" "$remote_run_id" "$trigger_message" <<'PY'
+  python3 - "$RESULT_FILE" "$LOCAL_RUN_ID" "$mode_used" "$terminal_status" "$novnc_url" "$remote_run_id" "$trigger_message" "$PROOF_PAYLOAD_FILE" <<'PY'
 import sys
+import json
 from pathlib import Path
 
 from ops.lib.aiops_remote_helpers import utc_now_iso, write_json_file
+
+proof_payload = {}
+proof_path = Path(sys.argv[8])
+if proof_path.exists():
+    raw = proof_path.read_text(encoding="utf-8", errors="replace").strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                proof_payload = parsed
+        except json.JSONDecodeError:
+            proof_payload = {}
 
 payload = {
     "local_run_id": sys.argv[2],
@@ -307,6 +355,12 @@ payload = {
     "novnc_url": sys.argv[5] or None,
     "remote_run_id": sys.argv[6] or None,
     "summary": sys.argv[7] or None,
+    "proof_payload": proof_payload or None,
+    "novnc_readiness_artifact_dir": (
+      proof_payload.get("novnc_readiness_artifact_dir")
+      or proof_payload.get("readiness_artifact_dir")
+      or None
+    ) if isinstance(proof_payload, dict) else None,
     "finished_at": utc_now_iso(),
 }
 write_json_file(Path(sys.argv[1]), payload)
@@ -332,5 +386,41 @@ PY
   exit 2
 fi
 
+novnc_readiness_artifact_dir="$(python3 - "$RESULT_FILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.exists():
+    print("")
+    raise SystemExit(0)
+try:
+    data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+except json.JSONDecodeError:
+    print("")
+    raise SystemExit(0)
+
+def pick(d):
+    for key in ("novnc_readiness_artifact_dir", "readiness_artifact_dir", "artifact_dir"):
+        v = d.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+for key in ("proof_payload", "remote_payload"):
+    obj = data.get(key)
+    if isinstance(obj, dict):
+        val = pick(obj)
+        if val:
+            print(val)
+            raise SystemExit(0)
+print(pick(data))
+PY
+)"
+
 echo "FAIL: soma_run_to_done did not complete successfully. Proof: $RESULT_FILE"
+if [ -n "$novnc_readiness_artifact_dir" ]; then
+  echo "noVNC readiness artifacts: $novnc_readiness_artifact_dir"
+fi
 exit 1

@@ -1,251 +1,73 @@
-"""Shared noVNC readiness logic for session_check, capture_interactive, auto_finish.
+"""Shared noVNC readiness adapter used by interactive Soma/Kajabi scripts.
 
-Before emitting WAITING_FOR_HUMAN: run openclaw_novnc_doctor (framebuffer-aware).
-Doctor PASS requires: service active + VNC port reachable + ws_stability_local/tailnet
-verified + framebuffer.png exists. Doctor FAIL: do NOT fall through to probe (probe is
-localhost-only; user needs tailnet). On doctor FAIL: restart openclaw-novnc, sleep 2,
-retry up to 5 times. Only return novnc_url on PASS. Otherwise fail-closed with NOVNC_NOT_READY.
+This module keeps the legacy tuple API while delegating to the convergent,
+self-healing readiness gate in ops.lib.novnc_readiness.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
-import time
 from pathlib import Path
 
-NOVNC_PORT = 6080
-VNC_PORT = 5900
-ENSURE_MAX_RETRIES = 5
-ENSURE_RESTART_SLEEP = 8  # noVNC stack needs ~10s to settle (x11vnc + websockify + ws_stability)
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ops.lib.novnc_readiness import (  # noqa: E402
+    build_canonical_novnc_url,
+    ensure_novnc_ready as _ensure_convergent,
+)
 
 
 def novnc_display() -> str:
     """Canonical DISPLAY from /etc/ai-ops-runner/config/novnc_display.env."""
     cfg = Path("/etc/ai-ops-runner/config/novnc_display.env")
     if cfg.exists():
-        for line in cfg.read_text().splitlines():
+        for line in cfg.read_text(encoding="utf-8", errors="replace").splitlines():
             line = line.strip()
             if line.startswith("DISPLAY=") and "=" in line:
                 return line.split("=", 1)[1].strip().strip("'\"") or ":99"
-    return ":99"
-PROBE_TIMEOUT = 30
-JOURNAL_LINES = 200
-AUTORECOVER_TIMEOUT = 300
-
-
-def _run_autorecover(root: Path, run_id: str) -> bool:
-    """Invoke novnc_autorecover.py once. Return True if it fixed the issue."""
-    autorecover = root / "ops" / "scripts" / "novnc_autorecover.py"
-    if not autorecover.exists():
-        return False
-    try:
-        r = subprocess.run(
-            [sys.executable, str(autorecover)],
-            capture_output=True,
-            text=True,
-            timeout=AUTORECOVER_TIMEOUT,
-            cwd=str(root),
-            env={**os.environ, "OPENCLAW_RUN_ID": f"ready_{run_id}_autorecover"},
-        )
-        return r.returncode == 0
-    except (subprocess.TimeoutExpired, OSError):
-        return False
-
-
-def _run_novnc_restart(root: Path) -> bool:
-    """Run openclaw_novnc_restart (systemctl restart openclaw-novnc). Return True if restart succeeded."""
-    try:
-        r = subprocess.run(
-            ["systemctl", "restart", "openclaw-novnc"],
-            capture_output=True,
-            timeout=15,
-            cwd=str(root),
-        )
-        return r.returncode == 0
-    except (subprocess.TimeoutExpired, OSError):
-        return False
-
-
-def _run_doctor(artifact_dir: Path, run_id: str) -> tuple[bool, str, str | None]:
-    """Run openclaw_novnc_doctor. Return (ok, novnc_url, error_class)."""
-    root = Path(__file__).resolve().parents[2]
-    doctor = root / "ops" / "openclaw_novnc_doctor.sh"
-    if not doctor.exists() or not os.access(doctor, os.X_OK):
-        return False, "", "NOVNC_DOCTOR_MISSING"
-    try:
-        result = subprocess.run(
-            [str(doctor)],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=str(root),
-            env={
-                **os.environ,
-                "OPENCLAW_RUN_ID": run_id,
-                "OPENCLAW_NOVNC_PORT": str(NOVNC_PORT),
-                "OPENCLAW_NOVNC_VNC_PORT": str(VNC_PORT),
-            },
-        )
-        line = (result.stdout or "").strip().split("\n")[-1]
-        if not line:
-            return False, "", "NOVNC_DOCTOR_NO_OUTPUT"
-        doc = json.loads(line)
-        url = doc.get("novnc_url", "") or ""
-        if result.returncode == 0 and doc.get("ok"):
-            return True, url, None
-        err_class = doc.get("error_class") or "NOVNC_BACKEND_UNAVAILABLE"
-        return False, url, err_class
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError):
-        return False, "", "NOVNC_BACKEND_UNAVAILABLE"
+    return os.environ.get("OPENCLAW_NOVNC_DISPLAY", os.environ.get("DISPLAY", ":99")) or ":99"
 
 
 CANONICAL_PARAMS = "autoconnect=1&reconnect=true&reconnect_delay=2000&path=/websockify"
 
 
 def _build_canonical_url(host: str) -> str:
-    """Build canonical HTTPS noVNC URL for a given host (through frontdoor/Tailscale Serve)."""
-    return f"https://{host}/novnc/vnc.html?{CANONICAL_PARAMS}"
+    """Build canonical HTTPS noVNC URL for a given host."""
+    return build_canonical_novnc_url(host)
 
 
-def _get_tailscale_url() -> str:
+def _write_pointer(artifact_dir: Path, payload: dict) -> None:
     try:
-        out = subprocess.run(
-            ["tailscale", "status", "--json"],
-            capture_output=True,
-            text=True,
-            timeout=5,
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        (artifact_dir / "novnc_readiness_pointer.json").write_text(
+            json.dumps(payload, indent=2) + "\n",
+            encoding="utf-8",
         )
-        if out.returncode == 0:
-            data = json.loads(out.stdout)
-            self_data = data.get("Self", {})
-            dns_name = (self_data.get("DNSName") or "").rstrip(".")
-            if dns_name and ".ts.net" in dns_name:
-                return _build_canonical_url(dns_name)
-    except Exception:
+    except OSError:
         pass
-    fallback_host = os.environ.get("OPENCLAW_TS_HOSTNAME", "aiops-1.tailc75c62.ts.net")
-    return _build_canonical_url(fallback_host)
-
-
-def _run_probe() -> tuple[bool, str]:
-    """Run novnc_probe.sh. Return (ok, reason)."""
-    root = Path(__file__).resolve().parents[1]
-    probe = root / "novnc_probe.sh"
-    if not probe.exists():
-        return False, "novnc_probe.sh missing"
-    try:
-        result = subprocess.run(
-            [str(probe)],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env={**os.environ, "OPENCLAW_NOVNC_PORT": str(NOVNC_PORT), "OPENCLAW_NOVNC_VNC_PORT": str(VNC_PORT)},
-        )
-        if result.returncode == 0:
-            return True, ""
-        return False, (result.stdout or result.stderr or "probe failed").strip().split("\n")[-1][:80]
-    except subprocess.TimeoutExpired:
-        return False, "probe timeout"
-    except Exception as e:
-        return False, str(e)[:80]
-
-
-def _capture_journal(artifact_dir: Path) -> Path:
-    """Capture journal to artifact, return path."""
-    path = artifact_dir / "openclaw_novnc_journal.txt"
-    try:
-        out = subprocess.run(
-            ["journalctl", "-u", "openclaw-novnc.service", "-n", str(JOURNAL_LINES), "--no-pager", "-o", "short-precise"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if out.returncode == 0:
-            path.write_text(out.stdout or "(empty)")
-    except Exception:
-        path.write_text("(journalctl unavailable)")
-    return path
-
-
-def _is_login_gate_active() -> bool:
-    """Check if a login window gate is active (suppress restarts)."""
-    try:
-        root = Path(__file__).resolve().parents[2]
-        sys.path.insert(0, str(root))
-        from ops.lib.human_gate import is_gate_active
-        return is_gate_active("soma_kajabi")
-    except Exception:
-        return False
 
 
 def ensure_novnc_ready(artifact_dir: Path, run_id: str) -> tuple[bool, str, str | None, str | None]:
-    """Ensure noVNC ready; return (ready, url, error_class, journal_artifact).
-
-    Hard contract: run openclaw_novnc_doctor; require service active + VNC port reachable +
-    ws_stability_local/tailnet verified + framebuffer.png exists. On doctor FAIL: run
-    openclaw_novnc_restart, sleep 2, retry. Up to 5 attempts with artifacts each time.
-    Only return novnc_url on PASS. Otherwise fail-closed with NOVNC_NOT_READY.
-
-    During active login window: run doctor once but suppress restarts/autorecover.
-    """
-    root = Path(__file__).resolve().parents[2]
-    last_url = ""
-    last_err: str | None = None
-    gate_active = _is_login_gate_active()
-
-    for attempt in range(1, ENSURE_MAX_RETRIES + 1):
-        attempt_run_id = f"{run_id}_attempt{attempt}" if attempt > 1 else run_id
-        doctor_ok, doctor_url, doctor_err = _run_doctor(artifact_dir, attempt_run_id)
-        last_url = doctor_url or _get_tailscale_url()
-        last_err = doctor_err
-
-        if doctor_ok and doctor_url:
-            return True, doctor_url, None, None
-
-        if gate_active:
-            suppression = {
-                "remediation_suppressed": True,
-                "reason": "remediation suppressed due to active login window",
-                "attempt": attempt,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            }
-            try:
-                import json as _json
-                (artifact_dir / "gate_suppression.json").write_text(_json.dumps(suppression, indent=2))
-            except Exception:
-                pass
-            break
-
-        if attempt < ENSURE_MAX_RETRIES:
-            _run_novnc_restart(root)
-            time.sleep(ENSURE_RESTART_SLEEP)
-
-    if not gate_active:
-        if _run_autorecover(root, run_id):
-            final_ok, final_url, final_err = _run_doctor(artifact_dir, f"{run_id}_post_autorecover")
-            if final_ok and final_url:
-                return True, final_url, None, None
-
-    journal_path = _capture_journal(artifact_dir)
-    try:
-        rel = str(journal_path.relative_to(root))
-    except ValueError:
-        rel = str(journal_path)
-    return False, last_url, "NOVNC_NOT_READY", rel
+    """Legacy adapter returning (ready, novnc_url, error_class, journal_artifact)."""
+    out = _ensure_convergent(run_id=run_id, mode="deep", emit_artifacts=True)
+    pointer = {
+        "ok": out.ok,
+        "run_id": out.run_id,
+        "error_class": out.error_class,
+        "novnc_url": out.novnc_url,
+        "novnc_readiness_artifact_dir": out.readiness_artifact_dir,
+        "journal_artifact": out.journal_artifact,
+    }
+    _write_pointer(Path(artifact_dir), pointer)
+    if out.ok:
+        return True, out.novnc_url, None, None
+    return False, out.novnc_url, out.error_class or "NOVNC_NOT_READY", out.journal_artifact
 
 
 def ensure_novnc_ready_with_recovery(artifact_dir: Path, run_id: str) -> tuple[bool, str, str | None, str | None]:
-    """Ensure noVNC ready with one mid-run recovery. On NOVNC_NOT_READY/NOVNC_BACKEND_UNAVAILABLE:
-    restart openclaw-novnc, retry ensure_novnc_ready once. If retry still fails, return failure."""
-    ready, url, err_class, journal = ensure_novnc_ready(artifact_dir, run_id)
-    if ready:
-        return True, url, None, None
-    if err_class in ("NOVNC_BACKEND_UNAVAILABLE", "NOVNC_NOT_READY"):
-        root = Path(__file__).resolve().parents[2]
-        _run_novnc_restart(root)
-        time.sleep(ENSURE_RESTART_SLEEP)
-        return ensure_novnc_ready(artifact_dir, f"{run_id}_recovery")
-    return False, url, err_class, journal
+    """Legacy API; recovery is already integrated into the convergent gate."""
+    return ensure_novnc_ready(artifact_dir, run_id)
