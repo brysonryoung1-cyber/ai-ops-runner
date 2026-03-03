@@ -124,10 +124,11 @@ def _default_config() -> dict[str, Any]:
 def get_storage_state_path(cfg: dict[str, Any]) -> Path:
     """Single source of truth for the Kajabi storage_state file path.
 
-    Prefers cfg["kajabi"]["storage_state_secret_ref"] if present,
+    Prefers cfg["storage_state_secret_ref"] if present, then
+    cfg["kajabi"]["storage_state_secret_ref"] for backward compatibility,
     else falls back to the canonical default.
     """
-    ref = cfg.get("kajabi", {}).get("storage_state_secret_ref")
+    ref = cfg.get("storage_state_secret_ref") or cfg.get("kajabi", {}).get("storage_state_secret_ref")
     if ref:
         return Path(ref)
     return KAJABI_STORAGE_STATE_PATH

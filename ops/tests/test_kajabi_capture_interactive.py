@@ -2,29 +2,36 @@
 
 from __future__ import annotations
 
-import json
+import importlib.util
 from pathlib import Path
-
-import pytest
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_capture_interactive_only_stops_novnc_on_success():
-    """On WAITING/ok=False, _stop_novnc_systemd is NOT called unconditionally."""
+def _load_capture_module():
     script = REPO_ROOT / "ops" / "scripts" / "kajabi_capture_interactive.py"
-    content = script.read_text()
-    # Find call sites (indent + call), not the function definition
-    lines = content.split("\n")
-    call_lines = [
-        (i, line) for i, line in enumerate(lines)
-        if "_stop_novnc_systemd()" in line and "def " not in line
-    ]
-    assert len(call_lines) >= 1, "expected at least one _stop_novnc_systemd() call site"
-    for line_no, line in call_lines:
-        context = "\n".join(lines[max(0, line_no - 5):line_no + 1])
-        assert "ok" in context, \
-            f"_stop_novnc_systemd at line {line_no + 1} must be guarded by ok-check"
+    spec = importlib.util.spec_from_file_location("kajabi_capture_interactive", script)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    return module
+
+
+def test_capture_interactive_waiting_does_not_stop_novnc():
+    """On WAITING/ok=False, _stop_novnc_systemd is not called."""
+    module = _load_capture_module()
+    with mock.patch.object(module, "_stop_novnc_systemd") as stop_mock:
+        module._maybe_stop_novnc_on_success({"ok": False, "status": "WAITING_FOR_HUMAN"})
+        stop_mock.assert_not_called()
+
+
+def test_capture_interactive_success_stops_novnc():
+    """On success/ok=True, _stop_novnc_systemd is called."""
+    module = _load_capture_module()
+    with mock.patch.object(module, "_stop_novnc_systemd") as stop_mock:
+        module._maybe_stop_novnc_on_success({"ok": True})
+        stop_mock.assert_called_once()
 
 
 def test_capture_interactive_has_storage_state_resolver():

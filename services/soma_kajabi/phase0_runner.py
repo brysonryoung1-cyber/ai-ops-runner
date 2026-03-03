@@ -272,7 +272,9 @@ def _run_kajabi_snapshot(root: Path, out_dir: Path, run_id: str, cfg: dict) -> t
         token = load_secret("KAJABI_SESSION_TOKEN", required=False)
     if not token and not (storage_state_path and storage_state_path.exists()):
         _write_kajabi_snapshot_fail_closed(out_dir, run_id, mode)
-        return False, "KAJABI_SESSION_TOKEN not configured; store in env or use storage_state at /etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json", "CONNECTOR_NOT_CONFIGURED"
+        from .connector_config import get_storage_state_path
+        storage_hint = get_storage_state_path(cfg)
+        return False, f"KAJABI_SESSION_TOKEN not configured; store in env or use storage_state at {storage_hint}", "CONNECTOR_NOT_CONFIGURED"
 
     def _do_snapshot():
         home_result = snapshot_kajabi(

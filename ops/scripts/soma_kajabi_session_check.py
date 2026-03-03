@@ -146,6 +146,13 @@ def _get_tailscale_url() -> str:
 
 
 def _stop_novnc_systemd() -> None:
+    # Never stop noVNC during an active human gate login window.
+    try:
+        from ops.lib.human_gate import is_gate_active
+        if is_gate_active("soma_kajabi"):
+            return
+    except Exception:
+        pass
     try:
         subprocess.run(["systemctl", "stop", "openclaw-novnc"], capture_output=True, timeout=15)
     except Exception:
