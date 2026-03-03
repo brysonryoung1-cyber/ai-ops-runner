@@ -62,22 +62,26 @@ PYEOF
 }
 
 WATCHDOG_PID=""
+XVFB_PID=""
 X11VNC_PID=""
 WEBSOCKIFY_PID=""
 cleanup() {
-  write_status "false" "shutdown" "${XVFB_PID:-}" "${X11VNC_PID:-}" "${WEBSOCKIFY_PID:-}"
-  [ -n "$WATCHDOG_PID" ] && kill -TERM "$WATCHDOG_PID" 2>/dev/null || true
-  for pid in ${WEBSOCKIFY_PID:-} ${X11VNC_PID:-}; do
+  local watchdog_pid="${WATCHDOG_PID:-}"
+  local xvfb_pid="${XVFB_PID:-}"
+  local x11vnc_pid="${X11VNC_PID:-}"
+  local websockify_pid="${WEBSOCKIFY_PID:-}"
+  write_status "false" "shutdown" "$xvfb_pid" "$x11vnc_pid" "$websockify_pid"
+  [ -n "$watchdog_pid" ] && kill -TERM "$watchdog_pid" 2>/dev/null || true
+  for pid in "$websockify_pid" "$x11vnc_pid"; do
     [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null || true
   done
-  [ -n "$XVFB_PID" ] && kill -TERM "$XVFB_PID" 2>/dev/null || true
+  [ -n "$xvfb_pid" ] && kill -TERM "$xvfb_pid" 2>/dev/null || true
   exit 0
 }
 trap cleanup TERM INT
 
 # ── 1) Start Xvfb :99 with explicit Xauth (fixes XOpenDisplay/MIT-MAGIC-COOKIE for x11vnc) ──
 # Remove stale X lock only for this DISPLAY (avoid touching other displays)
-XVFB_PID=""
 LOCK_FILE="/tmp/.X${DISPLAY_NUM#:}-lock"
 X11_SOCKET="/tmp/.X11-unix/X${DISPLAY_NUM#:}"
 XAUTH_FILE="${ARTIFACT_DIR}/.X${DISPLAY_NUM#:}-auth"
