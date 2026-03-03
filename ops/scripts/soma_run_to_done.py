@@ -28,7 +28,7 @@ POLL_INTERVAL_INIT = 6
 POLL_INTERVAL_MAX = 24
 MAX_POLL_MINUTES = 35
 DEFAULT_MAX_POLLS = 120
-NOVNC_FAST_TIMEOUT = 90  # DEEP doctor: framebuffer warm-up (6×5s) + WS stability
+NOVNC_DEEP_TIMEOUT = 180  # convergent DEEP doctor waits/retries up to 120s (hard cap 180s)
 INSTRUCTION_LINE = (
     "Open the URL, complete Cloudflare/Kajabi login + 2FA, then go to Products → Courses "
     "and ensure Home User Library + Practitioner Library are visible; then stop touching the session."
@@ -129,10 +129,16 @@ def _run_autorecover(root: Path) -> bool:
         return False
 
 
-def _precheck_novnc(root: Path, retry_after_restart: bool = True) -> bool:
+def _precheck_novnc(
+    root: Path,
+    details: dict[str, str | None] | None = None,
+) -> bool:
     doctor = root / "ops" / "openclaw_novnc_doctor.sh"
     if not doctor.exists() or not os.access(doctor, os.X_OK):
-        return True
+        if details is not None:
+            details["error_class"] = "NOVNC_DOCTOR_MISSING"
+            details["novnc_readiness_artifact_dir"] = None
+        return False
 
     def _run_doctor() -> bool:
         try:
@@ -140,31 +146,28 @@ def _precheck_novnc(root: Path, retry_after_restart: bool = True) -> bool:
                 [str(doctor)],
                 capture_output=True,
                 text=True,
-                timeout=NOVNC_FAST_TIMEOUT,
+                timeout=NOVNC_DEEP_TIMEOUT,
                 cwd=str(root),
             )
-            if r.returncode != 0:
-                return False
             line = (r.stdout or "").strip().split("\n")[-1]
-            if line:
-                doc = json.loads(line)
-                return doc.get("ok", False)
-            return False
+            if not line:
+                if details is not None:
+                    details["error_class"] = "NOVNC_DOCTOR_NO_OUTPUT"
+                return False
+            doc = json.loads(line)
+            if details is not None:
+                details["error_class"] = str(doc.get("error_class") or "NOVNC_NOT_READY")
+                details["novnc_readiness_artifact_dir"] = str(
+                    doc.get("readiness_artifact_dir") or doc.get("artifact_dir") or ""
+                ) or None
+            return bool(r.returncode == 0 and doc.get("ok", False))
         except (subprocess.TimeoutExpired, json.JSONDecodeError):
+            if details is not None:
+                details["error_class"] = "NOVNC_DOCTOR_TIMEOUT"
             return False
 
-    if _run_doctor():
-        return True
-    if retry_after_restart:
-        tr = trigger_exec("system", "openclaw_novnc_restart", timeout=10)
-        if tr.state == "ACCEPTED":
-            time.sleep(15)
-            if _run_doctor():
-                return True
-        # Restart+doctor failed: invoke autorecover once
-        if _run_autorecover(root):
-            return _run_doctor()
-    return False
+    # openclaw_novnc_doctor is now convergent (probe+recover+backoff bounded loop).
+    return _run_doctor()
 
 
 def _parse_args() -> argparse.Namespace:
@@ -199,11 +202,31 @@ def main() -> int:
         print(json.dumps({"ok": False, "error_class": "HOSTD_UNREACHABLE", "run_id": run_id, "project": "soma_kajabi", "action": "soma_run_to_done"}))
         return 1
 
-    if not _precheck_novnc(root):
+    novnc_precheck: dict[str, str | None] = {}
+    if not _precheck_novnc(root, novnc_precheck):
         (out_dir / "PRECHECK.json").write_text(
-            json.dumps({"novnc": "not_ready", "run_id": run_id}, indent=2)
+            json.dumps(
+                {
+                    "novnc": "not_ready",
+                    "run_id": run_id,
+                    "error_class": novnc_precheck.get("error_class") or "NOVNC_NOT_READY",
+                    "novnc_readiness_artifact_dir": novnc_precheck.get("novnc_readiness_artifact_dir"),
+                },
+                indent=2,
+            )
         )
-        print(json.dumps({"ok": False, "error_class": "NOVNC_NOT_READY", "run_id": run_id, "project": "soma_kajabi", "action": "soma_run_to_done"}))
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error_class": novnc_precheck.get("error_class") or "NOVNC_NOT_READY",
+                    "run_id": run_id,
+                    "project": "soma_kajabi",
+                    "action": "soma_run_to_done",
+                    "novnc_readiness_artifact_dir": novnc_precheck.get("novnc_readiness_artifact_dir"),
+                }
+            )
+        )
         return 1
 
     # TRIGGER — uses shared exec trigger client (default 90s timeout, 409 = ALREADY_RUNNING)

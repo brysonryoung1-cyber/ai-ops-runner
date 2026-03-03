@@ -1,57 +1,53 @@
 #!/usr/bin/env bash
-# openclaw_novnc_doctor_selftest.sh — Assert doctor requires tailnet WS for PASS.
+# openclaw_novnc_doctor_selftest.sh — Assert doctor is wired to convergent readiness gate.
 #
-# Hermetic: checks script structure and novnc_ws_stability_check --all usage.
-# Doctor PASS only when ws_stability_local AND ws_stability_tailnet verified.
+# Hermetic: checks wrapper wiring + readiness module contract markers.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DOCTOR="$ROOT_DIR/ops/openclaw_novnc_doctor.sh"
-WS_CHECK="$ROOT_DIR/ops/scripts/novnc_ws_stability_check.py"
+READINESS="$ROOT_DIR/ops/lib/novnc_readiness.py"
 
 pass() { echo "  [PASS] $1"; }
 fail() { echo "  [FAIL] $1" >&2; exit 1; }
 
 echo "=== openclaw_novnc_doctor selftest ==="
 
-# 1. Doctor exists and calls WS check with --all
-if ! grep -q "novnc_ws_stability_check\|ws_stability" "$DOCTOR" 2>/dev/null; then
-  fail "Doctor must reference novnc_ws_stability_check"
+# 1. Doctor exists and delegates to convergent Python module
+if ! grep -q "python3 -m ops.lib.novnc_readiness" "$DOCTOR" 2>/dev/null; then
+  fail "Doctor must invoke ops.lib.novnc_readiness"
 fi
-if ! grep -q "\-\-all\|ws_stability_local\|ws_stability_tailnet" "$DOCTOR" 2>/dev/null; then
-  fail "Doctor must check both local and tailnet WS (--all or ws_stability_local/tailnet)"
+if ! grep -q "\-\-emit-artifacts" "$DOCTOR" 2>/dev/null; then
+  fail "Doctor must emit readiness artifacts"
 fi
-pass "Doctor references dual WS check (local + tailnet)"
+pass "Doctor delegates to convergent readiness module"
 
-# 2. WS check script supports --all and tailnet
-if ! grep -q "\-\-all\|\-\-tailnet\|\-\-local" "$WS_CHECK" 2>/dev/null; then
-  fail "novnc_ws_stability_check must support --all, --tailnet, or --local"
+# 2. Readiness module includes bounded backoff schedule
+if ! grep -q "BACKOFF_DEEP = (2, 4, 8, 16, 32" "$READINESS" 2>/dev/null; then
+  fail "Readiness module must include exponential backoff 2,4,8,16,32"
 fi
-if ! grep -q "ws_stability_local\|ws_stability_tailnet" "$WS_CHECK" 2>/dev/null; then
-  fail "WS check must output ws_stability_local and ws_stability_tailnet"
-fi
-pass "WS check supports --all and outputs local+tailnet"
+pass "Readiness module defines bounded exponential backoff"
 
-# 3. Doctor requires both for PASS
-if ! grep -q "ws_stability_local" "$DOCTOR" 2>/dev/null; then
-  fail "Doctor must check ws_stability_local"
+# 3. Readiness module checks required probes
+if ! grep -q "/novnc/vnc.html" "$READINESS" 2>/dev/null; then
+  fail "Readiness module must probe /novnc/vnc.html"
 fi
-if ! grep -q "ws_stability_tailnet" "$DOCTOR" 2>/dev/null; then
-  fail "Doctor must check ws_stability_tailnet"
+if ! grep -q "/websockify" "$READINESS" 2>/dev/null; then
+  fail "Readiness module must probe /websockify websocket endpoint"
 fi
-pass "Doctor requires both local and tailnet verified for PASS"
+if ! grep -q "tcp_backend_vnc" "$READINESS" 2>/dev/null; then
+  fail "Readiness module must check backend VNC TCP readiness"
+fi
+pass "Readiness module probes HTTP + WS + backend VNC"
 
-# 4. Doctor outputs NOVNC_WS_TAILNET_FAILED on fail
-if ! grep -q "NOVNC_WS_TAILNET_FAILED\|error_class" "$DOCTOR" 2>/dev/null; then
-  fail "Doctor must output error_class=NOVNC_WS_TAILNET_FAILED on tailnet WS fail"
+# 4. Readiness module emits JSON with artifact_dir and error_class
+if ! grep -q "artifact_dir" "$READINESS" 2>/dev/null; then
+  fail "Readiness module output must include artifact_dir"
 fi
-pass "Doctor outputs NOVNC_WS_TAILNET_FAILED on fail"
-
-# 5. Doctor includes artifact_dir in output
-if ! grep -q "artifact_dir" "$DOCTOR" 2>/dev/null; then
-  fail "Doctor must include artifact_dir in JSON output"
+if ! grep -q "error_class" "$READINESS" 2>/dev/null; then
+  fail "Readiness module output must include error_class on failure"
 fi
-pass "Doctor includes artifact_dir"
+pass "Readiness output contract fields present"
 
 echo "=== openclaw_novnc_doctor selftest PASS ==="

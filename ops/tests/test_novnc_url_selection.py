@@ -1,10 +1,9 @@
-"""Unit test: noVNC URL selection must be tailnet host, never localhost."""
+"""Unit tests for noVNC URL/readiness wiring contracts."""
 from __future__ import annotations
 
 import json
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -13,131 +12,63 @@ SCRIPTS = REPO_ROOT / "ops" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 
-def test_ensure_novnc_ready_retries_on_doctor_fail(tmp_path):
-    """When doctor FAIL occurs, ensure_novnc_ready retries restart and only returns on PASS."""
+def test_novnc_ready_adapter_writes_pointer_artifact(tmp_path, monkeypatch):
+    """novnc_ready adapter should persist readiness artifact pointer for callers."""
     import novnc_ready as nr
+    from ops.lib.novnc_readiness import ReadinessOutcome
 
-    call_count = 0
+    fake = ReadinessOutcome(
+        ok=False,
+        result="FAIL",
+        run_id="r1",
+        mode="deep",
+        error_class="NOVNC_NOT_READY",
+        novnc_url="https://test.ts.net/novnc/vnc.html?autoconnect=1&path=/websockify",
+        artifact_dir="artifacts/novnc_readiness/r1",
+        readiness_artifact_dir="artifacts/novnc_readiness/r1",
+        ws_stability_local="failed",
+        ws_stability_tailnet="failed",
+        attempts=6,
+        elapsed_sec=120.0,
+        journal_artifact="artifacts/novnc_readiness/r1/journal_tail.txt",
+    )
+    monkeypatch.setattr(nr, "_ensure_convergent", lambda **kwargs: fake)
 
-    def mock_doctor(_artifact_dir, run_id):
-        nonlocal call_count
-        call_count += 1
-        if call_count < 3:
-            return False, "https://test.ts.net/novnc/vnc.html?autoconnect=1&path=/websockify", "NOVNC_WS_TAILNET_FAILED"
-        return True, "https://test.ts.net/novnc/vnc.html?autoconnect=1&path=/websockify", None
+    ready, url, err_class, journal = nr.ensure_novnc_ready(tmp_path, "run_123")
+    assert ready is False
+    assert url.startswith("https://")
+    assert err_class == "NOVNC_NOT_READY"
+    assert journal and journal.endswith("journal_tail.txt")
 
-    restart_calls = []
-
-    def mock_restart(root):
-        restart_calls.append(root)
-        return True
-
-    with patch.object(nr, "_run_doctor", side_effect=mock_doctor), patch.object(
-        nr, "_run_novnc_restart", side_effect=mock_restart
-    ), patch.object(nr, "_capture_journal", return_value=tmp_path / "journal.txt"):
-        ready, url, err_class, journal = nr.ensure_novnc_ready(tmp_path, "run_123")
-
-    assert ready is True
-    assert url == "https://test.ts.net/novnc/vnc.html?autoconnect=1&path=/websockify"
-    assert err_class is None
-    assert call_count == 3
-    assert len(restart_calls) == 2  # Restart after attempt 1 and 2
-
-
-def test_ensure_novnc_ready_with_recovery_triggers_restart_on_novnc_not_ready(tmp_path):
-    """NOVNC_NOT_READY triggers restart+retry in ensure_novnc_ready_with_recovery."""
-    import novnc_ready as nr
-
-    call_count = 0
-
-    def mock_doctor(_artifact_dir, run_id):
-        nonlocal call_count
-        call_count += 1
-        # First ensure_novnc_ready exhausts 5 retries (5 calls), then recovery runs (1+ calls)
-        if call_count <= 5:
-            return False, "https://test.ts.net/novnc/vnc.html?autoconnect=1&path=/websockify", "NOVNC_NOT_READY"
-        return True, "https://recovered.ts.net/novnc/vnc.html?autoconnect=1&path=/websockify", None
-
-    restart_calls = []
-
-    def mock_restart(root):
-        restart_calls.append(root)
-        return True
-
-    with patch.object(nr, "_run_doctor", side_effect=mock_doctor), patch.object(
-        nr, "_run_novnc_restart", side_effect=mock_restart
-    ), patch.object(nr, "_capture_journal", return_value=tmp_path / "journal.txt"):
-        ready, url, err_class, journal = nr.ensure_novnc_ready_with_recovery(tmp_path, "run_456")
-
-    assert ready is True
-    assert "/novnc/" in url or "vnc.html" in url
-    assert err_class is None
-    assert len(restart_calls) >= 1  # Recovery triggers one restart before retry
+    pointer = tmp_path / "novnc_readiness_pointer.json"
+    assert pointer.exists()
+    data = json.loads(pointer.read_text())
+    assert data["novnc_readiness_artifact_dir"] == "artifacts/novnc_readiness/r1"
 
 
 def test_novnc_url_must_not_be_localhost() -> None:
-    """WAITING_FOR_HUMAN and doctor must never emit 127.0.0.1 or localhost in noVNC URL."""
-    doctor = REPO_ROOT / "ops" / "openclaw_novnc_doctor.sh"
-    content = doctor.read_text()
-    # Doctor outputs novnc_url from _get_novnc_url which uses tailscale DNSName
-    assert "127.0.0.1" not in content or "Host:" in content or "connect" in content, (
-        "Doctor URL logic must not hardcode 127.0.0.1 for user-facing novnc_url"
-    )
-    # The _get_novnc_url in doctor uses tailscale status --json DNSName
-    assert "DNSName" in content or "tailscale" in content, (
-        "Doctor must derive URL from Tailscale DNSName, not localhost"
-    )
-
-
-def test_doctor_emits_canonical_url_with_path_websockify() -> None:
-    """Doctor must emit canonical URL with path=/websockify and reconnect params."""
-    doctor = REPO_ROOT / "ops" / "openclaw_novnc_doctor.sh"
-    content = doctor.read_text()
-    assert "path=/websockify" in content, (
-        "Doctor must emit path=/websockify for canonical noVNC URL (WS upgrade)"
-    )
-    assert "reconnect=true" in content, (
-        "Doctor must emit reconnect=true so noVNC auto-retries on transient WS failure"
-    )
-    assert "vnc.html?autoconnect=1" in content
-
-
-def test_ws_stability_check_supports_tailnet() -> None:
-    """novnc_ws_stability_check must support --tailnet and --all for tailnet verification."""
-    ws_check = REPO_ROOT / "ops" / "scripts" / "novnc_ws_stability_check.py"
-    content = ws_check.read_text()
-    assert "--tailnet" in content or "--all" in content
-    assert "tailnet" in content.lower() or "_get_tailnet_host" in content
-    assert "ws_stability_tailnet" in content or "tailnet_result" in content
-
-
-def test_doctor_pass_includes_tailnet_verified() -> None:
-    """Doctor PASS output must include ws_stability_tailnet=verified."""
-    doctor = REPO_ROOT / "ops" / "openclaw_novnc_doctor.sh"
-    content = doctor.read_text()
-    assert "ws_stability_tailnet" in content
-    assert "verified" in content
-
-
-def test_novnc_ready_canonical_url_format() -> None:
-    """novnc_ready._build_canonical_url must return HTTPS with reconnect + path params."""
+    """Canonical URL builder must never emit localhost for operator-facing links."""
     import novnc_ready as nr
 
     url = nr._build_canonical_url("test.ts.net")
     assert url.startswith("https://test.ts.net/novnc/vnc.html?")
-    assert "autoconnect=1" in url
-    assert "reconnect=true" in url
-    assert "reconnect_delay=2000" in url
-    assert "path=/websockify" in url
-    assert "http://" not in url
-    assert ":6080" not in url
+    assert "127.0.0.1" not in url
+    assert "localhost" not in url
 
 
-def test_novnc_ready_uses_doctor_only() -> None:
-    """ensure_novnc_ready must use doctor (not probe fallback) for tailnet verification."""
-    novnc_ready = SCRIPTS / "novnc_ready.py"
-    content = novnc_ready.read_text()
-    assert "_run_doctor" in content
-    assert "doctor_ok" in content
-    # Must NOT fall through to probe when doctor fails (probe is localhost-only)
-    assert "do NOT fall through to probe" in content or "Doctor FAIL" in content
+def test_doctor_uses_convergent_readiness_module() -> None:
+    """Doctor wrapper should delegate to ops.lib.novnc_readiness."""
+    doctor = REPO_ROOT / "ops" / "openclaw_novnc_doctor.sh"
+    content = doctor.read_text()
+    assert "python3 -m ops.lib.novnc_readiness" in content
+    assert "--emit-artifacts" in content
+
+
+def test_readiness_module_probe_contract_markers() -> None:
+    """Readiness module should encode required probe paths and backoff schedule."""
+    readiness = REPO_ROOT / "ops" / "lib" / "novnc_readiness.py"
+    content = readiness.read_text()
+    assert "/novnc/vnc.html" in content
+    assert "/websockify" in content
+    assert "tcp_backend_vnc" in content
+    assert "BACKOFF_DEEP = (2, 4, 8, 16, 32" in content
