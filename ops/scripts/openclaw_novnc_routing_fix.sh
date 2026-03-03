@@ -11,6 +11,26 @@
 # Run on aiops-1. No secrets.
 set -euo pipefail
 
+# Gate-aware suppression: skip disruptive actions during active human login gate
+_STATE_ROOT="${OPENCLAW_STATE_ROOT:-/opt/ai-ops-runner/state}"
+_GATE_FILE="$_STATE_ROOT/human_gate/soma_kajabi.json"
+if [ -f "$_GATE_FILE" ] && [ "${OPENCLAW_FORCE_AUTORECOVER:-0}" != "1" ]; then
+  _expires="$(python3 -c "
+import json, sys
+from datetime import datetime, timezone
+try:
+    g = json.load(open('$_GATE_FILE'))
+    ea = datetime.fromisoformat(g['expires_at'])
+    if datetime.now(timezone.utc) < ea:
+        print('active')
+except: pass
+" 2>/dev/null || true)"
+  if [ "$_expires" = "active" ]; then
+    echo "openclaw_novnc_routing_fix: suppressed — human gate active (set OPENCLAW_FORCE_AUTORECOVER=1 to override)"
+    exit 0
+  fi
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 RUN_ID="${OPENCLAW_RUN_ID:-$(date -u +%Y%m%d%H%M%SZ)_novnc_routing}"

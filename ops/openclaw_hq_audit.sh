@@ -41,8 +41,27 @@ _heal_hostd() {
   fi
 }
 
-# --- Self-heal: restart novnc if probe fails ---
+# --- Self-heal: restart novnc if probe fails (gate-aware) ---
 _heal_novnc() {
+  # Suppress during active human gate unless force-override
+  local _gate_file="${OPENCLAW_STATE_ROOT:-/opt/ai-ops-runner/state}/human_gate/soma_kajabi.json"
+  if [ -f "$_gate_file" ] && [ "${OPENCLAW_FORCE_AUTORECOVER:-0}" != "1" ]; then
+    local _active
+    _active="$(python3 -c "
+import json, sys
+from datetime import datetime, timezone
+try:
+    g = json.load(open('$_gate_file'))
+    ea = datetime.fromisoformat(g['expires_at'])
+    if datetime.now(timezone.utc) < ea:
+        print('active')
+except: pass
+" 2>/dev/null || true)"
+    if [ "$_active" = "active" ]; then
+      echo "_heal_novnc: suppressed — human gate active"
+      return 0
+    fi
+  fi
   local probe_script="$ROOT_DIR/ops/novnc_probe.sh"
   if [ -x "$probe_script" ]; then
     if ! "$probe_script" 2>/dev/null; then

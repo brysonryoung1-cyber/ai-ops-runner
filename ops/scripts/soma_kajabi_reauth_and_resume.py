@@ -30,6 +30,18 @@ KAJABI_ADMIN = "https://app.kajabi.com/admin"
 KAJABI_SITES = "https://app.kajabi.com/admin/sites"
 KAJABI_PRODUCTS_URL = "https://app.kajabi.com/admin/products"
 STORAGE_STATE_PATH = Path("/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json")
+
+
+def _resolve_storage_state_path() -> Path:
+    try:
+        from services.soma_kajabi.connector_config import get_storage_state_path, load_soma_kajabi_config
+        root = _repo_root()
+        cfg, err = load_soma_kajabi_config(root)
+        if err:
+            return STORAGE_STATE_PATH
+        return get_storage_state_path(cfg)
+    except Exception:
+        return STORAGE_STATE_PATH
 KAJABI_CHROME_PROFILE_DIR = Path("/var/lib/openclaw/kajabi_chrome_profile")
 TARGET_PRODUCTS = ["Home User Library", "Practitioner Library"]
 TIMEOUT_SEC = 25 * 60  # 25 minutes
@@ -238,14 +250,21 @@ def main() -> int:
                             print("The run will auto-resume after you see both products.", file=sys.stderr)
                             sys.stderr.flush()
                             emitted_waiting = True
+                        if emitted_waiting:
+                            try:
+                                from ops.lib.human_gate import touch_gate
+                                touch_gate("soma_kajabi")
+                            except Exception:
+                                pass
                         time.sleep(POLL_INTERVAL)
                         continue
                     if has_both and url_ok:
                         _clear_human_gate()
-                        STORAGE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-                        context.storage_state(path=str(STORAGE_STATE_PATH))
+                        _ssp = _resolve_storage_state_path()
+                        _ssp.parent.mkdir(parents=True, exist_ok=True)
+                        context.storage_state(path=str(_ssp))
                         try:
-                            STORAGE_STATE_PATH.chmod(0o600)
+                            _ssp.chmod(0o600)
                         except OSError:
                             pass
                         result_holder.append({

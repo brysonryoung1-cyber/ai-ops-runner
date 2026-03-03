@@ -253,9 +253,8 @@ def _run_kajabi_snapshot(root: Path, out_dir: Path, run_id: str, cfg: dict) -> t
     storage_state_path: Path | None = None
     token: str | None = None
     if mode == "storage_state":
-        from .connector_config import KAJABI_STORAGE_STATE_PATH
-        path_str = kajabi_cfg.get("storage_state_secret_ref") or str(KAJABI_STORAGE_STATE_PATH)
-        storage_state_path = Path(path_str)
+        from .connector_config import get_storage_state_path
+        storage_state_path = get_storage_state_path(cfg)
         # Validate storage_state has app.kajabi.com cookies before attempting extraction
         from services.soma_kajabi_sync.snapshot import _validate_storage_state_has_kajabi_cookies
         valid, msg = _validate_storage_state_has_kajabi_cookies(storage_state_path)

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 _DEFAULT_STATE_ROOT = "/opt/ai-ops-runner/state"
-_DEFAULT_TTL_MINUTES = 15
+_DEFAULT_TTL_MINUTES = 35
 
 
 def _state_dir() -> Path:
@@ -27,6 +27,18 @@ def _state_dir() -> Path:
 
 def _gate_path(project_id: str) -> Path:
     return _state_dir() / f"{project_id}.json"
+
+
+def _resolve_ttl_minutes(override: int | None = None) -> int:
+    if override is not None:
+        return override
+    env_val = os.environ.get("OPENCLAW_HUMAN_GATE_TTL_MINUTES")
+    if env_val is not None:
+        try:
+            return int(env_val)
+        except (ValueError, TypeError):
+            pass
+    return _DEFAULT_TTL_MINUTES
 
 
 def _now_utc() -> datetime:
@@ -74,9 +86,10 @@ def write_gate(
     run_id: str,
     novnc_url: str,
     reason: str,
-    ttl_minutes: int = _DEFAULT_TTL_MINUTES,
+    ttl_minutes: int | None = None,
 ) -> dict[str, Any]:
     """Write (or overwrite) gate state. Returns the gate dict."""
+    ttl_minutes = _resolve_ttl_minutes(ttl_minutes)
     now = _now_utc()
     expires_at = now + timedelta(minutes=ttl_minutes)
     gate = {
@@ -118,6 +131,34 @@ def write_gate_artifact(
     artifact_path = artifact_dir / "HUMAN_GATE.json"
     artifact_path.write_text(json.dumps(gate, indent=2))
     return artifact_path
+
+
+def touch_gate(project_id: str, ttl_minutes: int | None = None) -> bool:
+    """Extend an active gate's expires_at. Returns True if touched, False if no active gate."""
+    path = _gate_path(project_id)
+    if not path.exists():
+        return False
+    try:
+        gate = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+
+    expires_str = gate.get("expires_at")
+    if not expires_str:
+        return False
+    try:
+        expires_at = datetime.fromisoformat(expires_str)
+    except (ValueError, TypeError):
+        return False
+    if _now_utc() >= expires_at:
+        return False
+
+    resolved_ttl = _resolve_ttl_minutes(ttl_minutes)
+    gate["expires_at"] = (_now_utc() + timedelta(minutes=resolved_ttl)).isoformat()
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(gate, indent=2))
+    tmp.replace(path)
+    return True
 
 
 def is_gate_active(project_id: str) -> bool:

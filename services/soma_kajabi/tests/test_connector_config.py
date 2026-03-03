@@ -60,6 +60,36 @@ def test_phase0_connector_not_configured_when_manual():
     assert parsed.get("ok") is False
 
 
+def test_get_storage_state_path_prefers_secret_ref():
+    """get_storage_state_path returns storage_state_secret_ref when present."""
+    from services.soma_kajabi.connector_config import get_storage_state_path
+    cfg = {
+        "kajabi": {
+            "mode": "storage_state",
+            "storage_state_secret_ref": "/custom/path/state.json",
+        },
+    }
+    path = get_storage_state_path(cfg)
+    assert str(path) == "/custom/path/state.json"
+
+
+def test_get_storage_state_path_fallback():
+    """get_storage_state_path falls back to canonical default when no secret_ref."""
+    from services.soma_kajabi.connector_config import get_storage_state_path, KAJABI_STORAGE_STATE_PATH
+    cfg = {
+        "kajabi": {"mode": "storage_state"},
+    }
+    path = get_storage_state_path(cfg)
+    assert path == KAJABI_STORAGE_STATE_PATH
+
+
+def test_get_storage_state_path_empty_cfg():
+    """get_storage_state_path handles empty config gracefully."""
+    from services.soma_kajabi.connector_config import get_storage_state_path, KAJABI_STORAGE_STATE_PATH
+    path = get_storage_state_path({})
+    assert path == KAJABI_STORAGE_STATE_PATH
+
+
 def test_storage_state_present_is_kajabi_ready():
     """When kajabi.mode is storage_state and file exists with _kjb_session cookie, is_kajabi_ready returns True."""
     from services.soma_kajabi.connector_config import is_kajabi_ready
