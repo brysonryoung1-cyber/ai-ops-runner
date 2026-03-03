@@ -16,7 +16,9 @@ venv/
 .mypy_cache/
 review_packets/
 .locks/
-ops/remote/
+ops/remote/*
+!ops/remote/aiops_apply_and_prove.sh
+!ops/remote/aiops_soma_run_to_done.sh
 ops/_tmp/
 ops/kajabi_state_export_summary.json
 # Ignore .cursor except rules (rule files must travel with repo)
