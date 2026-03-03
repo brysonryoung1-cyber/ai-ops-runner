@@ -392,9 +392,16 @@ def main() -> int:
             continue
         break
 
-    # Cleanup noVNC
+    # Cleanup noVNC (suppress during active gate to avoid killing login session)
     if use_systemd_novnc:
-        _stop_novnc_systemd()
+        _gate_active = False
+        try:
+            from ops.lib.human_gate import is_gate_active
+            _gate_active = is_gate_active("soma_kajabi")
+        except Exception:
+            pass
+        if not _gate_active:
+            _stop_novnc_systemd()
     else:
         for proc in [novnc_proc, x11vnc_proc, xvfb_proc]:
             if proc and proc.poll() is None:

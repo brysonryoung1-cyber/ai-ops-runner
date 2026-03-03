@@ -34,6 +34,18 @@ KAJABI_ADMIN = "https://app.kajabi.com/admin"
 KAJABI_SITES = "https://app.kajabi.com/admin/sites"
 KAJABI_PRODUCTS_URL = "https://app.kajabi.com/admin/products"
 STORAGE_STATE_PATH = Path("/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json")
+
+
+def _resolve_storage_state_path() -> Path:
+    try:
+        from services.soma_kajabi.connector_config import get_storage_state_path, load_soma_kajabi_config
+        root = _repo_root()
+        cfg, err = load_soma_kajabi_config(root)
+        if err:
+            return STORAGE_STATE_PATH
+        return get_storage_state_path(cfg)
+    except Exception:
+        return STORAGE_STATE_PATH
 KAJABI_CHROME_PROFILE_DIR = Path("/var/lib/openclaw/kajabi_chrome_profile")
 TARGET_PRODUCTS = ["Home User Library", "Practitioner Library"]
 TIMEOUT_SEC = 20 * 60  # 20 minutes
@@ -296,10 +308,11 @@ def main() -> int:
                         time.sleep(10)
                         continue
                     if has_both:
-                        STORAGE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-                        context.storage_state(path=str(STORAGE_STATE_PATH))
+                        _ssp = _resolve_storage_state_path()
+                        _ssp.parent.mkdir(parents=True, exist_ok=True)
+                        context.storage_state(path=str(_ssp))
                         try:
-                            STORAGE_STATE_PATH.chmod(0o600)
+                            _ssp.chmod(0o600)
                         except OSError:
                             pass
                         result_holder.append({
@@ -343,10 +356,11 @@ def main() -> int:
             "message": "Capture thread did not complete",
         })
 
-    # Cleanup: stop systemd unit (AFTER storage_state export in run_playwright)
-    _stop_novnc_systemd()
-
     summary = result_holder[0].copy()
+
+    # Only stop noVNC on success; keep it running on WAITING/failure so human can log in
+    if summary.get("ok"):
+        _stop_novnc_systemd()
     summary["artifact_dir"] = str(out_dir)
     summary["run_id"] = out_dir.name
     summary["tailscale_url"] = tailscale_url

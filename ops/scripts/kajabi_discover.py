@@ -33,6 +33,19 @@ from pathlib import Path
 STORAGE_STATE_PATH = Path("/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json")
 KAJABI_PRODUCTS_PATH = Path("/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_products.json")
 TARGET_PRODUCTS = ["Home User Library", "Practitioner Library"]
+
+
+def _resolve_storage_state_path() -> Path:
+    try:
+        root = _repo_root()
+        sys.path.insert(0, str(root))
+        from services.soma_kajabi.connector_config import get_storage_state_path, load_soma_kajabi_config
+        cfg, err = load_soma_kajabi_config(root)
+        if err:
+            return STORAGE_STATE_PATH
+        return get_storage_state_path(cfg)
+    except Exception:
+        return STORAGE_STATE_PATH
 MEMBERSHIPS_PAGE_URL = "https://zane-mccourtney.mykajabi.com/memberships-soma"
 REQUIRED_OFFER_URLS = ["/offers/q6ntyjef/checkout", "/offers/MHMmHyVZ/checkout"]
 
@@ -103,11 +116,12 @@ def main() -> int:
     sys.path.insert(0, str(root))
     from src.playwright_safe import safe_content_excerpt, safe_screenshot, safe_title, safe_url
 
-    if not STORAGE_STATE_PATH.exists() or STORAGE_STATE_PATH.stat().st_size == 0:
+    _storage_state = _resolve_storage_state_path()
+    if not _storage_state.exists() or _storage_state.stat().st_size == 0:
         doc = _write_error(
             out_dir,
             "KAJABI_STORAGE_STATE_MISSING",
-            recommended_next_action=f"Run kajabi_capture_storage_state.py and install to {STORAGE_STATE_PATH}",
+            recommended_next_action=f"Run kajabi_capture_storage_state.py and install to {_storage_state}",
             artifact_dir=str(out_dir),
         )
         (out_dir / "products.json").write_text(json.dumps({"products": {}, "error_class": doc["error_class"]}, indent=2))
@@ -134,7 +148,7 @@ def main() -> int:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=str(STORAGE_STATE_PATH))
+        context = browser.new_context(storage_state=str(_storage_state))
         page = context.new_page()
 
         try:

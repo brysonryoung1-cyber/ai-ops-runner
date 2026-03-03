@@ -121,14 +121,26 @@ def _default_config() -> dict[str, Any]:
     }
 
 
+def get_storage_state_path(cfg: dict[str, Any]) -> Path:
+    """Single source of truth for the Kajabi storage_state file path.
+
+    Prefers cfg["kajabi"]["storage_state_secret_ref"] if present,
+    else falls back to the canonical default.
+    """
+    ref = cfg.get("kajabi", {}).get("storage_state_secret_ref")
+    if ref:
+        return Path(ref)
+    return KAJABI_STORAGE_STATE_PATH
+
+
 def is_kajabi_ready(cfg: dict[str, Any]) -> tuple[bool, str]:
     """Check Kajabi connector readiness. Return (ready, reason)."""
     mode = cfg.get("kajabi", {}).get("mode", "manual")
     if mode == "manual":
         return False, "Kajabi mode is manual; run bootstrap to configure"
     if mode == "storage_state":
-        path_str = cfg.get("kajabi", {}).get("storage_state_secret_ref") or str(KAJABI_STORAGE_STATE_PATH)
-        path = Path(path_str)
+        path = get_storage_state_path(cfg)
+        path_str = str(path)
         if path.exists() and path.stat().st_size > 0:
             try:
                 data = json.loads(path.read_text())

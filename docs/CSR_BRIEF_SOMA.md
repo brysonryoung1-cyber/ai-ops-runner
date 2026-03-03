@@ -1,6 +1,6 @@
 # CSR Brief — Soma / Kajabi Lane
 
-*Diagnostic snapshot for Implementer. Last updated: 2026-03-02.*
+*Diagnostic snapshot for Implementer. Last updated: 2026-03-03.*
 
 ---
 
@@ -78,8 +78,11 @@ All HIGH and MEDIUM issues fixed. LOW items addressed or explicitly deferred.
 
 ## Dependencies / Gotchas
 
-- **Secrets:** KAJABI_SESSION_TOKEN, storage_state at `/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json`; Gmail OAuth at `gmail_oauth.json`. Resolution: env → Keychain → file.
+- **Secrets:** KAJABI_SESSION_TOKEN, storage_state resolved via `get_storage_state_path()` (prefers `storage_state_secret_ref` from config, falls back to `/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json`); Gmail OAuth at `gmail_oauth.json`. Resolution: env → Keychain → file.
 - **Kajabi login:** Session expiry; Cloudflare blocks. noVNC + session_check required for human gate.
+- **Human gate TTL:** Default 35 minutes (was 15). Override via `OPENCLAW_HUMAN_GATE_TTL_MINUTES` env var. Gate TTL is refreshed (touch_gate) during WAITING polling loops.
+- **noVNC stability during WAITING:** noVNC is **not** stopped while the human gate is active. Scripts that would disruptively restart noVNC (shm_guard, shm_fix, routing_fix, novnc_restart, hq_audit `_heal_novnc`) check the gate and suppress if active.
+- **Explicit recovery override:** Set `OPENCLAW_FORCE_AUTORECOVER=1` to bypass gate suppression when a deliberate recovery is needed during an active login window.
 - **Exit node:** Optional `/etc/ai-ops-runner/config/soma_kajabi_exit_node.txt` for Mac laptop routing. If set, `with_exit_node.sh` wraps discover/snapshot/phase0.
 - **Hostd:** `soma_kajabi_auto_finish` runs via hostd. `.venv-hostd` must have Playwright + Chromium.
 - **Rate limits:** Kajabi/Cloudflare may throttle. No explicit backoff in discover/snapshot.

@@ -37,6 +37,18 @@ EXIT_NODE_OFFLINE = "EXIT_NODE_OFFLINE"
 EXIT_NODE_ENABLE_FAILED = "EXIT_NODE_ENABLE_FAILED"
 HOSTD_UNREACHABLE = "HOSTD_UNREACHABLE"
 STORAGE_STATE_PATH = Path("/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json")
+
+
+def _resolve_storage_state_path() -> Path:
+    try:
+        from services.soma_kajabi.connector_config import get_storage_state_path, load_soma_kajabi_config
+        root = _repo_root()
+        cfg, err = load_soma_kajabi_config(root)
+        if err:
+            return STORAGE_STATE_PATH
+        return get_storage_state_path(cfg)
+    except Exception:
+        return STORAGE_STATE_PATH
 EXIT_NODE_CONFIG = Path("/etc/ai-ops-runner/config/soma_kajabi_exit_node.txt")
 CAPTURE_TIMEOUT = 1320  # 22 min
 PHASE0_TIMEOUT = 320
@@ -530,7 +542,8 @@ def _run_main(root: Path, out_dir: Path, run_id: str, result_state: dict[str, ob
     # ── B) Connectors status ──
     write_stage(out_dir, "connectors_status", "running")
     append_summary_line(out_dir, f"[connectors_status] started")
-    if not STORAGE_STATE_PATH.exists() or STORAGE_STATE_PATH.stat().st_size == 0:
+    _storage_state = _resolve_storage_state_path()
+    if not _storage_state.exists() or _storage_state.stat().st_size == 0:
         write_stage(out_dir, "connectors_status", "failed", last_error_class="KAJABI_STORAGE_STATE_MISSING")
         set_result("FAILURE", stage="connectors_status", error_class="KAJABI_STORAGE_STATE_MISSING", message="Kajabi connector not configured. Run Kajabi Bootstrap first.")
         return _fail_closed(
@@ -674,6 +687,11 @@ def _run_main(root: Path, out_dir: Path, run_id: str, result_state: dict[str, ob
             artifact_dir_val = f"artifacts/soma_kajabi/auto_finish/{run_id}"
             while time.monotonic() - start < _reauth_poll_timeout():
                 _touch_lock_heartbeat(root, artifact_dir=artifact_dir_val)
+                try:
+                    from ops.lib.human_gate import touch_gate
+                    touch_gate("soma_kajabi")
+                except Exception:
+                    pass
                 sc_rc, sc_out = _run_session_check(root, venv_python, use_exit_node)
                 sc_doc = _parse_last_json_line(sc_out)
                 if sc_rc == 0 and sc_doc.get("ok"):
@@ -748,6 +766,11 @@ def _run_main(root: Path, out_dir: Path, run_id: str, result_state: dict[str, ob
             artifact_dir_val = f"artifacts/soma_kajabi/auto_finish/{run_id}"
             while time.monotonic() - start < _reauth_poll_timeout():
                 _touch_lock_heartbeat(root, artifact_dir=artifact_dir_val)
+                try:
+                    from ops.lib.human_gate import touch_gate
+                    touch_gate("soma_kajabi")
+                except Exception:
+                    pass
                 sc_rc, sc_out = _run_session_check(root, venv_python, use_exit_node)
                 sc_doc = _parse_last_json_line(sc_out)
                 if sc_rc == 0 and sc_doc.get("ok"):

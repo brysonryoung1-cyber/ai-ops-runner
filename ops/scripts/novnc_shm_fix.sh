@@ -15,6 +15,26 @@ RUN_SOMA=0
 [[ "${1:-}" = "--run-soma" ]] && RUN_SOMA=1
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Gate-aware suppression: skip disruptive actions during active human login gate
+_STATE_ROOT="${OPENCLAW_STATE_ROOT:-/opt/ai-ops-runner/state}"
+_GATE_FILE="$_STATE_ROOT/human_gate/soma_kajabi.json"
+if [ -f "$_GATE_FILE" ] && [ "${OPENCLAW_FORCE_AUTORECOVER:-0}" != "1" ]; then
+  _expires="$(python3 -c "
+import json, sys
+from datetime import datetime, timezone
+try:
+    g = json.load(open('$_GATE_FILE'))
+    ea = datetime.fromisoformat(g['expires_at'])
+    if datetime.now(timezone.utc) < ea:
+        print('active')
+except: pass
+" 2>/dev/null || true)"
+  if [ "$_expires" = "active" ]; then
+    echo "novnc_shm_fix: suppressed — human gate active (set OPENCLAW_FORCE_AUTORECOVER=1 to override)"
+    exit 0
+  fi
+fi
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 RUN_ID="novnc_shm_fix_$(date -u +%Y%m%dT%H%M%SZ)_$$"
 ART_DIR="$ROOT_DIR/artifacts/novnc_shm_fix/$RUN_ID"
