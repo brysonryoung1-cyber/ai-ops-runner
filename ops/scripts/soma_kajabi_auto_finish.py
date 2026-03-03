@@ -819,13 +819,16 @@ def _run_main(root: Path, out_dir: Path, run_id: str, result_state: dict[str, ob
     phase0_dir = None
     if phase0_run_id:
         phase0_dir = phase0_root / phase0_run_id
-    if not phase0_dir or not phase0_dir.exists():
-        dirs = sorted([d for d in phase0_root.iterdir() if d.is_dir()], key=lambda d: d.name, reverse=True)
-        phase0_dir = dirs[0] if dirs else None
 
-    if not phase0_dir or not (phase0_dir / "kajabi_library_snapshot.json").exists():
-        set_result("FAILURE", stage="acceptance_gate", error_class="PHASE0_ARTIFACTS_MISSING", message="Phase0 artifacts not found")
-        return _fail_closed(out_dir, run_id, "PHASE0_ARTIFACTS_MISSING", "Phase0 artifacts not found")
+    # Fail-closed: phase0 must be from the current run — no "latest" fallback
+    if not phase0_dir or not phase0_dir.exists():
+        expected_path = str(phase0_root / (phase0_run_id or "UNKNOWN"))
+        set_result("FAILURE", stage="acceptance_gate", error_class="PHASE0_MISSING_FOR_RUN", message=f"Phase0 dir for current run not found: {expected_path}")
+        return _fail_closed(out_dir, run_id, "PHASE0_MISSING_FOR_RUN", f"Phase0 dir for current run not found: {expected_path}")
+
+    if not (phase0_dir / "kajabi_library_snapshot.json").exists():
+        set_result("FAILURE", stage="acceptance_gate", error_class="PHASE0_DEGRADED", message=f"Phase0 dir exists but kajabi_library_snapshot.json missing (degraded): {phase0_dir}")
+        return _fail_closed(out_dir, run_id, "PHASE0_DEGRADED", f"Phase0 dir exists but kajabi_library_snapshot.json missing (degraded): {phase0_dir}")
 
     snap_path = phase0_dir / "kajabi_library_snapshot.json"
     snap = json.loads(snap_path.read_text()) if snap_path.exists() else {}

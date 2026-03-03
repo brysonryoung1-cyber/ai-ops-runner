@@ -167,9 +167,11 @@ export async function GET(
         try {
           const proof = JSON.parse(readFileSync(proofJson, "utf-8"));
           if (!lastRunId) lastRunId = proof.run_id ?? d;
-          if (mirrorPass === null) mirrorPass = proof["mirror_pass"];
-          if (exceptionsCount === null) exceptionsCount = proof["exceptions_count"];
-          if (!acceptancePath) acceptancePath = proof["acceptance_path"];
+          if (mirrorPass === null) mirrorPass = proof["mirror_pass"] ?? null;
+          if (exceptionsCount === null) {
+            exceptionsCount = proof["mirror_exceptions_count"] ?? proof["exceptions_count"] ?? null;
+          }
+          if (!acceptancePath) acceptancePath = proof["acceptance_dir"] ?? proof["acceptance_path"] ?? null;
           proofPath = `artifacts/soma_kajabi/run_to_done/${d}/PROOF.md`;
           break;
         } catch {
@@ -179,7 +181,9 @@ export async function GET(
     }
   }
 
-  // Acceptance dir from last auto_finish
+  // Acceptance dir: try auto_finish SUMMARY.json for run-scoped resolution,
+  // then fall back to latest acceptance dir for display only (no mirror field override).
+  let latestAcceptanceRunId: string | null = null;
   const acceptRoot = join(artifactsRoot, "soma_kajabi", "acceptance");
   if (!acceptancePath && existsSync(acceptRoot)) {
     const dirs = readdirSync(acceptRoot, { withFileTypes: true })
@@ -190,24 +194,33 @@ export async function GET(
     if (dirs.length > 0) {
       const d = dirs[0];
       acceptancePath = `artifacts/soma_kajabi/acceptance/${d}`;
-      const mirrorReport = join(acceptRoot, d, "mirror_report.json");
-      if (existsSync(mirrorReport)) {
-        try {
-          const mr = JSON.parse(readFileSync(mirrorReport, "utf-8"));
-          const excs = mr.exceptions ?? [];
-          exceptionsCount = excs.length;
-          mirrorPass = exceptionsCount === 0;
-        } catch {
-          /* ignore */
+      latestAcceptanceRunId = d;
+      // Read mirror data from this dir only if we have no PROOF-derived mirror data
+      if (mirrorPass === null) {
+        const mirrorReport = join(acceptRoot, d, "mirror_report.json");
+        if (existsSync(mirrorReport)) {
+          try {
+            const mr = JSON.parse(readFileSync(mirrorReport, "utf-8"));
+            const excs = mr.exceptions ?? [];
+            exceptionsCount = excs.length;
+            mirrorPass = exceptionsCount === 0;
+          } catch {
+            /* ignore */
+          }
         }
       }
     }
   }
 
-  // Fallback: SUCCESS implies mirror passed with zero exceptions
-  if (lastStatus === "SUCCESS" && mirrorPass === null) {
-    mirrorPass = true;
-    exceptionsCount = 0;
+  // No optimistic fallback: mirror_pass stays null if no acceptance data found
+  // Derive mirror_state for UI clarity
+  let mirrorState: string | null = null;
+  if (mirrorPass === true) {
+    mirrorState = "PASS";
+  } else if (mirrorPass === false) {
+    mirrorState = "FAIL";
+  } else {
+    mirrorState = "UNKNOWN_NO_ACCEPTANCE_FOR_RUN";
   }
   if (!acceptancePath && artifactDir) {
     acceptancePath = artifactDir;
@@ -299,9 +312,11 @@ export async function GET(
     last_status: lastStatus,
     stage,
     mirror_pass: mirrorPass,
+    mirror_state: mirrorState,
     exceptions_count: exceptionsCount,
     artifact_dir: artifactDir,
     acceptance_path: acceptancePath,
+    latest_acceptance_run_id: latestAcceptanceRunId,
     proof_path: proofPath,
     novnc_url: novncUrl,
     novnc_url_canonical: novncUrl,

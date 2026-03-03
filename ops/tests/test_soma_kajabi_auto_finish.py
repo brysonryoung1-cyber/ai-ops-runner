@@ -746,6 +746,70 @@ def test_mirror_fail_closed_default(tmp_path):
     assert summary["error_class"] == "MIRROR_EXCEPTIONS_NON_EMPTY"
 
 
+def test_phase0_missing_for_run_fails_closed(tmp_path):
+    """When phase0 dir for the current run is missing, auto_finish must fail with PHASE0_MISSING_FOR_RUN (no latest fallback)."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "config").mkdir()
+    _setup_ops_scripts(root)
+    (root / "artifacts" / "soma_kajabi" / "phase0").mkdir(parents=True)
+    (root / "artifacts" / "soma_kajabi" / "zane_finish_plan").mkdir(parents=True)
+    (root / "artifacts" / "soma_kajabi" / "auto_finish").mkdir(parents=True)
+
+    # Create a phase0 dir from a DIFFERENT run (should NOT be used)
+    stale_phase0 = root / "artifacts" / "soma_kajabi" / "phase0" / "phase0_OLD_STALE_RUN"
+    stale_phase0.mkdir()
+    (stale_phase0 / "kajabi_library_snapshot.json").write_text(
+        json.dumps({"home": {"modules": ["M1"], "lessons": []}, "practitioner": {"modules": ["M1"], "lessons": []}})
+    )
+
+    finish_dir = root / "artifacts" / "soma_kajabi" / "zane_finish_plan" / "zane_test"
+    finish_dir.mkdir()
+    (finish_dir / "PUNCHLIST.md").write_text("# Punchlist\n")
+    (finish_dir / "PUNCHLIST.csv").write_text("id,category,priority,title\n")
+    (finish_dir / "SUMMARY.json").write_text('{"ok":true,"run_id":"zane_test"}')
+
+    storage = tmp_path / "storage.json"
+    storage.write_text('{"cookies":[]}')
+
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    spec = importlib.util.spec_from_file_location(
+        "soma_kajabi_auto_finish",
+        REPO_ROOT / "ops" / "scripts" / "soma_kajabi_auto_finish.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["soma_kajabi_auto_finish"] = mod
+
+    current_phase0_run_id = "phase0_CURRENT_RUN_DOES_NOT_EXIST"
+
+    def mock_run(cmd, timeout=600, stream_stderr=False):
+        cmd_str = " ".join(str(x) for x in cmd)
+        if "connectors_status" in cmd_str:
+            return 0, json.dumps({"kajabi": "connected"})
+        if "phase0_runner" in cmd_str:
+            return 0, json.dumps({"ok": True, "run_id": current_phase0_run_id})
+        if "zane_finish_plan" in cmd_str:
+            return 0, json.dumps({"ok": True, "run_id": "zane_test"})
+        return 1, "{}"
+
+    spec.loader.exec_module(mod)
+    mod.STORAGE_STATE_PATH = storage
+    mod.EXIT_NODE_CONFIG = tmp_path / "nonexistent.txt"
+    mod._repo_root = lambda: root
+    mod._run = mock_run
+    mod._run_with_exit_node = lambda c, t: mock_run(c, t)
+
+    rc = mod.main()
+    assert rc == 1
+
+    out_dir = next((root / "artifacts" / "soma_kajabi" / "auto_finish").iterdir())
+    summary = json.loads((out_dir / "SUMMARY.json").read_text())
+    assert summary["ok"] is False
+    assert summary["error_class"] == "PHASE0_MISSING_FOR_RUN"
+    assert current_phase0_run_id in summary.get("message", "")
+
+
 def test_reauth_timeout_emits_artifact_bundle(tmp_path):
     """When session_check timeout occurs -> KAJABI_REAUTH_TIMEOUT + reauth_timeout_bundle.json emitted."""
     root = tmp_path / "repo"
