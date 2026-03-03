@@ -62,10 +62,12 @@ PYEOF
 }
 
 WATCHDOG_PID=""
+X11VNC_PID=""
+WEBSOCKIFY_PID=""
 cleanup() {
-  write_status "false" "shutdown" "$XVFB_PID" "$X11VNC_PID" "$WEBSOCKIFY_PID"
+  write_status "false" "shutdown" "${XVFB_PID:-}" "${X11VNC_PID:-}" "${WEBSOCKIFY_PID:-}"
   [ -n "$WATCHDOG_PID" ] && kill -TERM "$WATCHDOG_PID" 2>/dev/null || true
-  for pid in $WEBSOCKIFY_PID $X11VNC_PID; do
+  for pid in ${WEBSOCKIFY_PID:-} ${X11VNC_PID:-}; do
     [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null || true
   done
   [ -n "$XVFB_PID" ] && kill -TERM "$XVFB_PID" 2>/dev/null || true
@@ -73,11 +75,18 @@ cleanup() {
 }
 trap cleanup TERM INT
 
-# ── 1) Start Xvfb :99 ──
+# ── 1) Start Xvfb :99 with explicit Xauth (fixes XOpenDisplay/MIT-MAGIC-COOKIE for x11vnc) ──
 # Remove stale X lock only for this DISPLAY (avoid touching other displays)
 XVFB_PID=""
 LOCK_FILE="/tmp/.X${DISPLAY_NUM#:}-lock"
 X11_SOCKET="/tmp/.X11-unix/X${DISPLAY_NUM#:}"
+XAUTH_FILE="${ARTIFACT_DIR}/.X${DISPLAY_NUM#:}-auth"
+rm -f "$XAUTH_FILE"
+# Create Xauth cookie before Xvfb (xauth add does not need display; xauth generate does)
+if command -v xauth >/dev/null 2>&1 && command -v mcookie >/dev/null 2>&1; then
+  xauth -f "$XAUTH_FILE" add "$DISPLAY_NUM" . "$(mcookie | tr -d '\n')" 2>/dev/null || true
+fi
+[ -f "$XAUTH_FILE" ] && chmod 600 "$XAUTH_FILE" || true
 
 if [ -f "$LOCK_FILE" ]; then
   OLD_PID="$(cat "$LOCK_FILE" 2>/dev/null || true)"
@@ -91,9 +100,9 @@ if [ -f "$LOCK_FILE" ]; then
 fi
 
 if [ -z "$XVFB_PID" ]; then
-  Xvfb "$DISPLAY_NUM" -screen 0 1280x720x24 -ac -nolisten tcp -extension MIT-SHM &
+  Xvfb "$DISPLAY_NUM" -auth "$XAUTH_FILE" -screen 0 1280x720x24 -ac -nolisten tcp -extension MIT-SHM &
   XVFB_PID=$!
-  echo "Xvfb starting on $DISPLAY_NUM (pid $XVFB_PID)" >&2
+  echo "Xvfb starting on $DISPLAY_NUM (pid $XVFB_PID) auth=$XAUTH_FILE" >&2
 fi
 
 # ── 2) Wait for /tmp/.X11-unix/X99 to exist ──
@@ -116,6 +125,7 @@ if [ ! -S "$X11_SOCKET" ]; then
 fi
 
 export DISPLAY="$DISPLAY_NUM"
+export XAUTHORITY="$XAUTH_FILE"
 
 # ── 2b) Guarantee visible desktop: WM + non-black background + cursor ──
 # Prevents "black noVNC screen" when root window is blank
@@ -185,7 +195,7 @@ WATCHDOG_PID=$!
 # ── 5) Loop: x11vnc + websockify with auto-restart ──
 while true; do
   # Start x11vnc on localhost:<VNC_PORT> with -forever -shared and explicit -display
-  x11vnc -display "$DISPLAY_NUM" -rfbport "$VNC_PORT" -localhost -nopw -forever -shared -noxdamage -repeat -threads -noshm &
+  x11vnc -display "$DISPLAY_NUM" -auth "$XAUTH_FILE" -rfbport "$VNC_PORT" -localhost -nopw -forever -shared -noxdamage -repeat -threads -noshm &
   X11VNC_PID=$!
   sleep 1
   if ! kill -0 "$X11VNC_PID" 2>/dev/null; then
