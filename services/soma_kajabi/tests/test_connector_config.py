@@ -61,16 +61,30 @@ def test_phase0_connector_not_configured_when_manual():
 
 
 def test_get_storage_state_path_prefers_secret_ref():
-    """get_storage_state_path returns storage_state_secret_ref when present."""
+    """get_storage_state_path returns top-level storage_state_secret_ref when present."""
+    from services.soma_kajabi.connector_config import get_storage_state_path
+    cfg = {
+        "storage_state_secret_ref": "/custom/top-level/state.json",
+        "kajabi": {
+            "mode": "storage_state",
+            "storage_state_secret_ref": "/custom/nested/state.json",
+        },
+    }
+    path = get_storage_state_path(cfg)
+    assert str(path) == "/custom/top-level/state.json"
+
+
+def test_get_storage_state_path_supports_legacy_nested_ref():
+    """get_storage_state_path still supports nested kajabi.storage_state_secret_ref."""
     from services.soma_kajabi.connector_config import get_storage_state_path
     cfg = {
         "kajabi": {
             "mode": "storage_state",
-            "storage_state_secret_ref": "/custom/path/state.json",
+            "storage_state_secret_ref": "/custom/nested/state.json",
         },
     }
     path = get_storage_state_path(cfg)
-    assert str(path) == "/custom/path/state.json"
+    assert str(path) == "/custom/nested/state.json"
 
 
 def test_get_storage_state_path_fallback():

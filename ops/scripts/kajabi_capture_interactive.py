@@ -33,19 +33,13 @@ from pathlib import Path
 KAJABI_ADMIN = "https://app.kajabi.com/admin"
 KAJABI_SITES = "https://app.kajabi.com/admin/sites"
 KAJABI_PRODUCTS_URL = "https://app.kajabi.com/admin/products"
-STORAGE_STATE_PATH = Path("/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_storage_state.json")
 
 
 def _resolve_storage_state_path() -> Path:
-    try:
-        from services.soma_kajabi.connector_config import get_storage_state_path, load_soma_kajabi_config
-        root = _repo_root()
-        cfg, err = load_soma_kajabi_config(root)
-        if err:
-            return STORAGE_STATE_PATH
-        return get_storage_state_path(cfg)
-    except Exception:
-        return STORAGE_STATE_PATH
+    from services.soma_kajabi.connector_config import get_storage_state_path, load_soma_kajabi_config
+    root = _repo_root()
+    cfg, _err = load_soma_kajabi_config(root)
+    return get_storage_state_path(cfg)
 KAJABI_CHROME_PROFILE_DIR = Path("/var/lib/openclaw/kajabi_chrome_profile")
 TARGET_PRODUCTS = ["Home User Library", "Practitioner Library"]
 TIMEOUT_SEC = 20 * 60  # 20 minutes
@@ -171,6 +165,11 @@ def _stop_novnc_systemd() -> None:
         )
     except Exception:
         pass
+
+
+def _maybe_stop_novnc_on_success(summary: dict) -> None:
+    if summary.get("ok"):
+        _stop_novnc_systemd()
 
 
 def main() -> int:
@@ -359,8 +358,7 @@ def main() -> int:
     summary = result_holder[0].copy()
 
     # Only stop noVNC on success; keep it running on WAITING/failure so human can log in
-    if summary.get("ok"):
-        _stop_novnc_systemd()
+    _maybe_stop_novnc_on_success(summary)
     summary["artifact_dir"] = str(out_dir)
     summary["run_id"] = out_dir.name
     summary["tailscale_url"] = tailscale_url

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -75,3 +77,17 @@ def test_session_check_guards_stop_novnc_with_gate():
         "is_gate_active check must be in the cleanup section"
     assert "not _gate_active" in cleanup_section, \
         "_stop_novnc_systemd must be conditional on gate not active"
+
+
+def test_stop_novnc_not_called_when_gate_active():
+    """Function-level guard: active gate suppresses systemctl stop."""
+    script = REPO_ROOT / "ops" / "scripts" / "soma_kajabi_session_check.py"
+    spec = importlib.util.spec_from_file_location("soma_kajabi_session_check", script)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+
+    with mock.patch("ops.lib.human_gate.is_gate_active", return_value=True):
+        with mock.patch.object(module.subprocess, "run") as mocked_run:
+            module._stop_novnc_systemd()
+            mocked_run.assert_not_called()
