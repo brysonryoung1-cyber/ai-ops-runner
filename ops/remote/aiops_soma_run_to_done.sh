@@ -472,9 +472,9 @@ PY
     fi
 
     if [ -n "$RUN_ARTIFACT_DIR" ]; then
-      if [ ! -s "$PROOF_PAYLOAD_FILE" ]; then
-        fetch_proof_payload
-      fi
+      # Always re-fetch PROOF.json after poll completes to get terminal state
+      # (early fetch during polling may have captured status=RUNNING)
+      fetch_proof_payload
       proof_has_status="$(proof_payload_has_status "$PROOF_PAYLOAD_FILE")"
       if [ "$PROOF_HTTP_CODE" != "200" ] || [ ! -s "$PROOF_PAYLOAD_FILE" ] || [ "$proof_has_status" != "1" ]; then
         fetch_precheck_payload
