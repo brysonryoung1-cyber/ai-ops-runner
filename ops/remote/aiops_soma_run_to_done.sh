@@ -565,9 +565,8 @@ PY
     done
 
     if [ -z "$RUN_ARTIFACT_DIR" ] && [ -n "$remote_run_id" ]; then
-      if [ "$RUN_DIR_BROWSE_HTTP_CODE_LOCAL" = "403" ] || [ "$RUN_DIR_BROWSE_HTTP_CODE" = "403" ] || [ "$RUN_DIR_BROWSE_HTTP_CODE_REMOTE" = "403" ]; then
+      if [ "$RUN_DIR_BROWSE_HTTP_CODE" = "403" ]; then
         ERROR_CLASS="BROWSE_FORBIDDEN"
-        [ "$RUN_DIR_BROWSE_HTTP_CODE_LOCAL" = "403" ] && RUN_DIR_BROWSE_HTTP_CODE="403"
       else
         ERROR_CLASS="RUN_ARTIFACT_DIR_UNRESOLVED"
       fi
