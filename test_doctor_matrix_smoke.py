@@ -11,6 +11,12 @@ from ops.system.doctor_matrix import run_doctor_matrix
 def test_doctor_matrix_mock_mode_emits_bundle(tmp_path, monkeypatch) -> None:
     artifacts_root = tmp_path / "artifacts"
     monkeypatch.setenv("OPENCLAW_ARTIFACTS_ROOT", str(artifacts_root))
+    monkeypatch.delenv("OPENCLAW_FRONTDOOR_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENCLAW_HOST", raising=False)
+    monkeypatch.delenv("OPENCLAW_LOCALHOST_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENCLAW_HQ_BASE", raising=False)
+    monkeypatch.delenv("OPENCLAW_HQ_BASE_FRONTDOOR", raising=False)
+    monkeypatch.delenv("OPENCLAW_HQ_BASE_LOCALHOST", raising=False)
 
     # Core run-dir contract check reads this pointer from canonical artifacts root.
     run_to_done_root = artifacts_root / "soma_kajabi" / "run_to_done"
@@ -57,6 +63,10 @@ def test_doctor_matrix_mock_mode_emits_bundle(tmp_path, monkeypatch) -> None:
 
     summary = summary_path.read_text(encoding="utf-8")
     assert "| Checklist | Scope | Check ID | Status | Message |" in summary
+
+    env = json.loads(env_path.read_text(encoding="utf-8"))
+    assert env["base_urls"]["frontdoor"] == "https://aiops-1.tailc75c62.ts.net"
+    assert env["base_urls"]["remote_localhost"] == "http://127.0.0.1:8787"
 
     core_evidence = bundle_dir / "evidence" / "core"
     project_evidence = bundle_dir / "evidence" / "projects" / "soma_kajabi"

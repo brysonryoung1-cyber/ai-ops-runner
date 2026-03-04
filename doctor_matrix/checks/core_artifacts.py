@@ -28,9 +28,9 @@ def check_browse_pagination_detected(builder: CheckBuilder, runtime: MatrixRunti
         timeout=10,
     )
 
-    localhost = builder.request(
-        label="localhost_browse_review_packets",
-        base_label="localhost",
+    remote_localhost = builder.request(
+        label="remote_localhost_browse_review_packets",
+        base_label="remote_localhost",
         path=primary_path,
         timeout=10,
     )
@@ -40,8 +40,8 @@ def check_browse_pagination_detected(builder: CheckBuilder, runtime: MatrixRunti
 
     if frontdoor.http_code == 200 and isinstance(frontdoor.payload, dict):
         selected = frontdoor
-    elif localhost.http_code == 200 and isinstance(localhost.payload, dict):
-        selected = localhost
+    elif remote_localhost.http_code == 200 and isinstance(remote_localhost.payload, dict):
+        selected = remote_localhost
     else:
         frontdoor_fallback = builder.request(
             label="frontdoor_browse_root_fallback",
@@ -61,11 +61,11 @@ def check_browse_pagination_detected(builder: CheckBuilder, runtime: MatrixRunti
         "requested_path": primary_path,
         "selected_path": selected_path,
         "frontdoor_http_code": frontdoor.http_code,
-        "localhost_http_code": localhost.http_code,
+        "remote_localhost_http_code": remote_localhost.http_code,
         "selected_source": selected.base_label if selected is not None else None,
         "selected_http_code": selected.http_code if selected is not None else None,
         "frontdoor_entries_count": _get_entries_count(frontdoor.payload),
-        "localhost_entries_count": _get_entries_count(localhost.payload),
+        "remote_localhost_entries_count": _get_entries_count(remote_localhost.payload),
         "pagination_detection": parsed,
     }
 

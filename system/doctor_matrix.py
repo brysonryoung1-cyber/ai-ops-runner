@@ -115,16 +115,20 @@ def _default_mock_fixture_path(repo_root: Path) -> Path:
     return repo_root / "ops" / "lib" / "doctor_matrix" / "fixtures" / "mock_http.json"
 
 
-def _resolve_bases() -> tuple[str, str]:
-    frontdoor_port = os.environ.get("OPENCLAW_FRONTDOOR_PORT", "8788")
-    console_port = os.environ.get("OPENCLAW_CONSOLE_PORT", "8787")
-    frontdoor = os.environ.get("OPENCLAW_HQ_BASE_FRONTDOOR", "").strip() or f"http://127.0.0.1:{frontdoor_port}"
-    localhost = (
-        os.environ.get("OPENCLAW_HQ_BASE_LOCALHOST", "").strip()
-        or os.environ.get("OPENCLAW_HQ_BASE", "").strip()
-        or f"http://127.0.0.1:{console_port}"
+def _resolve_bases() -> tuple[str, str, str]:
+    frontdoor = (
+        os.environ.get("OPENCLAW_FRONTDOOR_BASE_URL", "").strip()
+        or os.environ.get("OPENCLAW_HQ_BASE_FRONTDOOR", "").strip()
+        or "https://aiops-1.tailc75c62.ts.net"
     )
-    return frontdoor, localhost
+    openclaw_host = os.environ.get("OPENCLAW_HOST", "").strip() or "aiops-1"
+    localhost = (
+        os.environ.get("OPENCLAW_LOCALHOST_BASE_URL", "").strip()
+        or os.environ.get("OPENCLAW_HQ_BASE_LOCALHOST", "").strip()
+        or os.environ.get("OPENCLAW_HQ_BASE", "").strip()
+        or "http://127.0.0.1:8787"
+    )
+    return frontdoor, openclaw_host, localhost
 
 
 def _build_env_summary(runtime: MatrixRuntime, args: argparse.Namespace) -> dict[str, Any]:
@@ -149,6 +153,9 @@ def _build_env_summary(runtime: MatrixRuntime, args: argparse.Namespace) -> dict
         "env_flags": {
             "OPENCLAW_REPO_ROOT": bool(os.environ.get("OPENCLAW_REPO_ROOT")),
             "OPENCLAW_ARTIFACTS_ROOT": bool(os.environ.get("OPENCLAW_ARTIFACTS_ROOT")),
+            "OPENCLAW_FRONTDOOR_BASE_URL": bool(os.environ.get("OPENCLAW_FRONTDOOR_BASE_URL")),
+            "OPENCLAW_HOST": bool(os.environ.get("OPENCLAW_HOST")),
+            "OPENCLAW_LOCALHOST_BASE_URL": bool(os.environ.get("OPENCLAW_LOCALHOST_BASE_URL")),
             "OPENCLAW_HQ_BASE": bool(os.environ.get("OPENCLAW_HQ_BASE")),
             "OPENCLAW_HQ_BASE_FRONTDOOR": bool(os.environ.get("OPENCLAW_HQ_BASE_FRONTDOOR")),
             "OPENCLAW_HQ_BASE_LOCALHOST": bool(os.environ.get("OPENCLAW_HQ_BASE_LOCALHOST")),
@@ -182,7 +189,7 @@ def run_doctor_matrix(argv: list[str] | None = None) -> tuple[int, dict[str, Any
     run_id = (args.run_id or "").strip() or build_run_id()
 
     bundle_dir = artifacts_root / "system" / "doctor_matrix" / run_id
-    frontdoor_base, localhost_base = _resolve_bases()
+    frontdoor_base, openclaw_host, localhost_base = _resolve_bases()
 
     mock_fixture: dict[str, Any] | None = None
     if args.mock:
@@ -198,6 +205,7 @@ def run_doctor_matrix(argv: list[str] | None = None) -> tuple[int, dict[str, Any
         artifacts_root=artifacts_root,
         bundle_dir=bundle_dir,
         frontdoor_base=frontdoor_base,
+        openclaw_host=openclaw_host,
         localhost_base=localhost_base,
         run_id=run_id,
         mock=args.mock,

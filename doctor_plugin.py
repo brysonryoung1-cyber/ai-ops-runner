@@ -21,7 +21,7 @@ class _BrowseFetchResult:
     selected_source: str
     selected_http_code: int
     frontdoor_http_code: int
-    localhost_http_code: int
+    remote_localhost_http_code: int
     response_body: str
 
 
@@ -39,19 +39,19 @@ def _fetch_browse_file(
         timeout=10,
     )
 
-    localhost = builder.request(
-        label=f"{label_prefix}_localhost",
-        base_label="localhost",
+    remote_localhost = builder.request(
+        label=f"{label_prefix}_remote_localhost",
+        base_label="remote_localhost",
         path=path,
         timeout=10,
     )
 
-    selected = frontdoor if frontdoor.http_code == 200 else localhost
+    selected = frontdoor if frontdoor.http_code == 200 else remote_localhost
     return _BrowseFetchResult(
         selected_source=selected.base_label,
         selected_http_code=selected.http_code,
         frontdoor_http_code=frontdoor.http_code,
-        localhost_http_code=localhost.http_code,
+        remote_localhost_http_code=remote_localhost.http_code,
         response_body=selected.body_text,
     )
 
@@ -87,7 +87,7 @@ def check_soma_pointer_present(builder: CheckBuilder, runtime: MatrixRuntime):
         "selected_source": fetched.selected_source,
         "selected_http_code": fetched.selected_http_code,
         "frontdoor_http_code": fetched.frontdoor_http_code,
-        "localhost_http_code": fetched.localhost_http_code,
+        "remote_localhost_http_code": fetched.remote_localhost_http_code,
     }
 
     if fetched.selected_http_code != 200:

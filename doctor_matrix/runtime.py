@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
+import tempfile
 import time
 import traceback
 from dataclasses import dataclass
@@ -180,6 +182,7 @@ class MatrixRuntime:
         artifacts_root: Path,
         bundle_dir: Path,
         frontdoor_base: str,
+        openclaw_host: str,
         localhost_base: str,
         run_id: str,
         mock: bool,
@@ -196,9 +199,10 @@ class MatrixRuntime:
         self.mode = mode
         self.project_filter = set(project_filter or [])
         self.body_sample_limit = BODY_SAMPLE_LIMIT
+        self.openclaw_host = openclaw_host.strip() or "aiops-1"
         self.base_urls = {
             "frontdoor": frontdoor_base.rstrip("/"),
-            "localhost": localhost_base.rstrip("/"),
+            "remote_localhost": localhost_base.rstrip("/"),
         }
         self.bundle_dir.mkdir(parents=True, exist_ok=True)
         self.run_dir_contracts: list[RunDirContract] = []
@@ -228,6 +232,8 @@ class MatrixRuntime:
 
     def _mock_lookup(self, base_label: str, path: str) -> HttpResponse:
         base_map = self.mock_fixture.get(base_label)
+        if base_map is None and base_label == "remote_localhost":
+            base_map = self.mock_fixture.get("localhost")
         if not isinstance(base_map, dict):
             body = {"ok": False, "error": f"mock_base_missing:{base_label}"}
             return HttpResponse(
@@ -286,10 +292,29 @@ class MatrixRuntime:
             source="mock",
         )
 
-    def http_get(self, *, base_label: str, path: str, timeout: int = 10) -> HttpResponse:
-        if self.mock:
-            return self._mock_lookup(base_label, path)
+    @staticmethod
+    def _normalize_path(path: str) -> str:
+        if not path:
+            return "/"
+        return path if path.startswith("/") else f"/{path}"
 
+    @staticmethod
+    def _extract_http_code(text: str) -> int:
+        match = re.search(r"(\d{3})\s*$", text.strip())
+        if not match:
+            return -1
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return -1
+
+    def _join_url(self, base_label: str, path: str) -> str:
+        base_url = self.base_urls.get(base_label, "")
+        return f"{base_url}{self._normalize_path(path)}"
+
+    def fetch_via_frontdoor(self, path: str, *, timeout: int = 10) -> HttpResponse:
+        normalized_path = self._normalize_path(path)
+        base_label = "frontdoor"
         base_url = self.base_urls.get(base_label)
         if not base_url:
             body = {"ok": False, "error": f"unknown_base_label:{base_label}"}
@@ -298,13 +323,13 @@ class MatrixRuntime:
                 body_text=json.dumps(body),
                 payload=body,
                 base_label=base_label,
-                path=path,
+                path=normalized_path,
                 source="live",
             )
 
         code, body_text = hq_request(
             "GET",
-            path,
+            normalized_path,
             timeout=timeout,
             base_url=base_url,
         )
@@ -313,6 +338,121 @@ class MatrixRuntime:
             http_code=int(code),
             body_text=body_text or "",
             payload=payload,
+            base_label=base_label,
+            path=normalized_path,
+            source="live",
+        )
+
+    def fetch_via_remote_localhost(self, path: str, *, timeout: int = 10) -> HttpResponse:
+        normalized_path = self._normalize_path(path)
+        base_label = "remote_localhost"
+        base_url = self.base_urls.get(base_label)
+        if not base_url:
+            body = {"ok": False, "error": f"unknown_base_label:{base_label}"}
+            return HttpResponse(
+                http_code=0,
+                body_text=json.dumps(body),
+                payload=body,
+                base_label=base_label,
+                path=normalized_path,
+                source="live",
+            )
+
+        target_url = self._join_url(base_label, normalized_path)
+        body_text = ""
+        http_code = -1
+        temp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(prefix="doctor_matrix_remote_", suffix=".txt", delete=False) as tmp_file:
+                temp_path = tmp_file.name
+
+            proc = subprocess.run(
+                [
+                    "ssh",
+                    self.openclaw_host,
+                    "curl",
+                    "-sS",
+                    "--connect-timeout",
+                    "5",
+                    "--max-time",
+                    "20",
+                    "-w",
+                    "%{http_code}",
+                    "-o",
+                    temp_path,
+                    target_url,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=max(20, timeout + 5),
+                check=False,
+            )
+
+            if Path(temp_path).exists():
+                body_text = Path(temp_path).read_text(encoding="utf-8", errors="replace")
+            http_code = self._extract_http_code(proc.stdout or "")
+            if proc.returncode != 0 and http_code == -1:
+                body = {
+                    "ok": False,
+                    "error": "remote_localhost_fetch_failed",
+                    "stderr": sanitize_text(proc.stderr or ""),
+                }
+                body_text = json.dumps(body)
+                payload = body
+                return HttpResponse(
+                    http_code=-1,
+                    body_text=body_text,
+                    payload=payload,
+                    base_label=base_label,
+                    path=normalized_path,
+                    source="live",
+                )
+        except Exception as exc:  # noqa: BLE001
+            body = {
+                "ok": False,
+                "error": "remote_localhost_fetch_exception",
+                "exception": str(exc),
+            }
+            body_text = json.dumps(body)
+            payload = body
+            return HttpResponse(
+                http_code=-1,
+                body_text=body_text,
+                payload=payload,
+                base_label=base_label,
+                path=normalized_path,
+                source="live",
+            )
+        finally:
+            if temp_path:
+                try:
+                    Path(temp_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+        payload = _safe_json_loads(body_text)
+        return HttpResponse(
+            http_code=http_code,
+            body_text=body_text or "",
+            payload=payload,
+            base_label=base_label,
+            path=normalized_path,
+            source="live",
+        )
+
+    def http_get(self, *, base_label: str, path: str, timeout: int = 10) -> HttpResponse:
+        if self.mock:
+            return self._mock_lookup(base_label, path)
+        if base_label == "frontdoor":
+            return self.fetch_via_frontdoor(path, timeout=timeout)
+        if base_label == "remote_localhost":
+            return self.fetch_via_remote_localhost(path, timeout=timeout)
+
+        body = {"ok": False, "error": f"unknown_base_label:{base_label}"}
+        return HttpResponse(
+            http_code=0,
+            body_text=json.dumps(body),
+            payload=body,
             base_label=base_label,
             path=path,
             source="live",
