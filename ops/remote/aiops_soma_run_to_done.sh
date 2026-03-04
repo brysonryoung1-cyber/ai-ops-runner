@@ -98,6 +98,8 @@ terminal_status="FAIL"
 novnc_url=""
 remote_run_id=""
 mode_used=""
+RUN_ARTIFACT_DIR=""
+RUN_ARTIFACT_DIR_ERROR=""
 
 if [ "$health_state" = "OK" ]; then
   mode_used="hq_api"
@@ -161,10 +163,37 @@ print(parsed.get("artifact_dir") or "")
 PY
 )
       run_status="${run_fields[0]:-}"
-      artifact_dir="${run_fields[1]:-}"
+      artifact_dir="${run_fields[1]:-}"  # hostd artifact_dir (not used for PROOF/PRECHECK)
 
-      if [ -n "$artifact_dir" ]; then
-        proof_rel_path="${artifact_dir#artifacts/}/PROOF.json"
+      # Resolve run_to_done artifact dir for PROOF/PRECHECK (never use hostd artifact_dir)
+      if [ -z "$RUN_ARTIFACT_DIR" ] && [ -n "$remote_run_id" ]; then
+        rtd_browse_file="$PROOF_DIR/rtd_browse.json"
+        rtd_browse_path="$(python3 -c 'from urllib.parse import quote; print(quote("soma_kajabi/run_to_done", safe=""))')"
+        rtd_http="$(curl -sS --connect-timeout 5 --max-time 20 -o "$rtd_browse_file" -w "%{http_code}" "${BASE_URL%/}/api/artifacts/browse?path=${rtd_browse_path}" || true)"
+        if [ "$rtd_http" = "200" ]; then
+          rtd_fields=()
+          while IFS= read -r line; do rtd_fields+=("$line"); done < <(python3 - "$rtd_browse_file" "$remote_run_id" <<'PY'
+import sys
+from pathlib import Path
+
+from ops.lib.aiops_remote_helpers import parse_browse_dir_entries, resolve_run_to_done_dir
+
+body = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+entries = parse_browse_dir_entries(body)
+result = resolve_run_to_done_dir(sys.argv[2], entries)
+print(result.get("resolved_dir") or "")
+print(result.get("error") or "")
+PY
+)
+          if [ -n "${rtd_fields[0]:-}" ]; then
+            RUN_ARTIFACT_DIR="${rtd_fields[0]}"
+            log "resolved run_to_done dir: $RUN_ARTIFACT_DIR"
+          fi
+        fi
+      fi
+
+      if [ -n "$RUN_ARTIFACT_DIR" ]; then
+        proof_rel_path="${RUN_ARTIFACT_DIR#artifacts/}/PROOF.json"
         proof_query_path="$(python3 - "$proof_rel_path" <<'PY'
 import sys
 from urllib.parse import quote
@@ -187,7 +216,7 @@ write_json_file(Path(sys.argv[2]), proof)
 print(json.dumps(proof))
 PY
         else
-          precheck_rel_path="${artifact_dir#artifacts/}/PRECHECK.json"
+          precheck_rel_path="${RUN_ARTIFACT_DIR#artifacts/}/PRECHECK.json"
           precheck_query_path="$(python3 - "$precheck_rel_path" <<'PY'
 import sys
 from urllib.parse import quote
@@ -258,6 +287,10 @@ PY
       fi
       sleep "$POLL_INTERVAL_SEC"
     done
+    if [ -z "$RUN_ARTIFACT_DIR" ] && [ -n "$remote_run_id" ]; then
+      RUN_ARTIFACT_DIR_ERROR="run_to_done dir not resolved; run_id=$remote_run_id"
+      log "WARN: $RUN_ARTIFACT_DIR_ERROR"
+    fi
   fi
 else
   mode_used="remote_ssh"
@@ -324,12 +357,14 @@ payload = {
       or remote_payload.get("readiness_artifact_dir")
     ) if isinstance(remote_payload, dict) else None,
     "summary": sys.argv[8] or None,
+    "run_artifact_dir_resolved": None,
+    "run_artifact_dir_resolution_error": None,
     "finished_at": utc_now_iso(),
 }
 write_json_file(Path(sys.argv[1]), payload)
 PY
 else
-  python3 - "$RESULT_FILE" "$LOCAL_RUN_ID" "$mode_used" "$terminal_status" "$novnc_url" "$remote_run_id" "$trigger_message" "$PROOF_PAYLOAD_FILE" <<'PY'
+  python3 - "$RESULT_FILE" "$LOCAL_RUN_ID" "$mode_used" "$terminal_status" "$novnc_url" "$remote_run_id" "$trigger_message" "$PROOF_PAYLOAD_FILE" "$RUN_ARTIFACT_DIR" "$RUN_ARTIFACT_DIR_ERROR" <<'PY'
 import sys
 import json
 from pathlib import Path
@@ -361,6 +396,8 @@ payload = {
       or proof_payload.get("readiness_artifact_dir")
       or None
     ) if isinstance(proof_payload, dict) else None,
+    "run_artifact_dir_resolved": sys.argv[9] or None,
+    "run_artifact_dir_resolution_error": sys.argv[10] or None,
     "finished_at": utc_now_iso(),
 }
 write_json_file(Path(sys.argv[1]), payload)
