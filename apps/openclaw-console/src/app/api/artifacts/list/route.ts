@@ -52,7 +52,9 @@ export async function GET(req: NextRequest) {
   if (!origin && secFetchSite !== "same-origin") {
     const tsHost = process.env.OPENCLAW_TAILSCALE_HOSTNAME;
     const allowedHost =
-      host.startsWith("127.0.0.1:") || host.startsWith("localhost:") || (tsHost && host === tsHost);
+      host.startsWith("127.0.0.1:") ||
+      host.startsWith("localhost:") ||
+      (tsHost && (host === tsHost || host.startsWith(`${tsHost}:`)));
     if (!allowedHost) {
       return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
     }
