@@ -46,6 +46,23 @@ if command -v systemctl >/dev/null 2>&1 && [ -f /etc/systemd/system/openclaw-nov
       [ "$i" -eq 30 ] && { echo "  FAIL: probe did not pass within 30s"; systemctl stop openclaw-novnc 2>/dev/null || true; rm -rf "$SELFTEST_ARTIFACT"; exit 1; }
       sleep 1
     done
+
+    # 2b. Verify port 6080 is bound to 127.0.0.1, not 0.0.0.0 (public port audit compliance)
+    if command -v ss >/dev/null 2>&1; then
+      SS_OUT="$(ss -lntp 2>/dev/null | grep ':6080' || true)"
+      if echo "$SS_OUT" | grep -qE '0\.0\.0\.0:6080|\*:6080|\[::\]:6080'; then
+        echo "  FAIL: port 6080 bound to 0.0.0.0 or :: (public); must be 127.0.0.1"
+        echo "  ss output: $SS_OUT"
+        systemctl stop openclaw-novnc 2>/dev/null || true
+        rm -rf "$SELFTEST_ARTIFACT"
+        exit 1
+      elif echo "$SS_OUT" | grep -qE '127\.0\.0\.1:6080'; then
+        echo "  PASS: port 6080 bound to 127.0.0.1 (localhost only)"
+      else
+        echo "  WARN: port 6080 binding unclear; ss output: $SS_OUT"
+      fi
+    fi
+
     systemctl stop openclaw-novnc 2>/dev/null || true
     sleep 2
   else

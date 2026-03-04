@@ -142,7 +142,7 @@ echo "--- Public Port Audit ---"
 #   1. 127.0.0.0/8 / ::1       → always allowed (loopback — includes systemd-resolve etc.)
 #   2. 100.64.0.0/10            → PRIVATE (tailnet); allowed for any process
 #   3. tailscaled / tailscale   → allowed on any address (DERP relay, etc.)
-#   4. websockify on :6080      → allowed (noVNC; UFW restricts to Tailscale CIDR)
+#   4. websockify :6080         → must bind to 127.0.0.1 (frontdoor routes to it; no UFW exception needed)
 #   5. sshd on 0.0.0.0 / ::    → FAIL (must bind to tailnet IP only)
 #   6. Any other on 0.0.0.0/::  → FAIL
 if command -v ss >/dev/null 2>&1; then
@@ -212,10 +212,6 @@ for line in sys.stdin:
         continue
 
     if proc in ('tailscaled', 'tailscale'):
-        continue
-
-    # websockify on 6080: UFW restricts to Tailscale CIDR (ufw_novnc_tailscale_only.sh); allowed
-    if proc == 'websockify' and port == '6080':
         continue
 
     # caddy (openclaw-frontdoor): Caddyfile.frontdoor binds 127.0.0.1:8788; Caddy 2.6 bind quirk may show *:8788
