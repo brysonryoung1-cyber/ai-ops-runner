@@ -64,6 +64,7 @@ PRECHECK_BROWSE_FILE="$PROOF_DIR/precheck_browse.json"
 PROOF_PAYLOAD_FILE="$PROOF_DIR/proof_payload.json"
 PRECHECK_PAYLOAD_FILE="$PROOF_DIR/precheck_payload.json"
 RESULT_FILE="$PROOF_DIR/soma_run_to_done_result.json"
+STATUS_FILE="$PROOF_DIR/project_status.json"
 REMOTE_OUTPUT_FILE="$PROOF_DIR/soma_remote_output.log"
 
 : > "$LOG_FILE"
@@ -312,6 +313,28 @@ print("1" if isinstance(status, str) and status.strip() else "0")
 PY
 }
 
+query_active_run_id() {
+  local status_http active_id
+  status_http="$("$CURL_BIN" -sS --connect-timeout 5 --max-time 20 \
+    -o "$STATUS_FILE" -w "%{http_code}" \
+    "${BASE_URL%/}/api/projects/soma_kajabi/status" || true)"
+  [ -z "$status_http" ] && status_http="000"
+  if [ "$status_http" != "200" ]; then
+    echo ""
+    return 0
+  fi
+  active_id="$(python3 - "$STATUS_FILE" <<'PY'
+import sys
+from pathlib import Path
+from ops.lib.aiops_remote_helpers import parse_project_status_response
+body = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+parsed = parse_project_status_response(body)
+print(parsed.get("active_run_id") or "")
+PY
+)" || true
+  echo "$active_id"
+}
+
 health_http_code="$("$CURL_BIN" -sS --connect-timeout 5 --max-time 15 -o "$HEALTH_FILE" -w "%{http_code}" "${BASE_URL%/}/api/ui/health_public" || true)"
 health_state="$(python3 - "$health_http_code" "$HEALTH_FILE" <<'PY'
 import sys
@@ -335,6 +358,9 @@ remote_run_id=""
 mode_used=""
 RUN_ARTIFACT_DIR=""
 RUN_ARTIFACT_DIR_ERROR=""
+already_running_detected="false"
+attached_run_id=""
+attach_reason=""
 
 if [ "$health_state" = "OK" ]; then
   mode_used="hq_api"
@@ -364,10 +390,83 @@ PY
   remote_run_id="${trigger_fields[1]:-}"
   trigger_message="${trigger_fields[2]:-}"
 
-  if [ "$trigger_state" = "FAILED" ] || [ -z "$remote_run_id" ]; then
+  if [ "$trigger_state" = "ALREADY_RUNNING" ]; then
+    already_running_detected="true"
+    log "ALREADY_RUNNING detected from trigger. Querying status endpoint."
+    active_id="$(query_active_run_id)"
+    if [ -z "$active_id" ] && [ -n "$remote_run_id" ]; then
+      active_id="$remote_run_id"
+      attach_reason="trigger_409_active_run_id"
+    fi
+    if [ -z "$active_id" ]; then
+      log "No active run_id. Backing off up to ${ALREADY_RUNNING_BACKOFF_MAX:-180}s."
+      _ar_elapsed=0
+      _ar_wait=10
+      while [ "$_ar_elapsed" -lt "${ALREADY_RUNNING_BACKOFF_MAX:-180}" ]; do
+        sleep "$_ar_wait"
+        _ar_elapsed=$((_ar_elapsed + _ar_wait))
+        _ar_wait=$((_ar_wait + _ar_wait))
+        [ "$_ar_wait" -gt 30 ] && _ar_wait=30
+        active_id="$(query_active_run_id)"
+        [ -n "$active_id" ] && break
+      done
+    fi
+    if [ -z "$active_id" ]; then
+      log "Retrying trigger once after backoff."
+      retry_http="$("$CURL_BIN" -sS --connect-timeout 5 --max-time 30 -X POST \
+        "${BASE_URL%/}/api/exec" -H "Content-Type: application/json" \
+        -d '{"action":"soma_run_to_done"}' -o "$TRIGGER_FILE" -w "%{http_code}" || true)"
+      retry_fields=()
+      while IFS= read -r line; do retry_fields+=("$line"); done < <(python3 - "$retry_http" "$TRIGGER_FILE" <<'PY'
+import sys
+from pathlib import Path
+from ops.lib.aiops_remote_helpers import parse_exec_trigger_response
+raw_http = (sys.argv[1] or "").strip()
+try:
+    code = int(raw_http)
+except ValueError:
+    code = 0
+body = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
+parsed = parse_exec_trigger_response(code, body)
+print(parsed.get("state", "FAILED"))
+print(parsed.get("run_id") or "")
+PY
+)
+      retry_run_id="${retry_fields[1]:-}"
+      if [ -n "$retry_run_id" ]; then
+        active_id="$retry_run_id"
+        attach_reason="trigger_retry"
+      fi
+    fi
+    if [ -n "$active_id" ]; then
+      remote_run_id="$active_id"
+      attached_run_id="$active_id"
+      [ -z "$attach_reason" ] && attach_reason="status_endpoint"
+      log "Attached to active run $remote_run_id (reason=$attach_reason)"
+    else
+      terminal_status="FAIL"
+      ERROR_CLASS="ALREADY_RUNNING_NO_ACTIVE_ID"
+      trigger_message="ALREADY_RUNNING: no active run_id after backoff+retry"
+      log "FAIL: $trigger_message"
+    fi
+  fi
+
+  if [ "$ERROR_CLASS" = "ALREADY_RUNNING_NO_ACTIVE_ID" ]; then
+    : # Terminal failure — skip polling
+  elif [ "$trigger_state" = "FAILED" ] || [ -z "$remote_run_id" ]; then
     log "Trigger via HQ failed ($trigger_state). Falling back to remote SSH."
     mode_used="remote_ssh"
   else
+    _ar_poll_attempt=0
+    while true; do
+    _ar_poll_attempt=$((_ar_poll_attempt + 1))
+    if [ "$_ar_poll_attempt" -gt 1 ]; then
+      RUN_ARTIFACT_DIR=""
+      RUN_ARTIFACT_DIR_ERROR=""
+      ERROR_CLASS=""
+      LAST_RUN_STATUS=""
+      rm -f "$PROOF_PAYLOAD_FILE" "$PRECHECK_PAYLOAD_FILE" 2>/dev/null || true
+    fi
     log "Polling /api/runs?id=$remote_run_id"
     deadline_epoch=$(( $(date +%s) + POLL_TIMEOUT_SEC ))
     while true; do
@@ -561,6 +660,21 @@ print(proof or precheck or "")
 PY
 )"
     fi
+
+    if [ "$ERROR_CLASS" = "ALREADY_RUNNING" ] && [ "$_ar_poll_attempt" -le 1 ]; then
+      already_running_detected="true"
+      log "PROOF reports ALREADY_RUNNING. Querying status for active run."
+      active_id="$(query_active_run_id)"
+      if [ -n "$active_id" ]; then
+        remote_run_id="$active_id"
+        attached_run_id="$active_id"
+        attach_reason="proof_already_running_reattach"
+        log "Re-attaching to run $remote_run_id for re-poll"
+        continue
+      fi
+    fi
+    break
+    done
   fi
 else
   mode_used="remote_ssh"
@@ -607,7 +721,7 @@ PY
   terminal_status="${ssh_fields[0]:-FAIL}"
   novnc_url="${ssh_fields[1]:-}"
   remote_payload_json="${ssh_fields[2]:-\{\}}"
-  python3 - "$RESULT_FILE" "$LOCAL_RUN_ID" "$mode_used" "$terminal_status" "$novnc_url" "$remote_run_id" "$remote_payload_json" "$trigger_message" "$ERROR_CLASS" "$RUN_DIR_BROWSE_HTTP_CODE" "$RUN_DIR_BROWSE_HTTP_CODE_LOCAL" "$RUN_DIR_BROWSE_HTTP_CODE_REMOTE" "$RUN_DIR_BROWSE_MODE" "$RUN_DIR_BROWSE_URL" "$RUN_DIR_BROWSE_REMOTE_URL" "$RUN_ARTIFACT_DIR_ERROR" "$PROOF_HTTP_CODE" "$PRECHECK_HTTP_CODE" <<'PY'
+  python3 - "$RESULT_FILE" "$LOCAL_RUN_ID" "$mode_used" "$terminal_status" "$novnc_url" "$remote_run_id" "$remote_payload_json" "$trigger_message" "$ERROR_CLASS" "$RUN_DIR_BROWSE_HTTP_CODE" "$RUN_DIR_BROWSE_HTTP_CODE_LOCAL" "$RUN_DIR_BROWSE_HTTP_CODE_REMOTE" "$RUN_DIR_BROWSE_MODE" "$RUN_DIR_BROWSE_URL" "$RUN_DIR_BROWSE_REMOTE_URL" "$RUN_ARTIFACT_DIR_ERROR" "$PROOF_HTTP_CODE" "$PRECHECK_HTTP_CODE" "$already_running_detected" "$attached_run_id" "$attach_reason" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -642,12 +756,15 @@ payload = {
     "browse_remote_url": sys.argv[15] or None,
     "proof_http_code": sys.argv[17] or None,
     "precheck_http_code": sys.argv[18] or None,
+    "already_running_detected": sys.argv[19] == "true",
+    "attached_run_id": sys.argv[20] or None,
+    "attach_reason": sys.argv[21] or None,
     "finished_at": utc_now_iso(),
 }
 write_json_file(Path(sys.argv[1]), payload)
 PY
 else
-  python3 - "$RESULT_FILE" "$LOCAL_RUN_ID" "$mode_used" "$terminal_status" "$novnc_url" "$remote_run_id" "$trigger_message" "$PROOF_PAYLOAD_FILE" "$PRECHECK_PAYLOAD_FILE" "$RUN_ARTIFACT_DIR" "$RUN_ARTIFACT_DIR_ERROR" "$ERROR_CLASS" "$RUN_DIR_BROWSE_HTTP_CODE" "$RUN_DIR_BROWSE_HTTP_CODE_LOCAL" "$RUN_DIR_BROWSE_HTTP_CODE_REMOTE" "$RUN_DIR_BROWSE_MODE" "$RUN_DIR_BROWSE_URL" "$RUN_DIR_BROWSE_REMOTE_URL" "$PROOF_HTTP_CODE" "$PRECHECK_HTTP_CODE" <<'PY'
+  python3 - "$RESULT_FILE" "$LOCAL_RUN_ID" "$mode_used" "$terminal_status" "$novnc_url" "$remote_run_id" "$trigger_message" "$PROOF_PAYLOAD_FILE" "$PRECHECK_PAYLOAD_FILE" "$RUN_ARTIFACT_DIR" "$RUN_ARTIFACT_DIR_ERROR" "$ERROR_CLASS" "$RUN_DIR_BROWSE_HTTP_CODE" "$RUN_DIR_BROWSE_HTTP_CODE_LOCAL" "$RUN_DIR_BROWSE_HTTP_CODE_REMOTE" "$RUN_DIR_BROWSE_MODE" "$RUN_DIR_BROWSE_URL" "$RUN_DIR_BROWSE_REMOTE_URL" "$PROOF_HTTP_CODE" "$PRECHECK_HTTP_CODE" "$already_running_detected" "$attached_run_id" "$attach_reason" <<'PY'
 import sys
 import json
 from pathlib import Path
@@ -711,6 +828,9 @@ payload = {
     "browse_remote_url": sys.argv[18] or None,
     "proof_http_code": sys.argv[19] or None,
     "precheck_http_code": sys.argv[20] or None,
+    "already_running_detected": sys.argv[21] == "true",
+    "attached_run_id": sys.argv[22] or None,
+    "attach_reason": sys.argv[23] or None,
     "finished_at": utc_now_iso(),
 }
 write_json_file(Path(sys.argv[1]), payload)
