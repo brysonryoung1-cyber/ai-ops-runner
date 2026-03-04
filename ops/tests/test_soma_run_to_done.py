@@ -76,6 +76,81 @@ class TestWriteInitialProofFiles:
         assert precheck["precheck"] == "pending"
 
 
+class TestLatestRunPointer:
+    """LATEST_RUN.json pointer should map console run id to the concrete run directory."""
+
+    def test_write_latest_run_pointer_contains_run_id_and_run_dir(self, tmp_path, monkeypatch):
+        artifacts_root = tmp_path / "artifacts_root"
+        artifacts_root.mkdir()
+        monkeypatch.setenv("OPENCLAW_ARTIFACTS_ROOT", str(artifacts_root))
+        mod = _load_module()
+
+        out_dir = (
+            tmp_path
+            / "artifacts"
+            / "soma_kajabi"
+            / "run_to_done"
+            / "run_to_done_20260304T155603Z_abcdef12"
+        )
+        out_dir.mkdir(parents=True)
+
+        mod.write_latest_run_pointer(
+            out_dir=out_dir,
+            run_id="20260304155603-a0c4",
+            status="RUNNING",
+        )
+
+        pointer_path = artifacts_root / "soma_kajabi" / "run_to_done" / "LATEST_RUN.json"
+        assert pointer_path.exists(), f"Pointer should be at canonical path: {pointer_path}"
+        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+
+        assert pointer["run_id"] == "20260304155603-a0c4"
+        assert pointer["run_dir"] == "run_to_done_20260304T155603Z_abcdef12"
+        assert pointer["status"] == "RUNNING"
+        assert "updated_at" in pointer
+
+    def test_pointer_written_to_env_artifacts_root(self, tmp_path, monkeypatch):
+        """When OPENCLAW_ARTIFACTS_ROOT is set, pointer is written under that dir."""
+        custom_root = tmp_path / "custom_artifacts"
+        custom_root.mkdir()
+        monkeypatch.setenv("OPENCLAW_ARTIFACTS_ROOT", str(custom_root))
+        mod = _load_module()
+
+        out_dir = tmp_path / "some" / "other" / "path" / "run_20260304"
+        out_dir.mkdir(parents=True)
+
+        mod.write_latest_run_pointer(
+            out_dir=out_dir,
+            run_id="test-env-pointer",
+            status="SUCCESS",
+        )
+
+        expected_pointer = custom_root / "soma_kajabi" / "run_to_done" / "LATEST_RUN.json"
+        assert expected_pointer.exists(), f"Pointer must exist at {expected_pointer}"
+        pointer = json.loads(expected_pointer.read_text(encoding="utf-8"))
+        assert pointer["run_id"] == "test-env-pointer"
+        assert pointer["status"] == "SUCCESS"
+
+    def test_pointer_creates_parent_dirs(self, tmp_path, monkeypatch):
+        """Pointer write creates parent dirs if they don't exist."""
+        new_root = tmp_path / "brand_new_artifacts"
+        monkeypatch.setenv("OPENCLAW_ARTIFACTS_ROOT", str(new_root))
+        mod = _load_module()
+
+        out_dir = tmp_path / "run_dir"
+        out_dir.mkdir()
+
+        mod.write_latest_run_pointer(
+            out_dir=out_dir,
+            run_id="test-mkdir",
+            status="RUNNING",
+        )
+
+        expected_pointer = new_root / "soma_kajabi" / "run_to_done" / "LATEST_RUN.json"
+        assert expected_pointer.exists()
+        assert expected_pointer.parent.is_dir()
+
+
 class TestProofExistsEarlyOnPrecheckFail:
     """PROOF.json and PRECHECK.json must exist even when prechecks fail."""
 
@@ -94,7 +169,9 @@ class TestProofExistsEarlyOnPrecheckFail:
             rc = mod.main()
 
         assert rc == 1
-        proof_dirs = list((root / "artifacts" / "soma_kajabi" / "run_to_done").iterdir())
+        proof_dirs = [
+            p for p in (root / "artifacts" / "soma_kajabi" / "run_to_done").iterdir() if p.is_dir()
+        ]
         assert len(proof_dirs) == 1
         proof = json.loads((proof_dirs[0] / "PROOF.json").read_text())
         precheck = json.loads((proof_dirs[0] / "PRECHECK.json").read_text())
@@ -162,7 +239,9 @@ class TestRunToDoneMirrorGate:
             rc = mod.main()
 
         assert rc == 0
-        proof_dirs = list((root / "artifacts" / "soma_kajabi" / "run_to_done").iterdir())
+        proof_dirs = [
+            p for p in (root / "artifacts" / "soma_kajabi" / "run_to_done").iterdir() if p.is_dir()
+        ]
         assert len(proof_dirs) == 1
         proof = json.loads((proof_dirs[0] / "PROOF.json").read_text())
         assert proof["status"] == "SUCCESS"
@@ -188,7 +267,9 @@ class TestRunToDoneMirrorGate:
             rc = mod.main()
 
         assert rc == 1
-        proof_dirs = list((root / "artifacts" / "soma_kajabi" / "run_to_done").iterdir())
+        proof_dirs = [
+            p for p in (root / "artifacts" / "soma_kajabi" / "run_to_done").iterdir() if p.is_dir()
+        ]
         proof = json.loads((proof_dirs[0] / "PROOF.json").read_text())
         assert proof["status"] == "FAILURE"
         assert proof["error_class"] == "MIRROR_FAIL"
@@ -215,7 +296,9 @@ class TestRunToDoneMirrorGate:
             rc = mod.main()
 
         assert rc == 1
-        proof_dirs = list((root / "artifacts" / "soma_kajabi" / "run_to_done").iterdir())
+        proof_dirs = [
+            p for p in (root / "artifacts" / "soma_kajabi" / "run_to_done").iterdir() if p.is_dir()
+        ]
         proof = json.loads((proof_dirs[0] / "PROOF.json").read_text())
         assert proof["status"] == "FAILURE"
         assert proof["error_class"] == "ACCEPTANCE_MISSING_FOR_RUN"
@@ -242,7 +325,9 @@ class TestRunToDoneMirrorGate:
             rc = mod.main()
 
         assert rc == 1
-        proof_dirs = list((root / "artifacts" / "soma_kajabi" / "run_to_done").iterdir())
+        proof_dirs = [
+            p for p in (root / "artifacts" / "soma_kajabi" / "run_to_done").iterdir() if p.is_dir()
+        ]
         proof = json.loads((proof_dirs[0] / "PROOF.json").read_text())
         assert proof["status"] == "FAILURE"
         assert proof["error_class"] == "ACCEPTANCE_MISSING_FOR_RUN"
