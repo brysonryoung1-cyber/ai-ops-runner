@@ -30,6 +30,7 @@
 
 - **SUCCESS requires Mirror PASS**: `soma_run_to_done` will return FAIL with `error_class: MIRROR_FAIL` if `mirror_pass === false` or `mirror_exceptions_count > 0`. No SUCCESS is possible without Mirror PASS.
 - **Run-scoped acceptance**: Acceptance and mirror data must come from the current run's artifact dirs. No "latest directory" fallback. If acceptance is missing for the run, `soma_run_to_done` returns FAIL with `error_class: ACCEPTANCE_MISSING_FOR_RUN`.
+- **Early PROOF/PRECHECK writes**: `soma_run_to_done` writes `PROOF.json` (status=RUNNING, phase=init) and `PRECHECK.json` (status=RUNNING, precheck=pending) immediately on run start, before prechecks begin. These files are updated in-place at each phase transition (precheck → trigger → polling → acceptance_verification → done). Remote helpers never encounter a missing PROOF.json.
 - **Run-scoped Phase0**: `soma_kajabi_auto_finish` will not fall back to the latest Phase0 dir. If the Phase0 dir for the current run is missing, it fails with `PHASE0_MISSING_FOR_RUN`. If the dir exists but is degraded (snapshot missing), it fails with `PHASE0_DEGRADED`.
 - **Status endpoint honesty**: The status endpoint never sets `mirror_pass: true` when the actual mirror state is unknown. It returns `mirror_state: "UNKNOWN_NO_ACCEPTANCE_FOR_RUN"` when no acceptance data exists for the current run.
 

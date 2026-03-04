@@ -171,6 +171,9 @@ The status endpoint can show stale mirror values because:
 - **B) Run-scoped acceptance**: `soma_kajabi_auto_finish.py` removed "latest phase0" fallback; fails with `PHASE0_MISSING_FOR_RUN` or `PHASE0_DEGRADED`.
 - **C) Status endpoint correctness**: `route.ts` removed `SUCCESS → mirrorPass=true` fallback; returns `mirror_state: "UNKNOWN_NO_ACCEPTANCE_FOR_RUN"` when data missing; added `latest_acceptance_run_id` for transparency.
 
+**STATUS (2026-03-04):** Early PROOF/PRECHECK write fix shipped:
+- **D) PROOF_MISSING_FOR_RUN race fix**: `soma_run_to_done.py` now writes `PROOF.json` (status=RUNNING) and `PRECHECK.json` (status=RUNNING) immediately after creating the run output directory, before any prechecks begin. Both files are updated in-place via `_update_proof()`/`_update_precheck()` at each phase transition. Remote helpers (`aiops_soma_run_to_done.sh`) will never see a 404 for these files. Phase lifecycle: init → precheck → trigger → polling → acceptance_verification → done.
+
 ---
 
 ## 6) New blocker after novnc_readiness ship — FileNotFoundError in proof loop

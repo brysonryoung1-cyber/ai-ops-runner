@@ -170,6 +170,52 @@ def _precheck_novnc(
     return _run_doctor()
 
 
+def _write_json(path: Path, payload: dict) -> None:
+    """Atomic-ish JSON write (write + flush)."""
+    path.write_text(json.dumps(payload, indent=2))
+
+
+def write_initial_proof_files(out_dir: Path, run_id: str) -> None:
+    """Write PROOF.json and PRECHECK.json at run start so remote helpers never 404."""
+    now = datetime.now(timezone.utc).isoformat()
+    _write_json(out_dir / "PROOF.json", {
+        "run_id": run_id,
+        "status": "RUNNING",
+        "phase": "init",
+        "started_at": now,
+        "project": "soma_kajabi",
+        "action": "soma_run_to_done",
+    })
+    _write_json(out_dir / "PRECHECK.json", {
+        "run_id": run_id,
+        "status": "RUNNING",
+        "precheck": "pending",
+        "started_at": now,
+    })
+
+
+def _update_proof(out_dir: Path, run_id: str, updates: dict) -> None:
+    """Merge updates into the existing PROOF.json."""
+    proof_path = out_dir / "PROOF.json"
+    try:
+        current = json.loads(proof_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        current = {"run_id": run_id}
+    current.update(updates)
+    _write_json(proof_path, current)
+
+
+def _update_precheck(out_dir: Path, run_id: str, updates: dict) -> None:
+    """Merge updates into the existing PRECHECK.json."""
+    precheck_path = out_dir / "PRECHECK.json"
+    try:
+        current = json.loads(precheck_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        current = {"run_id": run_id}
+    current.update(updates)
+    _write_json(precheck_path, current)
+
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Soma Run to DONE orchestrator")
     p.add_argument("--max-polls", type=int, default=DEFAULT_MAX_POLLS)
@@ -187,49 +233,66 @@ def main() -> int:
     out_dir = root / "artifacts" / "soma_kajabi" / "run_to_done" / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Write initial proof files immediately so remote helpers never 404
+    write_initial_proof_files(out_dir, run_id)
+
     # PRECHECK
+    _update_proof(out_dir, run_id, {"phase": "precheck"})
+
     if not _precheck_drift(root):
-        (out_dir / "PRECHECK.json").write_text(
-            json.dumps({"drift_deploy": "failed", "run_id": run_id}, indent=2)
-        )
+        _update_precheck(out_dir, run_id, {
+            "status": "FAIL", "drift_deploy": "failed",
+            "error_class": "DRIFT_DEPLOY_FAILED",
+        })
+        _update_proof(out_dir, run_id, {
+            "status": "FAIL", "error_class": "DRIFT_DEPLOY_FAILED", "phase": "precheck",
+        })
         print(json.dumps({"ok": False, "error_class": "DRIFT_DEPLOY_FAILED", "run_id": run_id, "project": "soma_kajabi", "action": "soma_run_to_done"}))
         return 1
 
     if not _precheck_hostd():
-        (out_dir / "PRECHECK.json").write_text(
-            json.dumps({"hostd": "unreachable", "run_id": run_id}, indent=2)
-        )
+        _update_precheck(out_dir, run_id, {
+            "status": "FAIL", "hostd": "unreachable",
+            "error_class": "HOSTD_UNREACHABLE",
+        })
+        _update_proof(out_dir, run_id, {
+            "status": "FAIL", "error_class": "HOSTD_UNREACHABLE", "phase": "precheck",
+        })
         print(json.dumps({"ok": False, "error_class": "HOSTD_UNREACHABLE", "run_id": run_id, "project": "soma_kajabi", "action": "soma_run_to_done"}))
         return 1
 
     novnc_precheck: dict[str, str | None] = {}
     if not _precheck_novnc(root, novnc_precheck):
-        (out_dir / "PRECHECK.json").write_text(
-            json.dumps(
-                {
-                    "novnc": "not_ready",
-                    "run_id": run_id,
-                    "error_class": novnc_precheck.get("error_class") or "NOVNC_NOT_READY",
-                    "novnc_readiness_artifact_dir": novnc_precheck.get("novnc_readiness_artifact_dir"),
-                },
-                indent=2,
-            )
-        )
+        error_class = novnc_precheck.get("error_class") or "NOVNC_NOT_READY"
+        novnc_artifact_dir = novnc_precheck.get("novnc_readiness_artifact_dir")
+        _update_precheck(out_dir, run_id, {
+            "status": "FAIL", "novnc": "not_ready",
+            "error_class": error_class,
+            "novnc_readiness_artifact_dir": novnc_artifact_dir,
+        })
+        _update_proof(out_dir, run_id, {
+            "status": "FAIL", "error_class": error_class, "phase": "precheck",
+            "novnc_readiness_artifact_dir": novnc_artifact_dir,
+        })
         print(
             json.dumps(
                 {
                     "ok": False,
-                    "error_class": novnc_precheck.get("error_class") or "NOVNC_NOT_READY",
+                    "error_class": error_class,
                     "run_id": run_id,
                     "project": "soma_kajabi",
                     "action": "soma_run_to_done",
-                    "novnc_readiness_artifact_dir": novnc_precheck.get("novnc_readiness_artifact_dir"),
+                    "novnc_readiness_artifact_dir": novnc_artifact_dir,
                 }
             )
         )
         return 1
 
+    # Prechecks passed
+    _update_precheck(out_dir, run_id, {"status": "PASS", "precheck": "passed"})
+
     # TRIGGER — uses shared exec trigger client (default 90s timeout, 409 = ALREADY_RUNNING)
+    _update_proof(out_dir, run_id, {"phase": "trigger"})
     tr = trigger_exec("soma_kajabi", "soma_kajabi_auto_finish")
 
     if tr.state == "ALREADY_RUNNING":
@@ -237,6 +300,10 @@ def main() -> int:
         (out_dir / "TRIGGER.json").write_text(
             json.dumps({"http_code": 409, "state": "ALREADY_RUNNING", "active_run_id": active_run_id}, indent=2)
         )
+        _update_proof(out_dir, run_id, {
+            "status": "ALREADY_RUNNING", "phase": "trigger",
+            "active_run_id": active_run_id,
+        })
         print(json.dumps({
             "ok": False,
             "error_class": "ALREADY_RUNNING",
@@ -252,6 +319,9 @@ def main() -> int:
         (out_dir / "TRIGGER.json").write_text(
             json.dumps({"http_code": tr.status_code, "error": tr.message}, indent=2)
         )
+        _update_proof(out_dir, run_id, {
+            "status": "FAIL", "error_class": "TRIGGER_FAILED", "phase": "trigger",
+        })
         print(json.dumps({
             "ok": False,
             "error_class": "TRIGGER_FAILED",
@@ -265,8 +335,15 @@ def main() -> int:
     # ACCEPTED
     auto_run_id = tr.run_id
     if not auto_run_id:
+        _update_proof(out_dir, run_id, {
+            "status": "FAIL", "error_class": "NO_RUN_ID", "phase": "trigger",
+        })
         print(json.dumps({"ok": False, "error_class": "NO_RUN_ID", "run_id": run_id}))
         return 1
+
+    _update_proof(out_dir, run_id, {
+        "phase": "polling", "auto_run_id": auto_run_id,
+    })
 
     # POLL — exponential backoff governor
     start = time.monotonic()
@@ -353,6 +430,11 @@ def main() -> int:
         (out_dir / "POLL.json").write_text(
             json.dumps({"timeout": True, "auto_run_id": auto_run_id, "run_id": run_id}, indent=2)
         )
+        _update_proof(out_dir, run_id, {
+            "status": "FAIL", "error_class": "POLL_TIMEOUT", "phase": "polling",
+            "auto_run_id": auto_run_id,
+            "elapsed_sec": elapsed_sec,
+        })
         print(json.dumps({
             "ok": False,
             "error_class": "POLL_TIMEOUT",
@@ -376,16 +458,15 @@ def main() -> int:
                 write_gate_artifact("soma_kajabi", auto_run_id or run_id, gate)
             except Exception:
                 pass
-        proof = {
-            "run_id": run_id,
+        _update_proof(out_dir, run_id, {
             "auto_run_id": auto_run_id,
             "status": "WAITING_FOR_HUMAN",
+            "phase": "human_gate",
             "novnc_url": novnc_url,
             "instruction_line": instruction,
             "artifact_dir": artifact_dir,
             "build_sha": _get_build_sha(root),
-        }
-        (out_dir / "PROOF.json").write_text(json.dumps(proof, indent=2))
+        })
         (out_dir / "PROOF.md").write_text(
             f"# Soma Run to DONE — WAITING_FOR_HUMAN\n\n"
             f"**novnc_url**: {novnc_url}\n\n"
@@ -400,6 +481,8 @@ def main() -> int:
             "artifact_dir": artifact_dir or f"artifacts/soma_kajabi/run_to_done/{run_id}",
         }))
         return 0
+
+    _update_proof(out_dir, run_id, {"phase": "acceptance_verification"})
 
     if terminal_status == "SUCCESS":
         accept_base = root / "artifacts" / "soma_kajabi" / "acceptance"
@@ -427,8 +510,7 @@ def main() -> int:
 
         # Fail-closed: no "latest" fallback — acceptance must be from this run
         if not accept_run_dir:
-            (out_dir / "PROOF.json").write_text(json.dumps({
-                "run_id": run_id,
+            _update_proof(out_dir, run_id, {
                 "auto_run_id": auto_run_id,
                 "status": "FAILURE",
                 "error_class": "ACCEPTANCE_MISSING_FOR_RUN",
@@ -436,7 +518,7 @@ def main() -> int:
                 "expected_paths": [
                     str(accept_base / (Path(artifact_dir or "").name or "UNKNOWN")),
                 ],
-            }, indent=2))
+            })
             print(json.dumps({
                 "ok": False,
                 "status": "FAILURE",
@@ -459,15 +541,14 @@ def main() -> int:
             mirror_pass = exceptions_count == 0
         else:
             # mirror_report.json missing → fail-closed
-            (out_dir / "PROOF.json").write_text(json.dumps({
-                "run_id": run_id,
+            _update_proof(out_dir, run_id, {
                 "auto_run_id": auto_run_id,
                 "status": "FAILURE",
                 "error_class": "ACCEPTANCE_MISSING_FOR_RUN",
                 "build_sha": _get_build_sha(root),
                 "acceptance_dir": acceptance_rel,
                 "message": "mirror_report.json not found in acceptance dir",
-            }, indent=2))
+            })
             print(json.dumps({
                 "ok": False,
                 "status": "FAILURE",
@@ -482,8 +563,7 @@ def main() -> int:
 
         # Fail-closed: mirror must PASS for SUCCESS
         if not mirror_pass:
-            (out_dir / "PROOF.json").write_text(json.dumps({
-                "run_id": run_id,
+            _update_proof(out_dir, run_id, {
                 "auto_run_id": auto_run_id,
                 "status": "FAILURE",
                 "error_class": "MIRROR_FAIL",
@@ -491,7 +571,7 @@ def main() -> int:
                 "acceptance_dir": acceptance_rel,
                 "mirror_pass": False,
                 "mirror_exceptions_count": exceptions_count,
-            }, indent=2))
+            })
             (out_dir / "PROOF.md").write_text(
                 f"# Soma Run to DONE — FAILURE (Mirror)\n\n"
                 f"- build_sha: {_get_build_sha(root)}\n"
@@ -513,22 +593,21 @@ def main() -> int:
             }))
             return 1
 
-        proof = {
-            "run_id": run_id,
+        _update_proof(out_dir, run_id, {
             "auto_run_id": auto_run_id,
             "status": "SUCCESS",
+            "phase": "done",
             "build_sha": _get_build_sha(root),
             "acceptance_path": acceptance_rel,
             "acceptance_dir": acceptance_rel,
             "mirror_pass": True,
             "mirror_exceptions_count": 0,
             "exceptions_count": 0,
-        }
-        (out_dir / "PROOF.json").write_text(json.dumps(proof, indent=2))
+        })
         (out_dir / "PROOF.md").write_text(
             f"# Soma Run to DONE — SUCCESS\n\n"
-            f"- build_sha: {proof['build_sha']}\n"
-            f"- acceptance: {proof['acceptance_path']}\n"
+            f"- build_sha: {_get_build_sha(root)}\n"
+            f"- acceptance: {acceptance_rel}\n"
             f"- Mirror PASS: True (exceptions_count=0)\n"
         )
         print(json.dumps({
@@ -583,16 +662,15 @@ def main() -> int:
                 write_gate_artifact("soma_kajabi", auto_run_id or run_id, gate)
             except Exception:
                 pass
-        proof = {
-            "run_id": run_id,
+        _update_proof(out_dir, run_id, {
             "auto_run_id": auto_run_id,
             "status": "WAITING_FOR_HUMAN",
+            "phase": "human_gate",
             "novnc_url": novnc_url,
             "instruction_line": instruction,
             "artifact_dir": artifact_dir,
             "build_sha": _get_build_sha(root),
-        }
-        (out_dir / "PROOF.json").write_text(json.dumps(proof, indent=2))
+        })
         (out_dir / "PROOF.md").write_text(
             f"# Soma Run to DONE — WAITING_FOR_HUMAN (auth gate)\n\n"
             f"**novnc_url**: {novnc_url}\n\n**Instruction**: {instruction}\n"
@@ -606,14 +684,14 @@ def main() -> int:
             "artifact_dir": artifact_dir or f"artifacts/soma_kajabi/run_to_done/{run_id}",
         }))
         return 0
-    (out_dir / "PROOF.json").write_text(json.dumps({
-        "run_id": run_id,
+    _update_proof(out_dir, run_id, {
         "auto_run_id": auto_run_id,
         "status": terminal_status,
+        "phase": "done",
         "error_class": error_class,
         "project": "soma_kajabi",
         "action": "soma_run_to_done",
-    }, indent=2))
+    })
     print(json.dumps({
         "ok": False,
         "status": terminal_status,
