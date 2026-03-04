@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenClaw Brain Loop (Doctor Matrix + state-change alerts)
+After=ai-ops-runner.service
+Wants=ai-ops-runner.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai-ops-runner
+ExecStart=/usr/bin/python3 /opt/ai-ops-runner/ops/system/brain_loop.py --mode all
+Environment=PYTHONUNBUFFERED=1
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
+
