@@ -32,6 +32,8 @@ Docker smoke test passing. Full ops/review/ship framework active. ORB integratio
 ## OpenClaw Current State
 
 - **Soma Kajabi lane handoff:** [docs/HANDOFF_OPENCLAW_SOMA.md](HANDOFF_OPENCLAW_SOMA.md) — DoD, spec, ops loop, proof locations.
+- **Doctor Matrix:** [docs/DOCTOR_MATRIX.md](DOCTOR_MATRIX.md) — system-wide preflight gate (core + plugin checks) with single proof bundle output.
+- **Brain Loop:** [docs/BRAIN_LOOP.md](BRAIN_LOOP.md) — 0-LLM all-day Doctor Matrix loop with state-change-only Discord alerts.
 
 ### Infrastructure Components
 
