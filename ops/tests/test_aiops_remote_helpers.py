@@ -16,6 +16,7 @@ from ops.lib.aiops_remote_helpers import (
     extract_last_json_object,
     parse_browse_dir_entries,
     parse_exec_trigger_response,
+    parse_project_status_response,
     parse_run_poll_response,
     resolve_run_to_done_dir,
     write_json_file,
@@ -44,6 +45,36 @@ def test_parse_exec_trigger_response_already_running() -> None:
     parsed = parse_exec_trigger_response(409, body)
     assert parsed["state"] == "ALREADY_RUNNING"
     assert parsed["run_id"] == "run-123"
+
+
+def test_parse_exec_trigger_409_without_active_run_id() -> None:
+    body = json.dumps({"error_class": "ALREADY_RUNNING"})
+    parsed = parse_exec_trigger_response(409, body)
+    assert parsed["state"] == "ALREADY_RUNNING"
+    assert parsed["run_id"] is None
+
+
+def test_parse_project_status_explicit_active_run_id() -> None:
+    body = json.dumps({"active_run_id": "run-abc", "run_id": "run-old"})
+    parsed = parse_project_status_response(body)
+    assert parsed["active_run_id"] == "run-abc"
+
+
+def test_parse_project_status_fallback_to_run_id() -> None:
+    body = json.dumps({"run_id": "run-456"})
+    parsed = parse_project_status_response(body)
+    assert parsed["active_run_id"] == "run-456"
+
+
+def test_parse_project_status_nested_run_object() -> None:
+    body = json.dumps({"run": {"run_id": "run-nested"}})
+    parsed = parse_project_status_response(body)
+    assert parsed["active_run_id"] == "run-nested"
+
+
+def test_parse_project_status_empty_body() -> None:
+    parsed = parse_project_status_response("")
+    assert parsed["active_run_id"] is None
 
 
 def test_parse_run_poll_response_extracts_status_and_artifact_dir() -> None:

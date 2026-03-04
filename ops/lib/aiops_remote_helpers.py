@@ -68,8 +68,9 @@ def parse_exec_trigger_response(http_code: int, body_text: str) -> dict[str, Any
     active_run_id = payload.get("active_run_id")
     if http_code in (200, 202) and isinstance(run_id, str) and run_id:
         return {"state": "ACCEPTED", "run_id": run_id, "http_code": http_code, "payload": payload}
-    if http_code == 409 and isinstance(active_run_id, str) and active_run_id:
-        return {"state": "ALREADY_RUNNING", "run_id": active_run_id, "http_code": http_code, "payload": payload}
+    if http_code == 409:
+        rid = active_run_id if isinstance(active_run_id, str) and active_run_id else None
+        return {"state": "ALREADY_RUNNING", "run_id": rid, "http_code": http_code, "payload": payload}
     message = payload.get("error_class") or payload.get("error") or (body_text or "").strip()[:240]
     return {"state": "FAILED", "run_id": None, "http_code": http_code, "message": message, "payload": payload}
 
@@ -91,6 +92,24 @@ def parse_run_poll_response(body_text: str) -> dict[str, Any]:
         "run": run_obj,
         "payload": payload,
     }
+
+
+def parse_project_status_response(body_text: str) -> dict[str, Any]:
+    """Parse /api/projects/<project>/status for the active run_id."""
+    payload = _safe_json_loads(body_text) or {}
+    active = payload.get("active_run_id")
+    if isinstance(active, str) and active.strip():
+        return {"active_run_id": active.strip(), "payload": payload}
+    rid = payload.get("run_id")
+    if isinstance(rid, str) and rid.strip():
+        return {"active_run_id": rid.strip(), "payload": payload}
+    run_obj = payload.get("run")
+    if isinstance(run_obj, dict):
+        for key in ("run_id", "id"):
+            v = run_obj.get(key)
+            if isinstance(v, str) and v.strip():
+                return {"active_run_id": v.strip(), "payload": payload}
+    return {"active_run_id": None, "payload": payload}
 
 
 def parse_artifact_browse_proof(body_text: str) -> dict[str, Any] | None:
