@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from ops.lib.artifacts_root import get_artifacts_root
 from ops.lib.exec_trigger import hq_request
 
 from .models import CheckResult, RunDirContract
@@ -486,17 +487,8 @@ def resolve_repo_root(default_file: Path) -> Path:
 
 
 def resolve_artifacts_root(repo_root: Path) -> Path:
-    """Resolve canonical artifacts root (env -> /opt -> repo fallback)."""
-
-    env_root = os.environ.get("OPENCLAW_ARTIFACTS_ROOT", "").strip()
-    if env_root:
-        return Path(env_root)
-
-    vps_root = Path("/opt/ai-ops-runner/artifacts")
-    if vps_root.exists():
-        return vps_root
-
-    return repo_root / "artifacts"
+    """Delegate to canonical shared resolver (ops.lib.artifacts_root)."""
+    return get_artifacts_root(repo_root=repo_root)
 
 
 def load_mock_fixture(path: Path) -> dict[str, Any]:

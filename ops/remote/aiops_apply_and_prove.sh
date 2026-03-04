@@ -162,34 +162,8 @@ docker compose up -d --build
   deploy_ok=1
 fi
 
-run_remote_script "Bootstrap: ensure soma LATEST_RUN.json exists on VPS (idempotent: only when missing)" 'set -euo pipefail
-# Idempotent: creates pointer ONLY when absent; never overwrites. No drift on re-run.
-ARTIFACTS="/opt/ai-ops-runner/artifacts"
-POINTER="$ARTIFACTS/soma_kajabi/run_to_done/LATEST_RUN.json"
-if [ ! -f "$POINTER" ]; then
-  RTD="$ARTIFACTS/soma_kajabi/run_to_done"
-  if [ -d "$RTD" ]; then
-    LATEST=$(ls -1 "$RTD" | grep -E "^run_to_done_[0-9]{8}T[0-9]{6}Z_[a-f0-9]{8}$" | sort -r | head -1)
-    if [ -n "$LATEST" ] && [ -f "$RTD/$LATEST/PROOF.json" ]; then
-      STATUS=$(python3 -c "import json; d=json.load(open(\"$RTD/$LATEST/PROOF.json\")); print(d.get(\"status\",\"SUCCESS\"))" 2>/dev/null || echo "SUCCESS")
-      mkdir -p "$(dirname "$POINTER")"
-      export LATEST STATUS POINTER
-      python3 << "PYEOF"
-import json, os
-from datetime import datetime, timezone
-latest = os.environ.get("LATEST", "")
-status = os.environ.get("STATUS", "SUCCESS")
-path = os.environ.get("POINTER", "")
-if latest and path:
-    p = {"run_id": latest, "run_dir": latest, "status": status, "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
-    open(path, "w").write(json.dumps(p, indent=2) + "\n")
-    print("Created LATEST_RUN.json ->", latest)
-PYEOF
-      echo "Bootstrap: LATEST_RUN.json -> $LATEST"
-    fi
-  fi
-fi
-' || true
+# NOTE: LATEST_RUN.json pointer is NOT written here. It is the sole
+# responsibility of soma_run_to_done.py (the authoritative writer).
 
 poll_started_epoch="$(date +%s)"
 deadline_epoch=$((poll_started_epoch + INITIAL_HEALTH_TIMEOUT_SEC))

@@ -36,3 +36,8 @@ apps/openclaw-console/data/
 apps/openclaw-console/test-results/
 logs/
 test-results/
+
+# Transient brain/doctor outputs (generated, not source-controlled)
+BRAIN_POLICY.md
+brain_policy.json
+DOCTOR_MATRIX.md
