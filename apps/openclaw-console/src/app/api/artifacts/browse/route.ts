@@ -118,21 +118,25 @@ function getAllowedOrigins(): Set<string> {
  * Path traversal prevented. No secrets; only directory names, file names, and safe file contents.
  */
 export async function GET(req: NextRequest) {
-  const allowedOrigins = getAllowedOrigins();
-  const origin = req.headers.get("origin");
-  const secFetchSite = req.headers.get("sec-fetch-site");
-  if (origin && !allowedOrigins.has(origin) && secFetchSite !== "same-origin") {
-    return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
-  }
-  const host = req.headers.get("host") ?? "";
-  if (!origin && secFetchSite !== "same-origin") {
-    const tsHost = process.env.OPENCLAW_TAILSCALE_HOSTNAME;
-    const allowedHost =
-      host.startsWith("127.0.0.1:") ||
-      host.startsWith("localhost:") ||
-      (tsHost && (host === tsHost || host.startsWith(`${tsHost}:`)));
-    if (!allowedHost) {
+  // Tailscale-trusted mode: bypass origin validation (Tailnet membership is access control)
+  const trustTailscale = process.env.OPENCLAW_TRUST_TAILSCALE === "1";
+  if (!trustTailscale) {
+    const allowedOrigins = getAllowedOrigins();
+    const origin = req.headers.get("origin");
+    const secFetchSite = req.headers.get("sec-fetch-site");
+    if (origin && !allowedOrigins.has(origin) && secFetchSite !== "same-origin") {
       return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
+    }
+    const host = req.headers.get("host") ?? "";
+    if (!origin && secFetchSite !== "same-origin") {
+      const tsHost = process.env.OPENCLAW_TAILSCALE_HOSTNAME;
+      const allowedHost =
+        host.startsWith("127.0.0.1:") ||
+        host.startsWith("localhost:") ||
+        (tsHost && (host === tsHost || host.startsWith(`${tsHost}:`)));
+      if (!allowedHost) {
+        return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
+      }
     }
   }
 
