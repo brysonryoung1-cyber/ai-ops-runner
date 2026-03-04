@@ -77,6 +77,9 @@ function writeProbeState(ok: boolean, error: string | null): void {
  * Enforces hard timeout (3s) to prevent infinite "Checking…".
  */
 function validateOrigin(req: NextRequest): NextResponse | null {
+  // Tailscale-trusted mode: bypass origin validation (Tailnet membership is access control)
+  if (process.env.OPENCLAW_TRUST_TAILSCALE === "1") return null;
+
   const origin = req.headers.get("origin");
   const secFetchSite = req.headers.get("sec-fetch-site");
   const host = req.headers.get("host") ?? "";
