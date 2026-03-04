@@ -162,8 +162,7 @@ docker compose up -d --build
   deploy_ok=1
 fi
 
-# NOTE: LATEST_RUN.json pointer is NOT written here. It is the sole
-# responsibility of soma_run_to_done.py (the authoritative writer).
+# Pointer files are not managed by this script.
 
 poll_started_epoch="$(date +%s)"
 deadline_epoch=$((poll_started_epoch + INITIAL_HEALTH_TIMEOUT_SEC))
