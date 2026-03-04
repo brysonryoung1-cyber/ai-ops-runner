@@ -21,6 +21,7 @@ from pathlib import Path
 
 # Shared trigger client — single source of truth for exec POST + status handling
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from ops.lib.artifacts_root import get_artifacts_root  # noqa: E402
 from ops.lib.exec_trigger import hq_request, trigger_exec  # noqa: E402
 
 HQ_BASE = os.environ.get("OPENCLAW_HQ_BASE", "http://127.0.0.1:8787")
@@ -51,20 +52,8 @@ def _repo_root() -> Path:
 
 
 def _get_artifacts_root() -> Path:
-    """Return canonical artifacts root for pointer files.
-
-    Priority:
-      1. OPENCLAW_ARTIFACTS_ROOT env var (if set and non-empty)
-      2. /opt/ai-ops-runner/artifacts (if exists, canonical VPS path)
-      3. <repo_root>/artifacts (local dev fallback)
-    """
-    env = os.environ.get("OPENCLAW_ARTIFACTS_ROOT", "").strip()
-    if env:
-        return Path(env)
-    vps_path = Path("/opt/ai-ops-runner/artifacts")
-    if vps_path.exists():
-        return vps_path
-    return _repo_root() / "artifacts"
+    """Delegate to canonical shared resolver (ops.lib.artifacts_root)."""
+    return get_artifacts_root(repo_root=_repo_root())
 
 
 def _get_build_sha(root: Path) -> str:
