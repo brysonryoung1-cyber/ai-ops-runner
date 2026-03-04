@@ -81,16 +81,20 @@ function validateOrigin(req: NextRequest): NextResponse | null {
   const secFetchSite = req.headers.get("sec-fetch-site");
   const host = req.headers.get("host") ?? "";
   const port = process.env.OPENCLAW_CONSOLE_PORT || process.env.PORT || "8787";
+  const tsHostname = process.env.OPENCLAW_TAILSCALE_HOSTNAME;
   const allowed = new Set([
     `http://127.0.0.1:${port}`,
     `http://localhost:${port}`,
   ]);
-  if (process.env.OPENCLAW_TAILSCALE_HOSTNAME) {
-    allowed.add(`https://${process.env.OPENCLAW_TAILSCALE_HOSTNAME}`);
+  if (tsHostname) {
+    allowed.add(`https://${tsHostname}`);
   }
   if (origin && allowed.has(origin)) return null;
   if (secFetchSite === "same-origin") return null;
-  if (!origin && (host.startsWith("127.0.0.1") || host.startsWith("localhost"))) return null;
+  if (!origin) {
+    if (host.startsWith("127.0.0.1") || host.startsWith("localhost")) return null;
+    if (tsHostname && (host === tsHostname || host.startsWith(`${tsHostname}:`))) return null;
+  }
   return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
 }
 
