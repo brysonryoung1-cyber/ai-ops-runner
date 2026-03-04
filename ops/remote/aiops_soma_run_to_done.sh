@@ -514,6 +514,14 @@ PY
           terminal_status="WAITING_FOR_HUMAN" ;;
         FAIL|FAILURE)
           terminal_status="FAIL" ;;
+        ALREADY_RUNNING)
+          terminal_status="FAIL"
+          [ -z "$ERROR_CLASS" ] && ERROR_CLASS="ALREADY_RUNNING"
+          ;;
+        RUNNING)
+          terminal_status="FAIL"
+          [ -z "$ERROR_CLASS" ] && ERROR_CLASS="PROOF_STILL_RUNNING"
+          ;;
         "")
           terminal_status="FAIL"
           [ -z "$ERROR_CLASS" ] && ERROR_CLASS="PROOF_STATUS_MISSING"
