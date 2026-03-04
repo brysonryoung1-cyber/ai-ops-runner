@@ -14,8 +14,10 @@ from ops.lib.aiops_remote_helpers import (
     canonical_novnc_url,
     classify_soma_terminal_status,
     extract_last_json_object,
+    parse_browse_dir_entries,
     parse_exec_trigger_response,
     parse_run_poll_response,
+    resolve_run_to_done_dir,
     write_json_file,
 )
 
@@ -125,3 +127,83 @@ def test_canonical_novnc_url_uses_base_host() -> None:
 def test_classify_success_without_proof_uses_run_success() -> None:
     parsed = classify_soma_terminal_status("success", None)
     assert parsed["terminal_status"] == TERMINAL_SUCCESS
+
+
+# --- parse_browse_dir_entries ---
+
+def test_parse_browse_dir_entries_extracts_dirs() -> None:
+    body = json.dumps({
+        "entries": [
+            {"name": "run_to_done_20260303T234225Z_a1b2c3d4", "type": "dir"},
+            {"name": "run_to_done_20260304T010000Z_deadbeef", "type": "dir"},
+            {"name": "PROOF.json", "type": "file", "size": 512},
+        ]
+    })
+    entries = parse_browse_dir_entries(body)
+    assert entries == [
+        "run_to_done_20260303T234225Z_a1b2c3d4",
+        "run_to_done_20260304T010000Z_deadbeef",
+    ]
+
+
+def test_parse_browse_dir_entries_empty_body() -> None:
+    assert parse_browse_dir_entries("") == []
+    assert parse_browse_dir_entries("{}") == []
+    assert parse_browse_dir_entries('{"entries": []}') == []
+
+
+# --- resolve_run_to_done_dir ---
+
+def test_resolve_exact_timestamp_match() -> None:
+    run_id = "20260303234225-a1b2"
+    entries = [
+        "run_to_done_20260303T234225Z_deadbeef",
+        "run_to_done_20260303T200000Z_old00000",
+    ]
+    result = resolve_run_to_done_dir(run_id, entries)
+    assert result["resolved_dir"] == "artifacts/soma_kajabi/run_to_done/run_to_done_20260303T234225Z_deadbeef"
+    assert result["error"] is None
+
+
+def test_resolve_picks_newest_on_multiple_exact_matches() -> None:
+    run_id = "20260303234225-a1b2"
+    entries = [
+        "run_to_done_20260303T234225Z_aaaa0000",
+        "run_to_done_20260303T234225Z_zzzz9999",
+    ]
+    result = resolve_run_to_done_dir(run_id, entries)
+    assert result["resolved_dir"].endswith("run_to_done_20260303T234225Z_zzzz9999")
+
+
+def test_resolve_fallback_within_600s() -> None:
+    run_id = "20260303234225-a1b2"
+    entries = [
+        "run_to_done_20260303T234300Z_close000",
+        "run_to_done_20260303T200000Z_far00000",
+    ]
+    result = resolve_run_to_done_dir(run_id, entries)
+    assert result["resolved_dir"] == "artifacts/soma_kajabi/run_to_done/run_to_done_20260303T234300Z_close000"
+    assert result["error"] is None
+
+
+def test_resolve_rejects_beyond_600s() -> None:
+    run_id = "20260303234225-a1b2"
+    entries = [
+        "run_to_done_20260304T010000Z_toofar00",
+    ]
+    result = resolve_run_to_done_dir(run_id, entries)
+    assert result["resolved_dir"] is None
+    assert result["error"] is not None
+    assert "no run_to_done dir within 600s" in result["error"]
+
+
+def test_resolve_invalid_run_id() -> None:
+    result = resolve_run_to_done_dir("short", [])
+    assert result["resolved_dir"] is None
+    assert "invalid run_id" in result["error"]
+
+
+def test_resolve_empty_entries() -> None:
+    result = resolve_run_to_done_dir("20260303234225-a1b2", [])
+    assert result["resolved_dir"] is None
+    assert "checked 0 entries" in result["error"]

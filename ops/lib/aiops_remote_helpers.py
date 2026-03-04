@@ -154,6 +154,93 @@ def canonical_novnc_url(base_url: str) -> str:
     )
 
 
+def parse_browse_dir_entries(body_text: str) -> list[str]:
+    """Extract directory entry names from a browse API response."""
+    payload = _safe_json_loads(body_text)
+    if not payload:
+        return []
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        return []
+    return [
+        e["name"]
+        for e in entries
+        if isinstance(e, dict) and isinstance(e.get("name"), str) and e.get("type") == "dir"
+    ]
+
+
+def resolve_run_to_done_dir(
+    run_id: str,
+    dir_entries: list[str],
+) -> dict[str, Any]:
+    """Resolve run_to_done artifact dir from browse listing and console run_id.
+
+    run_id: Console-generated ID (YYYYMMDDHHMMSS-XXXX).
+    dir_entries: Directory names under soma_kajabi/run_to_done/.
+
+    Returns {resolved_dir: str|None, error: str|None}.
+    """
+    if not run_id or len(run_id) < 14:
+        return {"resolved_dir": None, "error": f"invalid run_id: {run_id!r}"}
+
+    ts_raw = run_id[:14]
+    date_part = ts_raw[:8]
+    time_part = ts_raw[8:14]
+    utc_prefix = f"run_to_done_{date_part}T{time_part}Z_"
+
+    matches = [e for e in dir_entries if e.startswith(utc_prefix)]
+    if matches:
+        matches.sort()
+        return {
+            "resolved_dir": f"artifacts/soma_kajabi/run_to_done/{matches[-1]}",
+            "error": None,
+        }
+
+    try:
+        run_dt = datetime(
+            int(date_part[:4]), int(date_part[4:6]), int(date_part[6:8]),
+            int(time_part[:2]), int(time_part[2:4]), int(time_part[4:6]),
+            tzinfo=timezone.utc,
+        )
+    except (ValueError, IndexError):
+        return {"resolved_dir": None, "error": f"cannot parse timestamp: {run_id!r}"}
+
+    best_entry: str | None = None
+    best_delta = float("inf")
+    for entry in dir_entries:
+        if not entry.startswith("run_to_done_"):
+            continue
+        rest = entry[len("run_to_done_"):]
+        if len(rest) < 16 or rest[8] != "T" or rest[15] not in ("Z", "z"):
+            continue
+        try:
+            entry_dt = datetime(
+                int(rest[:4]), int(rest[4:6]), int(rest[6:8]),
+                int(rest[9:11]), int(rest[11:13]), int(rest[13:15]),
+                tzinfo=timezone.utc,
+            )
+        except (ValueError, IndexError):
+            continue
+        delta = abs((entry_dt - run_dt).total_seconds())
+        if delta < best_delta:
+            best_delta = delta
+            best_entry = entry
+
+    if best_entry is not None and best_delta <= 600:
+        return {
+            "resolved_dir": f"artifacts/soma_kajabi/run_to_done/{best_entry}",
+            "error": None,
+        }
+
+    return {
+        "resolved_dir": None,
+        "error": (
+            f"no run_to_done dir within 600s of {run_id}; "
+            f"checked {len(dir_entries)} entries"
+        ),
+    }
+
+
 def extract_last_json_object(raw_text: str) -> dict[str, Any] | None:
     """Return the last parseable JSON object found in a line-oriented output."""
     for line in reversed((raw_text or "").splitlines()):
