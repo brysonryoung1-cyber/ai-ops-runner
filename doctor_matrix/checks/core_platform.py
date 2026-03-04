@@ -24,40 +24,40 @@ def check_hq_health(builder: CheckBuilder, runtime: MatrixRuntime):
         path="/api/ui/health_public",
         timeout=10,
     )
-    localhost = builder.request(
-        label="localhost_health_public",
-        base_label="localhost",
+    remote_localhost = builder.request(
+        label="remote_localhost_health_public",
+        base_label="remote_localhost",
         path="/api/ui/health_public",
         timeout=10,
     )
 
     frontdoor_assess = assess_health_public(frontdoor.http_code, frontdoor.body_text)
-    localhost_assess = assess_health_public(localhost.http_code, localhost.body_text)
+    remote_localhost_assess = assess_health_public(remote_localhost.http_code, remote_localhost.body_text)
 
     builder.write_json(
         "parsed_health.json",
         {
             "frontdoor": frontdoor_assess,
-            "localhost": localhost_assess,
+            "remote_localhost": remote_localhost_assess,
         },
     )
 
     frontdoor_ok = bool(frontdoor_assess.get("ok") is True)
-    localhost_ok = bool(localhost_assess.get("ok") is True)
-    localhost_available = localhost.http_code not in (-1, 0)
+    remote_localhost_ok = bool(remote_localhost_assess.get("ok") is True)
+    remote_localhost_available = remote_localhost.http_code not in (-1, 0)
 
     details = {
         "frontdoor_http_code": frontdoor.http_code,
-        "localhost_http_code": localhost.http_code,
+        "remote_localhost_http_code": remote_localhost.http_code,
         "frontdoor_ok": frontdoor_ok,
-        "localhost_ok": localhost_ok,
-        "localhost_available": localhost_available,
+        "remote_localhost_ok": remote_localhost_ok,
+        "remote_localhost_available": remote_localhost_available,
         "frontdoor_build_sha": (frontdoor_assess.get("body_json") or {}).get("build_sha") if isinstance(frontdoor_assess.get("body_json"), dict) else None,
-        "localhost_build_sha": (localhost_assess.get("body_json") or {}).get("build_sha") if isinstance(localhost_assess.get("body_json"), dict) else None,
+        "remote_localhost_build_sha": (remote_localhost_assess.get("body_json") or {}).get("build_sha") if isinstance(remote_localhost_assess.get("body_json"), dict) else None,
     }
 
-    if frontdoor_ok and (localhost_ok or not localhost_available):
-        message = "health_public PASS on frontdoor; localhost optional probe recorded"
+    if frontdoor_ok and (remote_localhost_ok or not remote_localhost_available):
+        message = "health_public PASS on frontdoor; remote_localhost optional probe recorded"
         return builder.finalize(status="PASS", message=message, details=details)
 
     if not frontdoor_ok:
@@ -70,8 +70,8 @@ def check_hq_health(builder: CheckBuilder, runtime: MatrixRuntime):
 
     return builder.finalize(
         status="FAIL",
-        message=f"localhost health_public failed while reachable (HTTP {localhost.http_code})",
-        error_class=str(localhost_assess.get("error_class") or "HQ_HEALTH_LOCALHOST_FAIL"),
+        message=f"remote_localhost health_public failed while reachable (HTTP {remote_localhost.http_code})",
+        error_class=str(remote_localhost_assess.get("error_class") or "HQ_HEALTH_REMOTE_LOCALHOST_FAIL"),
         details=details,
     )
 
@@ -83,14 +83,14 @@ def check_hostd_status(builder: CheckBuilder, runtime: MatrixRuntime):
         path="/api/host-executor/status",
         timeout=10,
     )
-    localhost = builder.request(
-        label="localhost_hostd_status",
-        base_label="localhost",
+    remote_localhost = builder.request(
+        label="remote_localhost_hostd_status",
+        base_label="remote_localhost",
         path="/api/host-executor/status",
         timeout=10,
     )
 
-    primary = frontdoor if isinstance(frontdoor.payload, dict) else localhost
+    primary = frontdoor if isinstance(frontdoor.payload, dict) else remote_localhost
     payload = primary.payload if isinstance(primary.payload, dict) else {}
 
     hostd_ok = bool(payload.get("ok") is True)
@@ -99,7 +99,7 @@ def check_hostd_status(builder: CheckBuilder, runtime: MatrixRuntime):
 
     details = {
         "frontdoor_http_code": frontdoor.http_code,
-        "localhost_http_code": localhost.http_code,
+        "remote_localhost_http_code": remote_localhost.http_code,
         "selected_source": primary.base_label,
         "selected_http_code": primary.http_code,
         "hostd_ok": hostd_ok,
@@ -135,24 +135,24 @@ def check_browse_transport(builder: CheckBuilder, runtime: MatrixRuntime):
         path=path,
         timeout=10,
     )
-    localhost = builder.request(
-        label="localhost_browse_root",
-        base_label="localhost",
+    remote_localhost = builder.request(
+        label="remote_localhost_browse_root",
+        base_label="remote_localhost",
         path=path,
         timeout=10,
     )
 
     frontdoor_ok = _is_browse_ok(frontdoor.payload, frontdoor.http_code)
-    localhost_ok = _is_browse_ok(localhost.payload, localhost.http_code)
+    remote_localhost_ok = _is_browse_ok(remote_localhost.payload, remote_localhost.http_code)
 
     details = {
         "path": path,
         "frontdoor_http_code": frontdoor.http_code,
-        "localhost_http_code": localhost.http_code,
+        "remote_localhost_http_code": remote_localhost.http_code,
         "frontdoor_ok": frontdoor_ok,
-        "localhost_ok": localhost_ok,
+        "remote_localhost_ok": remote_localhost_ok,
         "frontdoor_entries_count": len(frontdoor.payload.get("entries", [])) if isinstance(frontdoor.payload, dict) and isinstance(frontdoor.payload.get("entries"), list) else None,
-        "localhost_entries_count": len(localhost.payload.get("entries", [])) if isinstance(localhost.payload, dict) and isinstance(localhost.payload.get("entries"), list) else None,
+        "remote_localhost_entries_count": len(remote_localhost.payload.get("entries", [])) if isinstance(remote_localhost.payload, dict) and isinstance(remote_localhost.payload.get("entries"), list) else None,
     }
 
     if frontdoor_ok:
@@ -161,16 +161,16 @@ def check_browse_transport(builder: CheckBuilder, runtime: MatrixRuntime):
             message="browse transport PASS via frontdoor",
             details=details,
         )
-    if localhost_ok:
+    if remote_localhost_ok:
         return builder.finalize(
             status="PASS",
-            message="browse transport PASS via localhost fallback",
+            message="browse transport PASS via remote_localhost fallback",
             details=details,
         )
 
     return builder.finalize(
         status="FAIL",
-        message="browse transport failed on frontdoor and localhost fallback",
+        message="browse transport failed on frontdoor and remote_localhost fallback",
         error_class="BROWSE_TRANSPORT_FAIL",
         details=details,
     )
@@ -190,14 +190,14 @@ def check_concurrency_semantics(builder: CheckBuilder, runtime: MatrixRuntime):
         path=path,
         timeout=10,
     )
-    localhost = builder.request(
-        label="localhost_exec_lock",
-        base_label="localhost",
+    remote_localhost = builder.request(
+        label="remote_localhost_exec_lock",
+        base_label="remote_localhost",
         path=path,
         timeout=10,
     )
 
-    selected = frontdoor if isinstance(frontdoor.payload, dict) else localhost
+    selected = frontdoor if isinstance(frontdoor.payload, dict) else remote_localhost
     payload = selected.payload if isinstance(selected.payload, dict) else {}
 
     has_active_key = isinstance(payload, dict) and "active_run_id" in payload
@@ -215,7 +215,7 @@ def check_concurrency_semantics(builder: CheckBuilder, runtime: MatrixRuntime):
         "selected_source": selected.base_label,
         "selected_http_code": selected.http_code,
         "frontdoor_http_code": frontdoor.http_code,
-        "localhost_http_code": localhost.http_code,
+        "remote_localhost_http_code": remote_localhost.http_code,
         "status_endpoint_has_active_run_id": has_active_key,
         "status_endpoint_schema_ok": schema_ok,
         "locked": locked,
@@ -244,14 +244,14 @@ def check_truthful_status_fields(builder: CheckBuilder, runtime: MatrixRuntime):
         path="/api/host-executor/status",
         timeout=10,
     )
-    localhost = builder.request(
-        label="localhost_hostd_truthful",
-        base_label="localhost",
+    remote_localhost = builder.request(
+        label="remote_localhost_hostd_truthful",
+        base_label="remote_localhost",
         path="/api/host-executor/status",
         timeout=10,
     )
 
-    selected = frontdoor if isinstance(frontdoor.payload, dict) else localhost
+    selected = frontdoor if isinstance(frontdoor.payload, dict) else remote_localhost
     payload = selected.payload if isinstance(selected.payload, dict) else None
 
     project_path = "/api/projects/soma_kajabi/status"
@@ -267,7 +267,7 @@ def check_truthful_status_fields(builder: CheckBuilder, runtime: MatrixRuntime):
         "selected_source": selected.base_label,
         "selected_http_code": selected.http_code,
         "frontdoor_http_code": frontdoor.http_code,
-        "localhost_http_code": localhost.http_code,
+        "remote_localhost_http_code": remote_localhost.http_code,
         "project_status_http_code": project_status.http_code,
         "schema_checks": {},
     }
