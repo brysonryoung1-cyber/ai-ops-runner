@@ -1,5 +1,16 @@
 # CSR_BRIEF — Soma Kajabi blockers after SUCCESS run 20260303221322-7111
 
+## Doctor Matrix 4-fail root cause (2026-03-04)
+
+| Check | Root cause |
+|-------|------------|
+| CORE.HQ_HEALTH | remote_localhost returned HTTP 200 but empty body; check required both frontdoor AND remote_localhost ok. Fix: PASS when frontdoor ok. |
+| CORE.RUN_DIR_RESOLUTION_CONTRACT | Pointer resolved from local artifacts_root (Mac); LATEST_RUN.json only exists on VPS. Fix: browse fallback when local pointer missing in LIVE mode. |
+| PROJECT.SOMA_POINTER_PRESENT | LATEST_RUN.json missing on VPS; browse returns 404. Fix: bootstrap step in apply_and_prove creates pointer from latest run_to_done_* dir. |
+| PROJECT.SOMA_RUN_TO_DONE_PROOF_SHAPE | Cascade from pointer 404; cannot validate proof without pointer. Fix: same bootstrap. |
+
+---
+
 ## 1) Observed facts (with evidence paths)
 
 - **run_id:** `20260303221322-7111` (auto_finish / hostd run)

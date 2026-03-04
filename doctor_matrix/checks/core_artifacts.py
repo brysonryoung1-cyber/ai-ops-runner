@@ -6,8 +6,9 @@ import json
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
-from ..parsers import detect_browse_pagination
+from ..parsers import detect_browse_pagination, parse_pointer_from_browse_response
 from ..runtime import CheckBuilder, CheckSpec, MatrixRuntime
 
 
@@ -191,6 +192,23 @@ def check_run_dir_resolution_contract(builder: CheckBuilder, runtime: MatrixRunt
             except (OSError, json.JSONDecodeError):
                 payload = None
 
+        if payload is None and not runtime.mock:
+            browse_path = f"/api/artifacts/browse?path={quote(contract.pointer_relpath, safe='/')}"
+            for base_label in ("frontdoor", "remote_localhost"):
+                resp = builder.request(
+                    label=f"run_dir_browse_{contract.project}_{base_label}",
+                    base_label=base_label,
+                    path=browse_path,
+                    timeout=10,
+                )
+                if resp.http_code == 200 and resp.body_text:
+                    payload = parse_pointer_from_browse_response(resp.body_text)
+                    if isinstance(payload, dict):
+                        record["pointer_exists"] = True
+                        record["pointer_parse_ok"] = True
+                        record["pointer_source"] = base_label
+                        break
+
         if isinstance(payload, dict):
             missing = [
                 field_name
@@ -202,9 +220,24 @@ def check_run_dir_resolution_contract(builder: CheckBuilder, runtime: MatrixRunt
             record["fields_ok"] = fields_ok
             run_dir_val = payload.get(contract.run_dir_field)
             if isinstance(run_dir_val, str) and run_dir_val.strip():
-                run_dir_path = pointer_path.parent / run_dir_val
-                record["run_dir_path"] = str(run_dir_path)
-                record["run_dir_exists"] = run_dir_path.is_dir()
+                run_dir_rel = str(Path(contract.pointer_relpath).parent / run_dir_val)
+                record["run_dir_path"] = str(pointer_path.parent / run_dir_val)
+                if record.get("pointer_source") and not runtime.mock:
+                    run_dir_browse = f"/api/artifacts/browse?path={quote(run_dir_rel, safe='/')}"
+                    rd_resp = builder.request(
+                        label=f"run_dir_verify_{contract.project}_{record['pointer_source']}",
+                        base_label=record["pointer_source"],
+                        path=run_dir_browse,
+                        timeout=10,
+                    )
+                    record["run_dir_exists"] = bool(
+                        rd_resp.http_code == 200
+                        and isinstance(rd_resp.payload, dict)
+                        and isinstance(rd_resp.payload.get("entries"), list)
+                    )
+                else:
+                    run_dir_path = pointer_path.parent / run_dir_val
+                    record["run_dir_exists"] = run_dir_path.is_dir()
             else:
                 record["run_dir_path"] = None
                 record["run_dir_exists"] = False

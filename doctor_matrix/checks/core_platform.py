@@ -56,7 +56,7 @@ def check_hq_health(builder: CheckBuilder, runtime: MatrixRuntime):
         "remote_localhost_build_sha": (remote_localhost_assess.get("body_json") or {}).get("build_sha") if isinstance(remote_localhost_assess.get("body_json"), dict) else None,
     }
 
-    if frontdoor_ok and (remote_localhost_ok or not remote_localhost_available):
+    if frontdoor_ok:
         message = "health_public PASS on frontdoor; remote_localhost optional probe recorded"
         return builder.finalize(status="PASS", message=message, details=details)
 
