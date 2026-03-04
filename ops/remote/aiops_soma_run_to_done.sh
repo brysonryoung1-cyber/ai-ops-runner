@@ -163,7 +163,7 @@ browse_dir_entries() {
   else
     remote_raw="$PROOF_DIR/.browse_remote_${RANDOM}_${RANDOM}.txt"
     ssh_rc=0
-    "$SSH_BIN" "${SSH_OPTS[@]}" "$HOST" "set -euo pipefail; tmp=\$(mktemp); code=\$(curl -sS --connect-timeout 5 --max-time 20 -o \"\$tmp\" -w \"%{http_code}\" '$remote_url' || true); printf '%s\n' \"\$code\"; cat \"\$tmp\"; rm -f \"\$tmp\"" >"$remote_raw" 2>>"$LOG_FILE" || ssh_rc=$?
+    "$SSH_BIN" "${SSH_OPTS[@]}" "$HOST" "set -euo pipefail; url='$remote_url'; tmp=\$(mktemp); code=\$(curl -sS --connect-timeout 5 --max-time 20 -o \"\$tmp\" -w '%{http_code}' \"\$url\" || true); printf '%s\\n' \"\$code\"; cat \"\$tmp\"; rm -f \"\$tmp\"" >"$remote_raw" 2>>"$LOG_FILE" || ssh_rc=$?
     if [ "$ssh_rc" -eq 0 ] && [ -s "$remote_raw" ]; then
       remote_http="$(head -n 1 "$remote_raw" | tr -d '\r')"
       tail -n +2 "$remote_raw" >"$out_file"
@@ -177,6 +177,13 @@ browse_dir_entries() {
   [ -z "$remote_http" ] && remote_http="000"
   BROWSE_LAST_HTTP_CODE_REMOTE="$remote_http"
   BROWSE_LAST_HTTP_CODE="$remote_http"
+
+  if [ "$remote_http" != "200" ]; then
+    printf '%s\n' "$remote_url" > "$PROOF_DIR/browse_remote_url.txt" 2>/dev/null || true
+    printf '%s\n' "$remote_http" > "$PROOF_DIR/browse_remote_http_code.txt" 2>/dev/null || true
+    head -c 500 "$out_file" > "$PROOF_DIR/browse_remote_body_sample.txt" 2>/dev/null || true
+  fi
+
   [ "$remote_http" = "200" ]
 }
 
