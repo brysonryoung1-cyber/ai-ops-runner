@@ -23,6 +23,91 @@ def _load_module():
     return mod
 
 
+class TestWriteInitialProofFiles:
+    """write_initial_proof_files must create PROOF.json and PRECHECK.json immediately."""
+
+    def test_creates_both_files(self, tmp_path):
+        mod = _load_module()
+        out_dir = tmp_path / "run_dir"
+        out_dir.mkdir()
+        mod.write_initial_proof_files(out_dir, "test_run_123")
+
+        proof = json.loads((out_dir / "PROOF.json").read_text())
+        precheck = json.loads((out_dir / "PRECHECK.json").read_text())
+
+        assert proof["run_id"] == "test_run_123"
+        assert proof["status"] == "RUNNING"
+        assert proof["phase"] == "init"
+        assert "started_at" in proof
+        assert proof["project"] == "soma_kajabi"
+
+        assert precheck["run_id"] == "test_run_123"
+        assert precheck["status"] == "RUNNING"
+        assert precheck["precheck"] == "pending"
+        assert "started_at" in precheck
+
+    def test_update_proof_merges(self, tmp_path):
+        mod = _load_module()
+        out_dir = tmp_path / "run_dir"
+        out_dir.mkdir()
+        mod.write_initial_proof_files(out_dir, "test_run_456")
+        mod._update_proof(out_dir, "test_run_456", {"phase": "precheck", "extra": "val"})
+
+        proof = json.loads((out_dir / "PROOF.json").read_text())
+        assert proof["run_id"] == "test_run_456"
+        assert proof["status"] == "RUNNING"
+        assert proof["phase"] == "precheck"
+        assert proof["extra"] == "val"
+        assert "started_at" in proof
+
+    def test_update_precheck_merges(self, tmp_path):
+        mod = _load_module()
+        out_dir = tmp_path / "run_dir"
+        out_dir.mkdir()
+        mod.write_initial_proof_files(out_dir, "test_run_789")
+        mod._update_precheck(out_dir, "test_run_789", {
+            "status": "FAIL", "error_class": "NOVNC_NOT_READY",
+        })
+
+        precheck = json.loads((out_dir / "PRECHECK.json").read_text())
+        assert precheck["run_id"] == "test_run_789"
+        assert precheck["status"] == "FAIL"
+        assert precheck["error_class"] == "NOVNC_NOT_READY"
+        assert precheck["precheck"] == "pending"
+
+
+class TestProofExistsEarlyOnPrecheckFail:
+    """PROOF.json and PRECHECK.json must exist even when prechecks fail."""
+
+    def test_hostd_fail_writes_proof_and_precheck(self, tmp_path):
+        root = tmp_path / "repo"
+        root.mkdir()
+        (root / "config" / "project_state.json").parent.mkdir(parents=True)
+        (root / "config" / "project_state.json").write_text('{"projects":{}}')
+
+        mod = _load_module()
+        mod._repo_root = lambda: root
+        mod._precheck_drift = lambda *a: True
+        mod._precheck_hostd = lambda: False
+
+        with patch("sys.argv", ["soma_run_to_done.py"]):
+            rc = mod.main()
+
+        assert rc == 1
+        proof_dirs = list((root / "artifacts" / "soma_kajabi" / "run_to_done").iterdir())
+        assert len(proof_dirs) == 1
+        proof = json.loads((proof_dirs[0] / "PROOF.json").read_text())
+        precheck = json.loads((proof_dirs[0] / "PRECHECK.json").read_text())
+
+        assert proof["status"] == "FAIL"
+        assert proof["error_class"] == "HOSTD_UNREACHABLE"
+        assert proof["phase"] == "precheck"
+        assert "started_at" in proof
+
+        assert precheck["status"] == "FAIL"
+        assert precheck["error_class"] == "HOSTD_UNREACHABLE"
+
+
 def _setup_run_to_done_env(tmp_path, *, mirror_exceptions=0, acceptance_exists=True, mirror_report_exists=True):
     """Set up a mock environment where auto_finish returned SUCCESS with given acceptance state."""
     root = tmp_path / "repo"
