@@ -147,7 +147,8 @@ elif command -v fluxbox >/dev/null 2>&1; then
 fi
 
 # ── 3) Build websockify cmd ──
-BIND_ADDR="0.0.0.0"
+# Bind to localhost only; frontdoor (Caddy 127.0.0.1:8788) routes /novnc/* and /websockify to 6080
+BIND_ADDR="127.0.0.1"
 WEB_DIR="/usr/share/novnc"
 [ -f "$WEB_DIR/vnc.html" ] || WEB_DIR=""
 
@@ -208,7 +209,7 @@ while true; do
     exit 1
   fi
 
-  # Start websockify bound to 0.0.0.0:6080 proxying to 127.0.0.1:<VNC_PORT>
+  # Start websockify bound to 127.0.0.1:6080 proxying to 127.0.0.1:<VNC_PORT>
   "${WS_ARGS[@]}" &
   WEBSOCKIFY_PID=$!
   sleep 1
