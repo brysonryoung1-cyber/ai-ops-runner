@@ -4,6 +4,10 @@ set -euo pipefail
 HOST="aiops-1"
 BASE_URL="https://aiops-1.tailc75c62.ts.net"
 REPO_DIR="/opt/ai-ops-runner"
+HQ_LOCAL_PORT="${OPENCLAW_CONSOLE_PORT:-8787}"
+HQ_LOCAL_BASE_URL="${OPENCLAW_HQ_LOCAL_BASE_URL:-http://127.0.0.1:${HQ_LOCAL_PORT}}"
+CURL_BIN="${AIOPS_CURL_BIN:-curl}"
+SSH_BIN="${AIOPS_SSH_BIN:-ssh}"
 
 POLL_INTERVAL_SEC="${POLL_INTERVAL_SEC:-5}"
 POLL_TIMEOUT_SEC="${POLL_TIMEOUT_SEC:-2100}"
@@ -58,6 +62,7 @@ RUN_FILE="$PROOF_DIR/run_poll.json"
 PROOF_BROWSE_FILE="$PROOF_DIR/proof_browse.json"
 PRECHECK_BROWSE_FILE="$PROOF_DIR/precheck_browse.json"
 PROOF_PAYLOAD_FILE="$PROOF_DIR/proof_payload.json"
+PRECHECK_PAYLOAD_FILE="$PROOF_DIR/precheck_payload.json"
 RESULT_FILE="$PROOF_DIR/soma_run_to_done_result.json"
 REMOTE_OUTPUT_FILE="$PROOF_DIR/soma_remote_output.log"
 
@@ -77,7 +82,237 @@ SSH_OPTS=(
   -o BatchMode=yes
 )
 
-health_http_code="$(curl -sS --connect-timeout 5 --max-time 15 -o "$HEALTH_FILE" -w "%{http_code}" "${BASE_URL%/}/api/ui/health_public" || true)"
+urlencode_path() {
+  python3 - "$1" <<'PY'
+import sys
+from urllib.parse import quote
+
+print(quote(sys.argv[1], safe=""))
+PY
+}
+
+BROWSE_LAST_HTTP_CODE=""
+BROWSE_LAST_HTTP_CODE_LOCAL=""
+BROWSE_LAST_HTTP_CODE_REMOTE=""
+BROWSE_LAST_MODE="local"
+BROWSE_LAST_URL=""
+BROWSE_LAST_REMOTE_URL=""
+
+browse_dir_entries() {
+  local browse_path="$1"
+  local browse_mode="$2"
+  local out_file="$3"
+  local encoded_path local_url local_http remote_http remote_url remote_raw ssh_rc
+
+  if [ -z "$out_file" ]; then
+    BROWSE_LAST_HTTP_CODE="000"
+    BROWSE_LAST_HTTP_CODE_LOCAL=""
+    BROWSE_LAST_HTTP_CODE_REMOTE=""
+    BROWSE_LAST_MODE=""
+    BROWSE_LAST_URL=""
+    BROWSE_LAST_REMOTE_URL=""
+    return 1
+  fi
+
+  encoded_path="$(urlencode_path "$browse_path")"
+  local_url="${BASE_URL%/}/api/artifacts/browse?path=${encoded_path}"
+
+  BROWSE_LAST_HTTP_CODE=""
+  BROWSE_LAST_HTTP_CODE_LOCAL=""
+  BROWSE_LAST_HTTP_CODE_REMOTE=""
+  BROWSE_LAST_MODE="local"
+  BROWSE_LAST_URL="$local_url"
+  BROWSE_LAST_REMOTE_URL=""
+  : > "$out_file"
+
+  if [ -n "${AIOPS_BROWSE_MOCK_HTTP_CODE:-}" ]; then
+    local_http="${AIOPS_BROWSE_MOCK_HTTP_CODE}"
+    if [ -n "${AIOPS_BROWSE_MOCK_BODY_FILE:-}" ] && [ -f "${AIOPS_BROWSE_MOCK_BODY_FILE}" ]; then
+      cat "${AIOPS_BROWSE_MOCK_BODY_FILE}" >"$out_file"
+    elif [ -n "${AIOPS_BROWSE_MOCK_BODY_JSON:-}" ]; then
+      printf '%s' "${AIOPS_BROWSE_MOCK_BODY_JSON}" >"$out_file"
+    fi
+  else
+    local_http="$("$CURL_BIN" -sS --connect-timeout 5 --max-time 20 -o "$out_file" -w "%{http_code}" "$local_url" || true)"
+  fi
+  [ -z "$local_http" ] && local_http="000"
+  BROWSE_LAST_HTTP_CODE_LOCAL="$local_http"
+  BROWSE_LAST_HTTP_CODE="$local_http"
+  if [ "$local_http" = "200" ]; then
+    return 0
+  fi
+
+  if [ "$browse_mode" = "local" ] || [ "${AIOPS_BROWSE_SKIP_REMOTE_FALLBACK:-0}" = "1" ]; then
+    return 1
+  fi
+
+  BROWSE_LAST_MODE="remote_fallback"
+  remote_url="${HQ_LOCAL_BASE_URL%/}/api/artifacts/browse?path=${encoded_path}"
+  BROWSE_LAST_REMOTE_URL="$remote_url"
+
+  if [ -n "${AIOPS_BROWSE_REMOTE_MOCK_HTTP_CODE:-}" ]; then
+    remote_http="${AIOPS_BROWSE_REMOTE_MOCK_HTTP_CODE}"
+    if [ -n "${AIOPS_BROWSE_REMOTE_MOCK_BODY_FILE:-}" ] && [ -f "${AIOPS_BROWSE_REMOTE_MOCK_BODY_FILE}" ]; then
+      cat "${AIOPS_BROWSE_REMOTE_MOCK_BODY_FILE}" >"$out_file"
+    elif [ -n "${AIOPS_BROWSE_REMOTE_MOCK_BODY_JSON:-}" ]; then
+      printf '%s' "${AIOPS_BROWSE_REMOTE_MOCK_BODY_JSON}" >"$out_file"
+    else
+      : > "$out_file"
+    fi
+  else
+    remote_raw="$PROOF_DIR/.browse_remote_${RANDOM}_${RANDOM}.txt"
+    ssh_rc=0
+    "$SSH_BIN" "${SSH_OPTS[@]}" "$HOST" "set -euo pipefail; tmp=\$(mktemp); code=\$(curl -sS --connect-timeout 5 --max-time 20 -o \"\$tmp\" -w \"%{http_code}\" '$remote_url' || true); printf '%s\n' \"\$code\"; cat \"\$tmp\"; rm -f \"\$tmp\"" >"$remote_raw" 2>>"$LOG_FILE" || ssh_rc=$?
+    if [ "$ssh_rc" -eq 0 ] && [ -s "$remote_raw" ]; then
+      remote_http="$(head -n 1 "$remote_raw" | tr -d '\r')"
+      tail -n +2 "$remote_raw" >"$out_file"
+    else
+      remote_http="000"
+      : > "$out_file"
+    fi
+    rm -f "$remote_raw"
+  fi
+
+  [ -z "$remote_http" ] && remote_http="000"
+  BROWSE_LAST_HTTP_CODE_REMOTE="$remote_http"
+  BROWSE_LAST_HTTP_CODE="$remote_http"
+  [ "$remote_http" = "200" ]
+}
+
+RUN_DIR_BROWSE_HTTP_CODE=""
+RUN_DIR_BROWSE_HTTP_CODE_LOCAL=""
+RUN_DIR_BROWSE_HTTP_CODE_REMOTE=""
+RUN_DIR_BROWSE_MODE=""
+RUN_DIR_BROWSE_URL=""
+RUN_DIR_BROWSE_REMOTE_URL=""
+PROOF_HTTP_CODE=""
+PROOF_HTTP_CODE_LOCAL=""
+PROOF_HTTP_CODE_REMOTE=""
+PROOF_BROWSE_MODE=""
+PRECHECK_HTTP_CODE=""
+PRECHECK_HTTP_CODE_LOCAL=""
+PRECHECK_HTTP_CODE_REMOTE=""
+PRECHECK_BROWSE_MODE=""
+ERROR_CLASS=""
+LAST_RUN_STATUS=""
+trigger_message=""
+
+resolve_run_artifact_dir() {
+  local run_id="$1"
+  local rtd_browse_file="$PROOF_DIR/rtd_browse.json"
+
+  browse_dir_entries "soma_kajabi/run_to_done" "auto" "$rtd_browse_file" || true
+  RUN_DIR_BROWSE_HTTP_CODE="$BROWSE_LAST_HTTP_CODE"
+  RUN_DIR_BROWSE_HTTP_CODE_LOCAL="$BROWSE_LAST_HTTP_CODE_LOCAL"
+  RUN_DIR_BROWSE_HTTP_CODE_REMOTE="$BROWSE_LAST_HTTP_CODE_REMOTE"
+  RUN_DIR_BROWSE_MODE="$BROWSE_LAST_MODE"
+  RUN_DIR_BROWSE_URL="$BROWSE_LAST_URL"
+  RUN_DIR_BROWSE_REMOTE_URL="$BROWSE_LAST_REMOTE_URL"
+
+  if [ "$RUN_DIR_BROWSE_HTTP_CODE" != "200" ]; then
+    RUN_ARTIFACT_DIR=""
+    RUN_ARTIFACT_DIR_ERROR="run_to_done browse failed: http_code=${RUN_DIR_BROWSE_HTTP_CODE}, mode=${RUN_DIR_BROWSE_MODE}"
+    return 1
+  fi
+
+  rtd_fields=()
+  while IFS= read -r line; do rtd_fields+=("$line"); done < <(python3 - "$rtd_browse_file" "$run_id" <<'PY'
+import sys
+from pathlib import Path
+
+from ops.lib.aiops_remote_helpers import parse_browse_dir_entries, resolve_run_to_done_dir
+
+body = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+entries = parse_browse_dir_entries(body)
+result = resolve_run_to_done_dir(sys.argv[2], entries)
+print(result.get("resolved_dir") or "")
+print(result.get("error") or "")
+PY
+)
+
+  RUN_ARTIFACT_DIR="${rtd_fields[0]:-}"
+  RUN_ARTIFACT_DIR_ERROR="${rtd_fields[1]:-}"
+  [ -n "$RUN_ARTIFACT_DIR" ]
+}
+
+decode_browse_json_payload() {
+  local browse_file="$1"
+  local payload_file="$2"
+  python3 - "$browse_file" "$payload_file" <<'PY'
+import sys
+from pathlib import Path
+
+from ops.lib.aiops_remote_helpers import parse_artifact_browse_proof, write_json_file
+
+body = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+payload = parse_artifact_browse_proof(body)
+if isinstance(payload, dict):
+    write_json_file(Path(sys.argv[2]), payload)
+    print("1")
+else:
+    print("0")
+PY
+}
+
+fetch_precheck_payload() {
+  local precheck_rel_path precheck_ok
+  precheck_rel_path="${RUN_ARTIFACT_DIR#artifacts/}/PRECHECK.json"
+
+  browse_dir_entries "$precheck_rel_path" "auto" "$PRECHECK_BROWSE_FILE" || true
+  PRECHECK_HTTP_CODE="$BROWSE_LAST_HTTP_CODE"
+  PRECHECK_HTTP_CODE_LOCAL="$BROWSE_LAST_HTTP_CODE_LOCAL"
+  PRECHECK_HTTP_CODE_REMOTE="$BROWSE_LAST_HTTP_CODE_REMOTE"
+  PRECHECK_BROWSE_MODE="$BROWSE_LAST_MODE"
+
+  rm -f "$PRECHECK_PAYLOAD_FILE"
+  if [ "$PRECHECK_HTTP_CODE" = "200" ]; then
+    precheck_ok="$(decode_browse_json_payload "$PRECHECK_BROWSE_FILE" "$PRECHECK_PAYLOAD_FILE" || true)"
+    [ "$precheck_ok" = "1" ] || rm -f "$PRECHECK_PAYLOAD_FILE"
+  fi
+}
+
+fetch_proof_payload() {
+  local proof_rel_path proof_ok
+  proof_rel_path="${RUN_ARTIFACT_DIR#artifacts/}/PROOF.json"
+
+  browse_dir_entries "$proof_rel_path" "auto" "$PROOF_BROWSE_FILE" || true
+  PROOF_HTTP_CODE="$BROWSE_LAST_HTTP_CODE"
+  PROOF_HTTP_CODE_LOCAL="$BROWSE_LAST_HTTP_CODE_LOCAL"
+  PROOF_HTTP_CODE_REMOTE="$BROWSE_LAST_HTTP_CODE_REMOTE"
+  PROOF_BROWSE_MODE="$BROWSE_LAST_MODE"
+
+  rm -f "$PROOF_PAYLOAD_FILE"
+  if [ "$PROOF_HTTP_CODE" = "200" ]; then
+    proof_ok="$(decode_browse_json_payload "$PROOF_BROWSE_FILE" "$PROOF_PAYLOAD_FILE" || true)"
+    [ "$proof_ok" = "1" ] || rm -f "$PROOF_PAYLOAD_FILE"
+  fi
+}
+
+proof_payload_has_status() {
+  python3 - "$1" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.exists():
+    print("0")
+    raise SystemExit(0)
+raw = path.read_text(encoding="utf-8", errors="replace").strip()
+if not raw:
+    print("0")
+    raise SystemExit(0)
+try:
+    payload = json.loads(raw)
+except json.JSONDecodeError:
+    print("0")
+    raise SystemExit(0)
+status = payload.get("status") if isinstance(payload, dict) else None
+print("1" if isinstance(status, str) and status.strip() else "0")
+PY
+}
+
+health_http_code="$("$CURL_BIN" -sS --connect-timeout 5 --max-time 15 -o "$HEALTH_FILE" -w "%{http_code}" "${BASE_URL%/}/api/ui/health_public" || true)"
 health_state="$(python3 - "$health_http_code" "$HEALTH_FILE" <<'PY'
 import sys
 from pathlib import Path
@@ -104,7 +339,7 @@ RUN_ARTIFACT_DIR_ERROR=""
 if [ "$health_state" = "OK" ]; then
   mode_used="hq_api"
   log "HQ UI reachable. Triggering soma_run_to_done via /api/exec."
-  trigger_http_code="$(curl -sS --connect-timeout 5 --max-time 30 -X POST "${BASE_URL%/}/api/exec" -H "Content-Type: application/json" -d '{"action":"soma_run_to_done"}' -o "$TRIGGER_FILE" -w "%{http_code}" || true)"
+  trigger_http_code="$("$CURL_BIN" -sS --connect-timeout 5 --max-time 30 -X POST "${BASE_URL%/}/api/exec" -H "Content-Type: application/json" -d '{"action":"soma_run_to_done"}' -o "$TRIGGER_FILE" -w "%{http_code}" || true)"
 
   trigger_fields=()
   while IFS= read -r line; do trigger_fields+=("$line"); done < <(python3 - "$trigger_http_code" "$TRIGGER_FILE" <<'PY'
@@ -139,11 +374,12 @@ PY
       now_epoch="$(date +%s)"
       if [ "$now_epoch" -ge "$deadline_epoch" ]; then
         terminal_status="FAIL"
+        ERROR_CLASS="POLL_TIMEOUT"
         log "Polling timeout for run_id=$remote_run_id"
         break
       fi
 
-      run_http_code="$(curl -sS --connect-timeout 5 --max-time 20 -o "$RUN_FILE" -w "%{http_code}" "${BASE_URL%/}/api/runs?id=${remote_run_id}" || true)"
+      run_http_code="$("$CURL_BIN" -sS --connect-timeout 5 --max-time 20 -o "$RUN_FILE" -w "%{http_code}" "${BASE_URL%/}/api/runs?id=${remote_run_id}" || true)"
       if [ "$run_http_code" != "200" ]; then
         sleep "$POLL_INTERVAL_SEC"
         continue
@@ -163,86 +399,20 @@ print(parsed.get("artifact_dir") or "")
 PY
 )
       run_status="${run_fields[0]:-}"
-      artifact_dir="${run_fields[1]:-}"  # hostd artifact_dir (not used for PROOF/PRECHECK)
+      LAST_RUN_STATUS="$run_status"
 
-      # Resolve run_to_done artifact dir for PROOF/PRECHECK (never use hostd artifact_dir)
       if [ -z "$RUN_ARTIFACT_DIR" ] && [ -n "$remote_run_id" ]; then
-        rtd_browse_file="$PROOF_DIR/rtd_browse.json"
-        rtd_browse_path="$(python3 -c 'from urllib.parse import quote; print(quote("soma_kajabi/run_to_done", safe=""))')"
-        rtd_http="$(curl -sS --connect-timeout 5 --max-time 20 -o "$rtd_browse_file" -w "%{http_code}" "${BASE_URL%/}/api/artifacts/browse?path=${rtd_browse_path}" || true)"
-        if [ "$rtd_http" = "200" ]; then
-          rtd_fields=()
-          while IFS= read -r line; do rtd_fields+=("$line"); done < <(python3 - "$rtd_browse_file" "$remote_run_id" <<'PY'
-import sys
-from pathlib import Path
-
-from ops.lib.aiops_remote_helpers import parse_browse_dir_entries, resolve_run_to_done_dir
-
-body = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
-entries = parse_browse_dir_entries(body)
-result = resolve_run_to_done_dir(sys.argv[2], entries)
-print(result.get("resolved_dir") or "")
-print(result.get("error") or "")
-PY
-)
-          if [ -n "${rtd_fields[0]:-}" ]; then
-            RUN_ARTIFACT_DIR="${rtd_fields[0]}"
-            log "resolved run_to_done dir: $RUN_ARTIFACT_DIR"
-          fi
+        resolve_run_artifact_dir "$remote_run_id" || true
+        if [ -n "$RUN_ARTIFACT_DIR" ]; then
+          log "resolved run_to_done dir: $RUN_ARTIFACT_DIR (browse_mode=$RUN_DIR_BROWSE_MODE http=${RUN_DIR_BROWSE_HTTP_CODE})"
         fi
       fi
 
       if [ -n "$RUN_ARTIFACT_DIR" ]; then
-        proof_rel_path="${RUN_ARTIFACT_DIR#artifacts/}/PROOF.json"
-        proof_query_path="$(python3 - "$proof_rel_path" <<'PY'
-import sys
-from urllib.parse import quote
-
-print(quote(sys.argv[1], safe=""))
-PY
-)"
-        proof_http_code="$(curl -sS --connect-timeout 5 --max-time 20 -o "$PROOF_BROWSE_FILE" -w "%{http_code}" "${BASE_URL%/}/api/artifacts/browse?path=${proof_query_path}" || true)"
-        if [ "$proof_http_code" = "200" ]; then
-          python3 - "$PROOF_BROWSE_FILE" "$PROOF_PAYLOAD_FILE" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-from ops.lib.aiops_remote_helpers import parse_artifact_browse_proof, write_json_file
-
-body = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
-proof = parse_artifact_browse_proof(body) or {}
-write_json_file(Path(sys.argv[2]), proof)
-print(json.dumps(proof))
-PY
-        else
-          precheck_rel_path="${RUN_ARTIFACT_DIR#artifacts/}/PRECHECK.json"
-          precheck_query_path="$(python3 - "$precheck_rel_path" <<'PY'
-import sys
-from urllib.parse import quote
-
-print(quote(sys.argv[1], safe=""))
-PY
-)"
-          precheck_http_code="$(curl -sS --connect-timeout 5 --max-time 20 -o "$PRECHECK_BROWSE_FILE" -w "%{http_code}" "${BASE_URL%/}/api/artifacts/browse?path=${precheck_query_path}" || true)"
-          if [ "$precheck_http_code" = "200" ]; then
-            python3 - "$PRECHECK_BROWSE_FILE" "$PROOF_PAYLOAD_FILE" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-from ops.lib.aiops_remote_helpers import parse_artifact_browse_proof, write_json_file
-
-body = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
-precheck = parse_artifact_browse_proof(body) or {}
-payload = {
-    "status": "FAIL",
-    "error_class": precheck.get("error_class") or "NOVNC_NOT_READY",
-    "novnc_readiness_artifact_dir": precheck.get("novnc_readiness_artifact_dir"),
-}
-write_json_file(Path(sys.argv[2]), payload)
-print(json.dumps(payload))
-PY
+        if [ ! -s "$PROOF_PAYLOAD_FILE" ]; then
+          fetch_proof_payload
+          if [ "$PROOF_HTTP_CODE" != "200" ] || [ ! -s "$PROOF_PAYLOAD_FILE" ]; then
+            fetch_precheck_payload
           fi
         fi
       fi
@@ -287,9 +457,101 @@ PY
       fi
       sleep "$POLL_INTERVAL_SEC"
     done
+
     if [ -z "$RUN_ARTIFACT_DIR" ] && [ -n "$remote_run_id" ]; then
-      RUN_ARTIFACT_DIR_ERROR="run_to_done dir not resolved; run_id=$remote_run_id"
-      log "WARN: $RUN_ARTIFACT_DIR_ERROR"
+      if [ "$RUN_DIR_BROWSE_HTTP_CODE_LOCAL" = "403" ] || [ "$RUN_DIR_BROWSE_HTTP_CODE" = "403" ] || [ "$RUN_DIR_BROWSE_HTTP_CODE_REMOTE" = "403" ]; then
+        ERROR_CLASS="BROWSE_FORBIDDEN"
+        [ "$RUN_DIR_BROWSE_HTTP_CODE_LOCAL" = "403" ] && RUN_DIR_BROWSE_HTTP_CODE="403"
+      else
+        ERROR_CLASS="RUN_ARTIFACT_DIR_UNRESOLVED"
+      fi
+      [ -z "$RUN_ARTIFACT_DIR_ERROR" ] && RUN_ARTIFACT_DIR_ERROR="run_to_done dir not resolved; run_id=$remote_run_id"
+      RUN_ARTIFACT_DIR_ERROR="${RUN_ARTIFACT_DIR_ERROR}; browse_http_code=${RUN_DIR_BROWSE_HTTP_CODE}; mode=${RUN_DIR_BROWSE_MODE}"
+      terminal_status="FAIL"
+      log "FAIL-CLOSED: $RUN_ARTIFACT_DIR_ERROR"
+    fi
+
+    if [ -n "$RUN_ARTIFACT_DIR" ]; then
+      if [ ! -s "$PROOF_PAYLOAD_FILE" ]; then
+        fetch_proof_payload
+      fi
+      proof_has_status="$(proof_payload_has_status "$PROOF_PAYLOAD_FILE")"
+      if [ "$PROOF_HTTP_CODE" != "200" ] || [ ! -s "$PROOF_PAYLOAD_FILE" ] || [ "$proof_has_status" != "1" ]; then
+        fetch_precheck_payload
+        terminal_status="FAIL"
+        [ -z "$ERROR_CLASS" ] && ERROR_CLASS="PROOF_MISSING_FOR_RUN"
+        RUN_ARTIFACT_DIR_ERROR="PROOF.json missing or invalid for resolved run artifact dir; resolved_dir=${RUN_ARTIFACT_DIR}; proof_http_code=${PROOF_HTTP_CODE:-000}"
+        log "FAIL-CLOSED: $RUN_ARTIFACT_DIR_ERROR"
+      fi
+    fi
+
+    if [ -n "$RUN_ARTIFACT_DIR" ] && [ -z "$ERROR_CLASS" ]; then
+      proof_derived_status="$(python3 - "$PROOF_PAYLOAD_FILE" "$PRECHECK_PAYLOAD_FILE" <<'PY'
+import json, sys
+from pathlib import Path
+
+def get_status(p):
+    if not p.exists():
+        return ""
+    raw = p.read_text(encoding="utf-8", errors="replace").strip()
+    if not raw:
+        return ""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return ""
+    s = data.get("status") if isinstance(data, dict) else None
+    return s.strip().upper() if isinstance(s, str) and s.strip() else ""
+
+status = get_status(Path(sys.argv[1])) or get_status(Path(sys.argv[2]))
+print(status or "")
+PY
+)"
+      case "$proof_derived_status" in
+        SUCCESS)
+          terminal_status="SUCCESS" ;;
+        WAITING_FOR_HUMAN)
+          terminal_status="WAITING_FOR_HUMAN" ;;
+        FAIL|FAILURE)
+          terminal_status="FAIL" ;;
+        "")
+          terminal_status="FAIL"
+          [ -z "$ERROR_CLASS" ] && ERROR_CLASS="PROOF_STATUS_MISSING"
+          ;;
+        *)
+          terminal_status="FAIL"
+          [ -z "$ERROR_CLASS" ] && ERROR_CLASS="PROOF_STATUS_INVALID"
+          ;;
+      esac
+    fi
+
+    if [ "$terminal_status" = "FAIL" ] && [ -z "$ERROR_CLASS" ]; then
+      ERROR_CLASS="$(python3 - "$PROOF_PAYLOAD_FILE" "$PRECHECK_PAYLOAD_FILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+def pick(path: Path) -> str:
+    if not path.exists():
+        return ""
+    raw = path.read_text(encoding="utf-8", errors="replace").strip()
+    if not raw:
+        return ""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return ""
+    if isinstance(data, dict):
+        value = data.get("error_class")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+proof = pick(Path(sys.argv[1]))
+precheck = pick(Path(sys.argv[2]))
+print(proof or precheck or "")
+PY
+)"
     fi
   fi
 else
@@ -300,7 +562,7 @@ fi
 if [ "$mode_used" = "remote_ssh" ]; then
   log "Using SSH fallback: python3 ops/scripts/soma_run_to_done.py"
   ssh_rc=0
-  ssh "${SSH_OPTS[@]}" "$HOST" "set -euo pipefail; cd '$REPO_DIR'; python3 ops/scripts/soma_run_to_done.py" >"$REMOTE_OUTPUT_FILE" 2>>"$LOG_FILE" || ssh_rc=$?
+  "$SSH_BIN" "${SSH_OPTS[@]}" "$HOST" "set -euo pipefail; cd '$REPO_DIR'; python3 ops/scripts/soma_run_to_done.py" >"$REMOTE_OUTPUT_FILE" 2>>"$LOG_FILE" || ssh_rc=$?
 
   ssh_fields=()
   while IFS= read -r line; do ssh_fields+=("$line"); done < <(python3 - "$REMOTE_OUTPUT_FILE" "$BASE_URL" "$ssh_rc" <<'PY'
@@ -337,7 +599,7 @@ PY
   terminal_status="${ssh_fields[0]:-FAIL}"
   novnc_url="${ssh_fields[1]:-}"
   remote_payload_json="${ssh_fields[2]:-\{\}}"
-  python3 - "$RESULT_FILE" "$LOCAL_RUN_ID" "$mode_used" "$terminal_status" "$novnc_url" "$remote_run_id" "$remote_payload_json" "$trigger_message" <<'PY'
+  python3 - "$RESULT_FILE" "$LOCAL_RUN_ID" "$mode_used" "$terminal_status" "$novnc_url" "$remote_run_id" "$remote_payload_json" "$trigger_message" "$ERROR_CLASS" "$RUN_DIR_BROWSE_HTTP_CODE" "$RUN_DIR_BROWSE_HTTP_CODE_LOCAL" "$RUN_DIR_BROWSE_HTTP_CODE_REMOTE" "$RUN_DIR_BROWSE_MODE" "$RUN_DIR_BROWSE_URL" "$RUN_DIR_BROWSE_REMOTE_URL" "$RUN_ARTIFACT_DIR_ERROR" "$PROOF_HTTP_CODE" "$PRECHECK_HTTP_CODE" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -352,19 +614,32 @@ payload = {
     "novnc_url": sys.argv[5] or None,
     "remote_run_id": sys.argv[6] or None,
     "remote_payload": remote_payload,
+    "error_class": (
+      sys.argv[9]
+      or (remote_payload.get("error_class") if isinstance(remote_payload, dict) else None)
+      or None
+    ),
     "novnc_readiness_artifact_dir": (
       remote_payload.get("novnc_readiness_artifact_dir")
       or remote_payload.get("readiness_artifact_dir")
     ) if isinstance(remote_payload, dict) else None,
     "summary": sys.argv[8] or None,
     "run_artifact_dir_resolved": None,
-    "run_artifact_dir_resolution_error": None,
+    "run_artifact_dir_resolution_error": sys.argv[16] or None,
+    "browse_http_code": sys.argv[10] or None,
+    "browse_http_code_local": sys.argv[11] or None,
+    "browse_http_code_remote": sys.argv[12] or None,
+    "browse_mode": sys.argv[13] or None,
+    "browse_url": sys.argv[14] or None,
+    "browse_remote_url": sys.argv[15] or None,
+    "proof_http_code": sys.argv[17] or None,
+    "precheck_http_code": sys.argv[18] or None,
     "finished_at": utc_now_iso(),
 }
 write_json_file(Path(sys.argv[1]), payload)
 PY
 else
-  python3 - "$RESULT_FILE" "$LOCAL_RUN_ID" "$mode_used" "$terminal_status" "$novnc_url" "$remote_run_id" "$trigger_message" "$PROOF_PAYLOAD_FILE" "$RUN_ARTIFACT_DIR" "$RUN_ARTIFACT_DIR_ERROR" <<'PY'
+  python3 - "$RESULT_FILE" "$LOCAL_RUN_ID" "$mode_used" "$terminal_status" "$novnc_url" "$remote_run_id" "$trigger_message" "$PROOF_PAYLOAD_FILE" "$PRECHECK_PAYLOAD_FILE" "$RUN_ARTIFACT_DIR" "$RUN_ARTIFACT_DIR_ERROR" "$ERROR_CLASS" "$RUN_DIR_BROWSE_HTTP_CODE" "$RUN_DIR_BROWSE_HTTP_CODE_LOCAL" "$RUN_DIR_BROWSE_HTTP_CODE_REMOTE" "$RUN_DIR_BROWSE_MODE" "$RUN_DIR_BROWSE_URL" "$RUN_DIR_BROWSE_REMOTE_URL" "$PROOF_HTTP_CODE" "$PRECHECK_HTTP_CODE" <<'PY'
 import sys
 import json
 from pathlib import Path
@@ -372,7 +647,9 @@ from pathlib import Path
 from ops.lib.aiops_remote_helpers import utc_now_iso, write_json_file
 
 proof_payload = {}
+precheck_payload = {}
 proof_path = Path(sys.argv[8])
+precheck_path = Path(sys.argv[9])
 if proof_path.exists():
     raw = proof_path.read_text(encoding="utf-8", errors="replace").strip()
     if raw:
@@ -382,6 +659,23 @@ if proof_path.exists():
                 proof_payload = parsed
         except json.JSONDecodeError:
             proof_payload = {}
+if precheck_path.exists():
+    raw = precheck_path.read_text(encoding="utf-8", errors="replace").strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                precheck_payload = parsed
+        except json.JSONDecodeError:
+            precheck_payload = {}
+
+novnc_readiness_artifact_dir = None
+for source in (proof_payload, precheck_payload):
+    if isinstance(source, dict):
+        candidate = source.get("novnc_readiness_artifact_dir") or source.get("readiness_artifact_dir")
+        if isinstance(candidate, str) and candidate.strip():
+            novnc_readiness_artifact_dir = candidate.strip()
+            break
 
 payload = {
     "local_run_id": sys.argv[2],
@@ -390,14 +684,25 @@ payload = {
     "novnc_url": sys.argv[5] or None,
     "remote_run_id": sys.argv[6] or None,
     "summary": sys.argv[7] or None,
-    "proof_payload": proof_payload or None,
-    "novnc_readiness_artifact_dir": (
-      proof_payload.get("novnc_readiness_artifact_dir")
-      or proof_payload.get("readiness_artifact_dir")
+    "error_class": (
+      sys.argv[12]
+      or (proof_payload.get("error_class") if isinstance(proof_payload, dict) else None)
+      or (precheck_payload.get("error_class") if isinstance(precheck_payload, dict) else None)
       or None
-    ) if isinstance(proof_payload, dict) else None,
-    "run_artifact_dir_resolved": sys.argv[9] or None,
-    "run_artifact_dir_resolution_error": sys.argv[10] or None,
+    ),
+    "proof_payload": proof_payload or None,
+    "precheck_payload": precheck_payload or None,
+    "novnc_readiness_artifact_dir": novnc_readiness_artifact_dir,
+    "run_artifact_dir_resolved": sys.argv[10] or None,
+    "run_artifact_dir_resolution_error": sys.argv[11] or None,
+    "browse_http_code": sys.argv[13] or None,
+    "browse_http_code_local": sys.argv[14] or None,
+    "browse_http_code_remote": sys.argv[15] or None,
+    "browse_mode": sys.argv[16] or None,
+    "browse_url": sys.argv[17] or None,
+    "browse_remote_url": sys.argv[18] or None,
+    "proof_http_code": sys.argv[19] or None,
+    "precheck_http_code": sys.argv[20] or None,
     "finished_at": utc_now_iso(),
 }
 write_json_file(Path(sys.argv[1]), payload)
@@ -445,7 +750,7 @@ def pick(d):
             return v.strip()
     return ""
 
-for key in ("proof_payload", "remote_payload"):
+for key in ("proof_payload", "precheck_payload", "remote_payload"):
     obj = data.get(key)
     if isinstance(obj, dict):
         val = pick(obj)

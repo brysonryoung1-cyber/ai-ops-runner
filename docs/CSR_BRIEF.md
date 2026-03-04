@@ -170,3 +170,45 @@ The status endpoint can show stale mirror values because:
 - **A) Truthful terminal state**: `soma_run_to_done.py` now FAILs (exit 1, `MIRROR_FAIL`) when `mirror_pass === false`; FAILs (`ACCEPTANCE_MISSING_FOR_RUN`) when acceptance dir missing; removed "latest" acceptance fallback.
 - **B) Run-scoped acceptance**: `soma_kajabi_auto_finish.py` removed "latest phase0" fallback; fails with `PHASE0_MISSING_FOR_RUN` or `PHASE0_DEGRADED`.
 - **C) Status endpoint correctness**: `route.ts` removed `SUCCESS → mirrorPass=true` fallback; returns `mirror_state: "UNKNOWN_NO_ACCEPTANCE_FOR_RUN"` when data missing; added `latest_acceptance_run_id` for transparency.
+
+---
+
+## 6) New blocker after novnc_readiness ship — FileNotFoundError in proof loop
+
+### Observed facts
+
+- **Evidence dirs:** `artifacts/local_apply_proofs/20260303T234534Z_32194c` (apply_and_proof), `artifacts/local_apply_proofs/20260303T234948Z_soma_2cccfa` (soma proof)
+- **soma_remote.log:** Only 2 lines (bash_version); `soma_run_to_done_result.json` absent — proof loop failed before writing result
+- **run_poll.json** (from 20260303T234225Z_soma_477ce4): `artifact_dir: "artifacts/hostd/20260303_234225_e5a591bb"` — hostd dir, not run_to_done
+- **precheck_browse.json:** `{"ok":false,"error":"Forbidden"}` — browse to hostd path returns 403/404; PRECHECK never successfully fetched
+- **missing_path:** Browse requests `hostd/<run_id>/PROOF.json` and `hostd/<run_id>/PRECHECK.json` — neither exists under hostd; PROOF/PRECHECK live in `artifacts/soma_kajabi/run_to_done/<run_id>/`
+- **origin:** `aiops_soma_run_to_done.sh` lines 167–220: uses `artifact_dir` from `/api/runs` (hostd) to build browse path; `parse_run_poll_response` returns hostd dir; Python `Path(sys.argv[1]).read_text()` in browse-parse block reads curl output file (exists); the **conceptual** FileNotFoundError is the browse API 404 for the wrong path
+
+### Layer classification: **A) Remote helper browse path incorrect**
+
+- `artifact_dir` from `/api/runs` for `soma_run_to_done` is hostd (`artifacts/hostd/YYYYMMDD_HHMMSS_hex`); hostd never writes PROOF.json or PRECHECK.json
+- `soma_run_to_done.py` on VPS writes PROOF/PRECHECK to `artifacts/soma_kajabi/run_to_done/<run_id>/`; that dir is not returned by `/api/runs` for this action
+- `precheck_rel_path` / `proof_rel_path` are derived from hostd `artifact_dir` → browse always 404 → `novnc_readiness_artifact_dir` never populated
+
+### Minimal fix plan (1–2 edits)
+
+1. **aiops_soma_run_to_done.sh:** When `artifact_dir` from run is hostd (`artifacts/hostd/*`), resolve the run_to_done dir instead:
+   - Option A: Try `artifacts/soma_kajabi/run_to_done/<run_id>` using Console run_id → run_to_done run_id mapping (timestamp match: `20260303234225` → `run_to_done_20260303T234225Z_*`)
+   - Option B: Add a fallback browse: if PROOF/PRECHECK 404 on hostd path, list `artifacts/soma_kajabi/run_to_done/` (or call an API) and try latest run_to_done dir by timestamp
+2. **Alternative:** Enhance `/api/runs` (or `soma-last-run-resolver`) so that for `soma_run_to_done`, `artifact_dir` points to `artifacts/soma_kajabi/run_to_done/<d>` when that dir exists and matches the run; then aiops script needs no change
+
+### Verification plan
+
+1. Rerun: `./ops/remote/aiops_soma_run_to_done.sh`
+2. **PASS criteria:**
+   - `terminal_status` is FAIL with `NOVNC_*` (or SUCCESS/WAITING_FOR_HUMAN) — **not** FileNotFoundError or missing result file
+   - `soma_run_to_done_result.json` exists and includes `novnc_readiness_artifact_dir` when precheck fails (NOVNC_NOT_READY)
+   - Browse for PRECHECK.json returns 200 when precheck failed (path = run_to_done, not hostd)
+3. **Exact verification commands:**
+   ```bash
+   ./ops/remote/aiops_soma_run_to_done.sh
+   # Inspect latest proof dir:
+   PROOF_DIR=$(ls -td artifacts/local_apply_proofs/*_soma_* 2>/dev/null | head -1)
+   cat "$PROOF_DIR/soma_run_to_done_result.json" | jq '.terminal_status, .novnc_readiness_artifact_dir'
+   # Expect: terminal_status in (SUCCESS|FAIL|WAITING_FOR_HUMAN); novnc_readiness_artifact_dir present when FAIL with NOVNC_*
+   ```
