@@ -344,7 +344,12 @@ def _write_error_json(art_dir: str, error_class: str, reason: str,
         pass
 
 
-def run_action(action: str, run_id: str, params: dict | None = None) -> tuple[int, str, str, bool]:
+def run_action(
+    action: str,
+    run_id: str,
+    params: dict | None = None,
+    console_run_id: str | None = None,
+) -> tuple[int, str, str, bool]:
     """Run allowlisted action. Returns (exit_code, stdout, stderr, truncated).
     Always writes stdout.txt, stderr.txt, hostd_result.json, and error.json (on failure).
     For code.opencode.propose_patch, params (goal, ref, test_command, dry_run) are written to params.json."""
@@ -365,6 +370,8 @@ def run_action(action: str, run_id: str, params: dict | None = None) -> tuple[in
     stderr_path = os.path.join(art_dir, "stderr.txt")
     result_path = os.path.join(art_dir, "hostd_result.json")
     env = {**os.environ, "OPENCLAW_RUN_ID": run_id}
+    if isinstance(console_run_id, str) and console_run_id.strip():
+        env["OPENCLAW_CONSOLE_RUN_ID"] = console_run_id.strip()
     try:
         proc = subprocess.run(
             cmd,
@@ -604,6 +611,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(403, {"error": "Action not allowlisted"})
             return
         params = data.get("params") if isinstance(data.get("params"), dict) else None
+        raw_console_run_id = data.get("console_run_id") if isinstance(data, dict) else None
+        console_run_id = (
+            raw_console_run_id.strip()
+            if isinstance(raw_console_run_id, str) and raw_console_run_id.strip()
+            else None
+        )
         if action == "code.opencode.propose_patch":
             if not params or not isinstance(params.get("goal"), str) or not str(params.get("goal", "")).strip():
                 self.send_json(400, {"error": "code.opencode.propose_patch requires params.goal (non-empty string)"})
@@ -626,7 +639,12 @@ class Handler(BaseHTTPRequestHandler):
                     "artifact_dir": f"artifacts/backtests/blocked/{run_id}",
                 }).encode("utf-8"))
                 return
-        exit_code, stdout, stderr, truncated = run_action(action, run_id, params)
+        exit_code, stdout, stderr, truncated = run_action(
+            action,
+            run_id,
+            params,
+            console_run_id=console_run_id,
+        )
         self.send_json(200, {
             "ok": exit_code == 0,
             "action": action,

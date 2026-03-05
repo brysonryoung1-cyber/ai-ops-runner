@@ -113,7 +113,8 @@ export function getHostdUrl(): string | null {
  */
 export async function executeAction(
   actionName: string,
-  params?: Record<string, unknown>
+  params?: Record<string, unknown>,
+  consoleRunId?: string
 ): Promise<HostdResult> {
   const start = Date.now();
   const hostdAction = ACTION_TO_HOSTD[actionName];
@@ -170,6 +171,9 @@ export async function executeAction(
   const body: Record<string, unknown> = { action: hostdAction };
   if (params && actionName === "code.opencode.propose_patch") {
     body.params = params;
+  }
+  if (typeof consoleRunId === "string" && consoleRunId.trim().length > 0) {
+    body.console_run_id = consoleRunId.trim();
   }
 
   try {
