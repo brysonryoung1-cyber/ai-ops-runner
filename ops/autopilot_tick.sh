@@ -23,12 +23,70 @@ STATE_DIR="${OPENCLAW_AUTOPILOT_STATE_DIR:-/var/lib/ai-ops-runner/autopilot}"
 BACKOFF_WINDOW_SEC="${OPENCLAW_AUTOPILOT_BACKOFF_SEC:-1800}"  # 30 min
 MAX_CONSECUTIVE_FAILURES="${OPENCLAW_AUTOPILOT_MAX_FAILURES:-3}"
 LOG_FILE="${OPENCLAW_AUTOPILOT_LOG:-/var/log/openclaw_autopilot.log}"
+SAFE_GIT_DIR_PRIMARY="${OPENCLAW_AUTOPILOT_SAFE_GIT_DIR:-/opt/ai-ops-runner}"
+SAFE_GIT_DIR_FALLBACK="$ROOT_DIR"
+HEALTH_PUBLIC_URL="${OPENCLAW_AUTOPILOT_HEALTH_URL:-http://127.0.0.1:8788/api/ui/health_public}"
+DEPLOY_RECEIPT="${OPENCLAW_AUTOPILOT_DEPLOY_RECEIPT:-$ROOT_DIR/artifacts/deploy/deploy_receipt.json}"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RUN_ID="$(date -u +%Y%m%d_%H%M%S)-$(od -A n -t x4 -N 2 /dev/urandom 2>/dev/null | tr -d ' ' || echo "$$")"
 
 log() {
   echo "$1"
   echo "[$TIMESTAMP] $1" >> "$LOG_FILE" 2>/dev/null || true
+}
+
+git_safe() {
+  git \
+    -c "safe.directory=$SAFE_GIT_DIR_PRIMARY" \
+    -c "safe.directory=$SAFE_GIT_DIR_FALLBACK" \
+    -C "$ROOT_DIR" \
+    "$@"
+}
+
+health_build_sha() {
+  curl -fsS --connect-timeout 3 --max-time 6 "$HEALTH_PUBLIC_URL" 2>/dev/null | python3 -c "
+import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    print('')
+    raise SystemExit(0)
+v=d.get('build_sha','')
+print(v if isinstance(v,str) else '')
+" 2>/dev/null || true
+}
+
+receipt_build_sha() {
+  python3 -c "
+import json,sys
+try:
+    with open('$DEPLOY_RECEIPT', 'r', encoding='utf-8') as f:
+        d=json.load(f)
+except Exception:
+    print('')
+    raise SystemExit(0)
+for k in ('console_build_sha', 'git_head', 'deploy_sha'):
+    v=d.get(k)
+    if isinstance(v,str) and v:
+        print(v)
+        raise SystemExit(0)
+print('')
+" 2>/dev/null || true
+}
+
+fallback_build_sha() {
+  local sha=""
+  sha="$(health_build_sha | tr -d '[:space:]')"
+  if [ -n "$sha" ] && [ "$sha" != "unknown" ]; then
+    echo "$sha"
+    return 0
+  fi
+  sha="$(receipt_build_sha | tr -d '[:space:]')"
+  if [ -n "$sha" ] && [ "$sha" != "unknown" ]; then
+    echo "$sha"
+    return 0
+  fi
+  return 1
 }
 
 write_status() {
@@ -93,17 +151,35 @@ fi
 
 log "=== autopilot_tick.sh (run_id=$RUN_ID) ==="
 
+CURRENT_SHA="$(cat "$STATE_DIR/last_deployed_sha.txt" 2>/dev/null || echo "")"
+LAST_GOOD_SHA="$(cat "$STATE_DIR/last_good_sha.txt" 2>/dev/null || echo "")"
+
 # --- Fetch origin ---
 log "Step 1: git fetch origin"
-if ! git fetch origin main 2>&1; then
-  log "autopilot: FAIL git fetch"
-  write_status "FAIL" "" "" "git_fetch_failed" "Could not fetch origin/main"
+if ! git_safe fetch origin main 2>&1; then
+  FALLBACK_SHA="$(fallback_build_sha || true)"
+  if [ -n "$FALLBACK_SHA" ]; then
+    log "autopilot: SKIP git fetch failed; fallback build_sha=$FALLBACK_SHA"
+    write_status "SKIP" "$FALLBACK_SHA" "${CURRENT_SHA:-$FALLBACK_SHA}" "git_fetch_failed_fallback" "git fetch failed; fallback build_sha from health/deploy receipt"
+    exit 0
+  fi
+  log "autopilot: FAIL git fetch (no fallback build_sha)"
+  write_status "FAIL" "" "" "git_fetch_failed" "Could not fetch origin/main and no fallback build_sha available"
   exit 1
 fi
 
-TARGET_SHA="$(git rev-parse origin/main 2>/dev/null)"
-CURRENT_SHA="$(cat "$STATE_DIR/last_deployed_sha.txt" 2>/dev/null || echo "")"
-LAST_GOOD_SHA="$(cat "$STATE_DIR/last_good_sha.txt" 2>/dev/null || echo "")"
+TARGET_SHA="$(git_safe rev-parse origin/main 2>/dev/null || true)"
+if [ -z "$TARGET_SHA" ]; then
+  FALLBACK_SHA="$(fallback_build_sha || true)"
+  if [ -n "$FALLBACK_SHA" ]; then
+    log "autopilot: SKIP could not resolve origin/main; fallback build_sha=$FALLBACK_SHA"
+    write_status "SKIP" "$FALLBACK_SHA" "${CURRENT_SHA:-$FALLBACK_SHA}" "git_target_resolve_failed_fallback" "Could not resolve origin/main SHA; using fallback build_sha"
+    exit 0
+  fi
+  log "autopilot: FAIL could not resolve origin/main SHA"
+  write_status "FAIL" "" "${CURRENT_SHA:-}" "git_target_resolve_failed" "Could not resolve origin/main SHA"
+  exit 1
+fi
 
 log "  target_sha=$TARGET_SHA"
 log "  current_sha=${CURRENT_SHA:-<none>}"
@@ -143,7 +219,7 @@ import json
 with open('$VERDICT_FILE') as f: v=json.load(f)
 print(v.get('approved_tree_sha',''))
 " 2>/dev/null || echo "")"
-  TARGET_TREE="$(git rev-parse "origin/main^{tree}" 2>/dev/null || echo "")"
+  TARGET_TREE="$(git_safe rev-parse "origin/main^{tree}" 2>/dev/null || echo "")"
   if [ -n "$APPROVED_TREE" ] && [ -n "$TARGET_TREE" ] && [ "$APPROVED_TREE" != "$TARGET_TREE" ]; then
     log "autopilot: WARN — target tree ($TARGET_TREE) != approved tree ($APPROVED_TREE). Proceeding anyway (verdict may be stale)."
   fi
@@ -198,8 +274,8 @@ echo "$FAIL_COUNT" > "$STATE_DIR/fail_count.txt"
 # --- Rollback to last_good_sha if available ---
 if [ -n "$LAST_GOOD_SHA" ] && [ "$LAST_GOOD_SHA" != "$TARGET_SHA" ]; then
   log "Step 3: ROLLBACK to last_good_sha=$LAST_GOOD_SHA"
-  git fetch origin 2>/dev/null || true
-  git reset --hard "$LAST_GOOD_SHA" 2>&1 || true
+  git_safe fetch origin 2>/dev/null || true
+  git_safe reset --hard "$LAST_GOOD_SHA" 2>&1 || true
 
   ROLLBACK_RC=0
   ROLLBACK_OUTPUT="$(bash "$SCRIPT_DIR/deploy_pipeline.sh" 2>&1)" || ROLLBACK_RC=$?

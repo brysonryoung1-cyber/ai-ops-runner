@@ -23,6 +23,12 @@ CHECKS=0
 DOCTOR_TIMESTAMP="${OPENCLAW_DOCTOR_RUN_ID:-$(date -u +%Y%m%d_%H%M%S)}"
 DOCTOR_JSON_DIR="$ROOT_DIR/artifacts/doctor/${DOCTOR_TIMESTAMP}"
 mkdir -p "$DOCTOR_JSON_DIR" 2>/dev/null || true
+SYSTEMD_FAILED_DIR="$DOCTOR_JSON_DIR/systemd_failed_units"
+SYSTEMD_FAILED_TXT="$SYSTEMD_FAILED_DIR/failed.txt"
+SYSTEMD_FAILED_STATUS="SKIP"
+SYSTEMD_FAILED_COUNT=0
+SYSTEMD_FAILED_TRACKED_JSON="{}"
+mkdir -p "$SYSTEMD_FAILED_DIR" 2>/dev/null || true
 
 pass() { CHECKS=$((CHECKS + 1)); echo "  PASS: $1"; }
 fail() { CHECKS=$((CHECKS + 1)); FAILURES=$((FAILURES + 1)); echo "  FAIL: $1" >&2; }
@@ -819,7 +825,82 @@ else
   pass "Console drift check N/A (no tailnet or git)"
 fi
 
-# --- 11. Guard Timer Health ---
+# --- 11. Systemd Failed Units (fail-closed) ---
+echo "--- Systemd Failed Units ---"
+if command -v systemctl >/dev/null 2>&1; then
+  FAILED_UNITS_RAW="$(systemctl --no-pager --plain --failed --type=service --type=timer 2>/dev/null || true)"
+  FAILED_UNITS="$(
+    printf '%s\n' "$FAILED_UNITS_RAW" | awk 'NF && $1 ~ /\.(service|timer)$/ {print $1}' | head -200
+  )"
+
+  TRACKED_FILE="$SYSTEMD_FAILED_DIR/tracked_states.txt"
+  : > "$TRACKED_FILE"
+  TRACKED_UNITS="openclaw-autopilot.service openclaw-novnc-guard.service openclaw-reconcile.service"
+  TRACKED_FAILED=""
+  for unit in $TRACKED_UNITS; do
+    unit_state="$(systemctl is-failed "$unit" 2>/dev/null || echo unknown)"
+    echo "$unit=$unit_state" >> "$TRACKED_FILE"
+    if [ "$unit_state" = "failed" ]; then
+      TRACKED_FAILED="${TRACKED_FAILED}${unit}"$'\n'
+    fi
+  done
+
+  COMBINED_FAILED="$(
+    printf '%s\n%s' "$FAILED_UNITS" "$TRACKED_FAILED" | sed '/^[[:space:]]*$/d' | sort -u | head -200
+  )"
+  if [ -n "$COMBINED_FAILED" ]; then
+    printf '%s\n' "$COMBINED_FAILED" > "$SYSTEMD_FAILED_TXT"
+    SYSTEMD_FAILED_STATUS="FAIL"
+    SYSTEMD_FAILED_COUNT="$(printf '%s\n' "$COMBINED_FAILED" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+    fail "Failed systemd units detected ($SYSTEMD_FAILED_COUNT) — see $SYSTEMD_FAILED_TXT"
+  else
+    echo "none" > "$SYSTEMD_FAILED_TXT"
+    SYSTEMD_FAILED_STATUS="PASS"
+    SYSTEMD_FAILED_COUNT=0
+    pass "No failed systemd units (tracked: openclaw-autopilot, openclaw-novnc-guard, openclaw-reconcile)"
+  fi
+
+  SYSTEMD_FAILED_TRACKED_JSON="$(python3 -c "
+import json
+tracked = {}
+with open('$TRACKED_FILE', 'r', encoding='utf-8') as f:
+    for line in f:
+        line=line.strip()
+        if not line or '=' not in line:
+            continue
+        unit,state=line.split('=',1)
+        tracked[unit]=state
+print(json.dumps(tracked))
+" 2>/dev/null || echo "{}")"
+
+  python3 - "$SYSTEMD_FAILED_DIR/status.json" "$SYSTEMD_FAILED_STATUS" "$SYSTEMD_FAILED_COUNT" "$SYSTEMD_FAILED_TXT" "$SYSTEMD_FAILED_TRACKED_JSON" <<'PYEOF'
+import json, sys
+from datetime import datetime, timezone
+out_file = sys.argv[1]
+status = sys.argv[2]
+failed_count = int(sys.argv[3])
+failed_txt = sys.argv[4]
+tracked_json = sys.argv[5]
+try:
+    tracked = json.loads(tracked_json)
+except json.JSONDecodeError:
+    tracked = {}
+payload = {
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "status": status,
+    "failed_count": failed_count,
+    "failed_txt": failed_txt,
+    "tracked_units": tracked,
+}
+with open(out_file, "w", encoding="utf-8") as f:
+    json.dump(payload, f, indent=2)
+PYEOF
+else
+  echo "systemctl_unavailable" > "$SYSTEMD_FAILED_TXT"
+  pass "Systemd failed-units check N/A (no systemctl)"
+fi
+
+# --- 12. Guard Timer Health ---
 echo "--- Guard Timer Health ---"
 if command -v systemctl >/dev/null 2>&1; then
   GUARD_TIMER_ACTIVE="$(systemctl is-active openclaw-guard.timer 2>/dev/null || echo "inactive")"
@@ -850,7 +931,7 @@ else
 fi
 
 # --- JSON Output ---
-python3 - "$DOCTOR_JSON_DIR/doctor.json" "$CHECKS" "$FAILURES" "$(hostname 2>/dev/null || echo unknown)" "$FRONTDOOR_WS_STATUS" "$FRONTDOOR_WS_SUMMARY" "$FRONTDOOR_WS_PROBE_JSON" <<'PYEOF'
+python3 - "$DOCTOR_JSON_DIR/doctor.json" "$CHECKS" "$FAILURES" "$(hostname 2>/dev/null || echo unknown)" "$FRONTDOOR_WS_STATUS" "$FRONTDOOR_WS_SUMMARY" "$FRONTDOOR_WS_PROBE_JSON" "$SYSTEMD_FAILED_STATUS" "$SYSTEMD_FAILED_COUNT" "$SYSTEMD_FAILED_TXT" "$SYSTEMD_FAILED_DIR/status.json" <<'PYEOF'
 import json, sys
 from datetime import datetime, timezone
 out_file = sys.argv[1]
@@ -860,6 +941,10 @@ hostname = sys.argv[4]
 frontdoor_ws_status = sys.argv[5]
 frontdoor_ws_summary = sys.argv[6]
 frontdoor_ws_probe_json = sys.argv[7]
+systemd_failed_status = sys.argv[8]
+systemd_failed_count = int(sys.argv[9])
+systemd_failed_txt = sys.argv[10]
+systemd_failed_status_json = sys.argv[11]
 result = {
     "timestamp": datetime.now(timezone.utc).isoformat(),
     "hostname": hostname,
@@ -871,6 +956,12 @@ result = {
         "status": frontdoor_ws_status,
         "summary": frontdoor_ws_summary,
         "artifact": frontdoor_ws_probe_json,
+    },
+    "systemd_failed_units": {
+        "status": systemd_failed_status,
+        "failed_count": systemd_failed_count,
+        "failed_txt": systemd_failed_txt,
+        "status_json": systemd_failed_status_json,
     },
 }
 with open(out_file, "w") as f:

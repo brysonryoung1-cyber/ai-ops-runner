@@ -503,6 +503,27 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Doctor systemd failed-units check
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Doctor systemd failed-units check ---"
+if grep -q 'systemctl --no-pager --plain --failed' "$DOCTOR"; then
+  pass "Doctor checks systemctl --failed units"
+else
+  fail "Doctor must check systemctl --failed units"
+fi
+if grep -q 'openclaw-autopilot.service' "$DOCTOR" && grep -q 'openclaw-novnc-guard.service' "$DOCTOR" && grep -q 'openclaw-reconcile.service' "$DOCTOR"; then
+  pass "Doctor explicitly tracks autopilot/novnc-guard/reconcile services"
+else
+  fail "Doctor must explicitly track autopilot/novnc-guard/reconcile services"
+fi
+if grep -q 'systemd_failed_units' "$DOCTOR" && grep -q 'failed.txt' "$DOCTOR"; then
+  pass "Doctor writes systemd_failed_units status + failed.txt artifact"
+else
+  fail "Doctor must record systemd_failed_units status and failed.txt"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""
