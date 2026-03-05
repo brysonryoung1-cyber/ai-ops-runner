@@ -30,7 +30,11 @@ class TestWriteInitialProofFiles:
         mod = _load_module()
         out_dir = tmp_path / "run_dir"
         out_dir.mkdir()
-        mod.write_initial_proof_files(out_dir, "test_run_123")
+        mod.write_initial_proof_files(
+            out_dir,
+            "test_run_123",
+            console_run_id="20260305150000-c0de",
+        )
 
         proof = json.loads((out_dir / "PROOF.json").read_text())
         precheck = json.loads((out_dir / "PRECHECK.json").read_text())
@@ -40,11 +44,13 @@ class TestWriteInitialProofFiles:
         assert proof["phase"] == "init"
         assert "started_at" in proof
         assert proof["project"] == "soma_kajabi"
+        assert proof["console_run_id"] == "20260305150000-c0de"
 
         assert precheck["run_id"] == "test_run_123"
         assert precheck["status"] == "RUNNING"
         assert precheck["precheck"] == "pending"
         assert "started_at" in precheck
+        assert precheck["console_run_id"] == "20260305150000-c0de"
 
     def test_update_proof_merges(self, tmp_path):
         mod = _load_module()
@@ -105,7 +111,7 @@ class TestLatestRunPointer:
         pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
 
         assert pointer["run_id"] == "20260304155603-a0c4"
-        assert pointer["console_run_id"] == "20260304155603-a0c4"
+        assert pointer["console_run_id"] is None
         assert pointer["run_dir"] == "run_to_done_20260304T155603Z_abcdef12"
         assert pointer["status"] == "RUNNING"
         assert "updated_at" in pointer
@@ -130,7 +136,7 @@ class TestLatestRunPointer:
         assert expected_pointer.exists(), f"Pointer must exist at {expected_pointer}"
         pointer = json.loads(expected_pointer.read_text(encoding="utf-8"))
         assert pointer["run_id"] == "test-env-pointer"
-        assert pointer["console_run_id"] == "test-env-pointer"
+        assert pointer["console_run_id"] is None
         assert pointer["status"] == "SUCCESS"
 
     def test_pointer_creates_parent_dirs(self, tmp_path, monkeypatch):
@@ -179,6 +185,11 @@ class TestLatestRunPointer:
         assert pointer["console_run_id"] == "20260305141500-c0de"
         assert isinstance(pointer.get("run_id"), str) and pointer["run_id"]
         assert str(pointer.get("run_dir", "")).startswith("run_to_done_")
+        proof_dir = next((root / "artifacts" / "soma_kajabi" / "run_to_done").iterdir())
+        proof = json.loads((proof_dir / "PROOF.json").read_text())
+        precheck = json.loads((proof_dir / "PRECHECK.json").read_text())
+        assert proof["console_run_id"] == "20260305141500-c0de"
+        assert precheck["console_run_id"] == "20260305141500-c0de"
 
 
 class TestProofExistsEarlyOnPrecheckFail:

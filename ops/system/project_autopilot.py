@@ -31,13 +31,15 @@ from ops.lib.aiops_remote_helpers import (
     canonical_novnc_url,
     classify_soma_terminal_status,
     parse_artifact_browse_proof,
-    parse_browse_dir_entries,
     parse_run_poll_response,
-    resolve_run_to_done_dir,
 )
 from ops.lib.artifacts_root import get_artifacts_root
 from ops.lib.exec_trigger import TriggerResult, hq_request, trigger_exec
-from ops.lib.notifier import build_alert_hash, send_discord_webhook_alert
+from ops.lib.notifier import (
+    build_alert_hash,
+    resolve_discord_webhook_url,
+    send_discord_webhook_alert,
+)
 
 DEFAULT_MAX_SECONDS = 2100
 DEFAULT_POLL_INTERVAL = "6..24"
@@ -45,6 +47,7 @@ DEFAULT_HQ_BASE = "http://127.0.0.1:8787"
 DEFAULT_STATE_ROOT = Path("/var/lib/ai-ops-runner/soma_autopilot")
 DOCTOR_TIMEOUT_SEC = 300
 SEEN_ALERTS_MAX = 200
+RUN_TO_DONE_SCAN_LIMIT = 200
 
 
 def now_utc() -> str:
@@ -311,8 +314,10 @@ class PollResult:
     proof_path: str | None
     precheck_path: str | None
     browse_error: str | None
-    pointer_seen_console_run_id: str | None
-    pointer_seen_run_dir: str | None
+    run_to_done_resolution_method: str
+    pointer_console_run_id_seen: str | None
+    pointer_run_dir_seen: str | None
+    fs_scan_checked_count: int
     pointer_http_code: int | None
     novnc_url: str | None
 
@@ -599,15 +604,111 @@ def try_fetch_artifact_json(
     return code, None
 
 
+def rel_artifact_path(path: Path, artifacts_root: Path) -> str:
+    try:
+        relative = path.resolve().relative_to(artifacts_root.resolve())
+        return f"artifacts/{relative.as_posix()}"
+    except ValueError:
+        return str(path)
+
+
+def _result_from_local_run_dir(
+    *,
+    out: dict[str, Any],
+    dir_path: Path,
+    artifacts_root: Path,
+    resolution_method: str,
+) -> dict[str, Any]:
+    run_dir = rel_artifact_path(dir_path, artifacts_root)
+    proof_file = dir_path / "PROOF.json"
+    precheck_file = dir_path / "PRECHECK.json"
+    out["run_to_done_dir"] = run_dir
+    out["run_artifact_dir"] = run_dir
+    out["run_artifact_dir_resolution"] = resolution_method
+    out["run_to_done_resolution_method"] = resolution_method
+    if proof_file.exists():
+        out["proof_path"] = rel_artifact_path(proof_file, artifacts_root)
+        out["proof_payload"] = read_json(proof_file)
+    if precheck_file.exists():
+        out["precheck_path"] = rel_artifact_path(precheck_file, artifacts_root)
+        out["precheck_payload"] = read_json(precheck_file)
+    return out
+
+
+def _resolve_run_to_done_by_fs_scan(
+    *,
+    remote_run_id: str,
+    artifacts_root: Path,
+    limit: int = RUN_TO_DONE_SCAN_LIMIT,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "matched_dir": None,
+        "proof_payload": None,
+        "precheck_payload": None,
+        "fs_scan_checked_count": 0,
+    }
+    run_root = artifacts_root / "soma_kajabi" / "run_to_done"
+    if not remote_run_id.strip() or not run_root.is_dir():
+        return out
+    try:
+        candidates = sorted(
+            (p for p in run_root.glob("run_to_done_*") if p.is_dir()),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return out
+
+    for dir_path in candidates[:limit]:
+        out["fs_scan_checked_count"] += 1
+        proof_payload = read_json(dir_path / "PROOF.json")
+        if not isinstance(proof_payload, dict):
+            continue
+        console_run_id = str(proof_payload.get("console_run_id") or "").strip()
+        if console_run_id != remote_run_id:
+            continue
+        out["matched_dir"] = dir_path
+        out["proof_payload"] = proof_payload
+        out["precheck_payload"] = read_json(dir_path / "PRECHECK.json")
+        return out
+    return out
+
+
+def _read_pointer_payload(artifacts_root: Path) -> dict[str, Any] | None:
+    pointer_path = artifacts_root / "soma_kajabi" / "run_to_done" / "LATEST_RUN.json"
+    return read_json(pointer_path)
+
+
+def build_webhook_preflight() -> dict[str, Any]:
+    webhook_url, source = resolve_discord_webhook_url()
+    if webhook_url:
+        return {
+            "ok": True,
+            "source": source,
+            "error_class": None,
+        }
+    error_class = "DISCORD_WEBHOOK_MISSING" if source == "missing" else sanitize_error_class(
+        f"DISCORD_WEBHOOK_{source}",
+        default="DISCORD_WEBHOOK_UNAVAILABLE",
+    )
+    return {
+        "ok": False,
+        "source": source,
+        "error_class": error_class,
+    }
+
+
 def resolve_run_to_done_artifacts(
     *,
     client: BaseHQClient,
     remote_run_id: str,
     raw_dir: Path,
+    artifacts_root: Path,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
         "run_artifact_dir": None,
         "run_artifact_dir_resolution": "none",
+        "run_to_done_resolution_method": "none",
         "run_to_done_dir": None,
         "proof_payload": None,
         "precheck_payload": None,
@@ -616,33 +717,86 @@ def resolve_run_to_done_artifacts(
         "browse_error": None,
         "proof_http_code": None,
         "precheck_http_code": None,
-        "pointer_seen_console_run_id": None,
-        "pointer_seen_run_dir": None,
+        "pointer_console_run_id_seen": None,
+        "pointer_run_dir_seen": None,
+        "fs_scan_checked_count": 0,
         "pointer_http_code": None,
     }
-    pointer_reason: str | None = None
+    reasons: list[str] = []
 
+    fs_result = _resolve_run_to_done_by_fs_scan(
+        remote_run_id=remote_run_id,
+        artifacts_root=artifacts_root,
+    )
+    out["fs_scan_checked_count"] = int(fs_result.get("fs_scan_checked_count") or 0)
+    matched_dir = fs_result.get("matched_dir")
+    if isinstance(matched_dir, Path):
+        out = _result_from_local_run_dir(
+            out=out,
+            dir_path=matched_dir,
+            artifacts_root=artifacts_root,
+            resolution_method="fs_scan",
+        )
+        if isinstance(fs_result.get("proof_payload"), dict):
+            out["proof_payload"] = fs_result["proof_payload"]
+        if isinstance(fs_result.get("precheck_payload"), dict):
+            out["precheck_payload"] = fs_result["precheck_payload"]
+        return out
     if remote_run_id.strip():
+        reasons.append("fs_scan_no_match")
+
+    pointer_payload = _read_pointer_payload(artifacts_root)
+    if pointer_payload is not None:
+        raw_console = pointer_payload.get("console_run_id")
+        if not isinstance(raw_console, str) or not raw_console.strip():
+            legacy_run_id = pointer_payload.get("run_id")
+            raw_console = legacy_run_id if isinstance(legacy_run_id, str) else ""
+        pointer_console_run_id = raw_console.strip()
+        raw_run_dir = pointer_payload.get("run_dir")
+        pointer_run_dir = raw_run_dir.strip() if isinstance(raw_run_dir, str) else ""
+        out["pointer_console_run_id_seen"] = pointer_console_run_id or None
+        out["pointer_run_dir_seen"] = pointer_run_dir or None
+        if pointer_console_run_id and pointer_run_dir and pointer_console_run_id == remote_run_id:
+            dir_path = artifacts_root / "soma_kajabi" / "run_to_done" / pointer_run_dir
+            if dir_path.is_dir():
+                return _result_from_local_run_dir(
+                    out=out,
+                    dir_path=dir_path,
+                    artifacts_root=artifacts_root,
+                    resolution_method="pointer",
+                )
+            reasons.append(f"pointer_run_dir_missing:{pointer_run_dir}")
+        elif not pointer_console_run_id:
+            reasons.append("pointer_console_run_id_missing")
+        elif not pointer_run_dir:
+            reasons.append("pointer_run_dir_missing")
+        else:
+            reasons.append(
+                f"pointer_console_run_id_mismatch:{pointer_console_run_id}!={remote_run_id}"
+            )
+        out["pointer_http_code"] = 200
+    else:
         pointer_code, pointer_body = client.browse("soma_kajabi/run_to_done/LATEST_RUN.json")
         out["pointer_http_code"] = int(pointer_code)
         write_raw_response(raw_dir / "browse_run_to_done_pointer.json", pointer_code, pointer_body)
         if pointer_code == 200:
-            pointer_payload = parse_artifact_browse_proof(pointer_body)
-            if isinstance(pointer_payload, dict):
-                raw_console = pointer_payload.get("console_run_id")
+            remote_pointer = parse_artifact_browse_proof(pointer_body)
+            if isinstance(remote_pointer, dict):
+                raw_console = remote_pointer.get("console_run_id")
                 if not isinstance(raw_console, str) or not raw_console.strip():
-                    legacy_run_id = pointer_payload.get("run_id")
+                    legacy_run_id = remote_pointer.get("run_id")
                     raw_console = legacy_run_id if isinstance(legacy_run_id, str) else ""
                 pointer_console_run_id = raw_console.strip()
-                raw_run_dir = pointer_payload.get("run_dir")
+                raw_run_dir = remote_pointer.get("run_dir")
                 pointer_run_dir = raw_run_dir.strip() if isinstance(raw_run_dir, str) else ""
-                out["pointer_seen_console_run_id"] = pointer_console_run_id or None
-                out["pointer_seen_run_dir"] = pointer_run_dir or None
+                out["pointer_console_run_id_seen"] = pointer_console_run_id or None
+                out["pointer_run_dir_seen"] = pointer_run_dir or None
                 if pointer_console_run_id and pointer_run_dir and pointer_console_run_id == remote_run_id:
                     run_dir = f"artifacts/soma_kajabi/run_to_done/{pointer_run_dir}"
                     out["run_to_done_dir"] = run_dir
                     out["run_artifact_dir"] = run_dir
                     out["run_artifact_dir_resolution"] = "pointer"
+                    out["run_to_done_resolution_method"] = "pointer"
                     proof_rel = f"{run_dir.removeprefix('artifacts/').rstrip('/')}/PROOF.json"
                     precheck_rel = f"{run_dir.removeprefix('artifacts/').rstrip('/')}/PRECHECK.json"
                     proof_code, proof_payload = try_fetch_artifact_json(
@@ -667,56 +821,20 @@ def resolve_run_to_done_artifacts(
                         out["precheck_path"] = f"{run_dir.rstrip('/')}/PRECHECK.json"
                     return out
                 if not pointer_console_run_id:
-                    pointer_reason = "pointer_console_run_id_missing"
+                    reasons.append("pointer_console_run_id_missing")
                 elif not pointer_run_dir:
-                    pointer_reason = "pointer_run_dir_missing"
+                    reasons.append("pointer_run_dir_missing")
                 else:
-                    pointer_reason = (
+                    reasons.append(
                         f"pointer_console_run_id_mismatch:{pointer_console_run_id}!={remote_run_id}"
                     )
             else:
-                pointer_reason = "pointer_parse_failed"
+                reasons.append("pointer_parse_failed")
         else:
-            pointer_reason = f"pointer_http_{pointer_code}"
+            reasons.append(f"pointer_http_{pointer_code}")
 
-    browse_code, browse_body = client.browse("soma_kajabi/run_to_done")
-    write_raw_response(raw_dir / "browse_run_to_done_dirs.json", browse_code, browse_body)
-    if browse_code != 200:
-        browse_error = f"browse_run_to_done_http_{browse_code}"
-        out["browse_error"] = f"{pointer_reason}; {browse_error}" if pointer_reason else browse_error
-        return out
-    entries = parse_browse_dir_entries(browse_body)
-    resolved = resolve_run_to_done_dir(remote_run_id, entries)
-    run_dir = resolved.get("resolved_dir")
-    if not isinstance(run_dir, str) or not run_dir.strip():
-        browse_error = str(resolved.get("error") or "run_to_done_dir_unresolved")
-        out["browse_error"] = f"{pointer_reason}; {browse_error}" if pointer_reason else browse_error
-        return out
-    out["run_to_done_dir"] = run_dir
-    out["run_artifact_dir"] = run_dir
-    out["run_artifact_dir_resolution"] = "listing"
-    proof_rel = f"{run_dir.removeprefix('artifacts/').rstrip('/')}/PROOF.json"
-    precheck_rel = f"{run_dir.removeprefix('artifacts/').rstrip('/')}/PRECHECK.json"
-    proof_code, proof_payload = try_fetch_artifact_json(
-        client=client,
-        raw_dir=raw_dir,
-        rel_path_value=proof_rel,
-        raw_name="browse_run_to_done_proof.json",
-    )
-    precheck_code, precheck_payload = try_fetch_artifact_json(
-        client=client,
-        raw_dir=raw_dir,
-        rel_path_value=precheck_rel,
-        raw_name="browse_run_to_done_precheck.json",
-    )
-    out["proof_http_code"] = proof_code
-    out["precheck_http_code"] = precheck_code
-    if proof_payload is not None:
-        out["proof_payload"] = proof_payload
-        out["proof_path"] = f"{run_dir.rstrip('/')}/PROOF.json"
-    if precheck_payload is not None:
-        out["precheck_payload"] = precheck_payload
-        out["precheck_path"] = f"{run_dir.rstrip('/')}/PRECHECK.json"
+    if reasons:
+        out["browse_error"] = "; ".join(reasons)
     return out
 
 
@@ -750,6 +868,7 @@ def poll_to_terminal(
     poll_min: int,
     poll_max: int,
     raw_dir: Path,
+    artifacts_root: Path,
 ) -> PollResult:
     started = time.monotonic()
     poll_interval = poll_min
@@ -775,11 +894,14 @@ def poll_to_terminal(
             if run_status != previous_status:
                 poll_interval = poll_min
                 previous_status = run_status
-            if run_to_done_info is None:
+            if run_to_done_info is None or str(
+                run_to_done_info.get("run_to_done_resolution_method") or "none"
+            ) == "none":
                 run_to_done_info = resolve_run_to_done_artifacts(
                     client=client,
                     remote_run_id=remote_run_id,
                     raw_dir=raw_dir,
+                    artifacts_root=artifacts_root,
                 )
             proof_payload = run_to_done_info.get("proof_payload") if run_to_done_info else None
             classified = classify_soma_terminal_status(run_status, proof_payload if isinstance(proof_payload, dict) else None)
@@ -799,6 +921,7 @@ def poll_to_terminal(
             client=client,
             remote_run_id=remote_run_id,
             raw_dir=raw_dir,
+            artifacts_root=artifacts_root,
         )
     if terminal_status == TERMINAL_RUNNING:
         terminal_status = TERMINAL_FAIL
@@ -820,8 +943,12 @@ def poll_to_terminal(
         proof_path=run_to_done_info.get("proof_path"),
         precheck_path=run_to_done_info.get("precheck_path"),
         browse_error=run_to_done_info.get("browse_error"),
-        pointer_seen_console_run_id=run_to_done_info.get("pointer_seen_console_run_id"),
-        pointer_seen_run_dir=run_to_done_info.get("pointer_seen_run_dir"),
+        run_to_done_resolution_method=str(
+            run_to_done_info.get("run_to_done_resolution_method") or "none"
+        ),
+        pointer_console_run_id_seen=run_to_done_info.get("pointer_console_run_id_seen"),
+        pointer_run_dir_seen=run_to_done_info.get("pointer_run_dir_seen"),
+        fs_scan_checked_count=int(run_to_done_info.get("fs_scan_checked_count") or 0),
         pointer_http_code=run_to_done_info.get("pointer_http_code"),
         novnc_url=novnc_url,
     )
@@ -880,6 +1007,7 @@ def send_terminal_alert(
     proof_path: str,
     novnc_url: str | None,
     state: dict[str, Any],
+    webhook_preflight: dict[str, Any],
 ) -> dict[str, Any]:
     terminal = terminal_status.upper()
     if terminal not in {TERMINAL_WAITING, TERMINAL_FAIL}:
@@ -889,7 +1017,7 @@ def send_terminal_alert(
             "deduped": False,
             "hash": "",
             "error_class": "",
-            "notify": {},
+            "notify": webhook_preflight if not webhook_preflight.get("ok") else {},
         }
     alert_hash = build_autopilot_alert_hash(
         project=project,
@@ -907,7 +1035,7 @@ def send_terminal_alert(
             "deduped": True,
             "hash": alert_hash,
             "error_class": error_class,
-            "notify": {},
+            "notify": webhook_preflight if not webhook_preflight.get("ok") else {},
         }
     message = format_alert_message(
         project=project,
@@ -918,7 +1046,10 @@ def send_terminal_alert(
         proof_path=proof_path,
         novnc_url=novnc_url,
     )
-    notify = send_discord_webhook_alert(content=message)
+    if not webhook_preflight.get("ok"):
+        notify = dict(webhook_preflight)
+    else:
+        notify = send_discord_webhook_alert(content=message)
     sent = bool(notify.get("ok"))
     if sent:
         seen = [*seen, alert_hash][-SEEN_ALERTS_MAX:]
@@ -931,6 +1062,20 @@ def send_terminal_alert(
         "error_class": error_class,
         "notify": notify,
     }
+
+
+def format_warning_entry(item: Any) -> str:
+    if isinstance(item, dict):
+        warning = str(item.get("warning") or "WARNING").strip() or "WARNING"
+        validator = str(item.get("validator") or "").strip()
+        error_class = str(item.get("error_class") or "").strip()
+        parts = [warning]
+        if validator:
+            parts.append(f"validator={validator}")
+        if error_class:
+            parts.append(f"error_class={error_class}")
+        return " ".join(parts)
+    return str(item)
 
 
 def build_summary(result: dict[str, Any]) -> str:
@@ -979,7 +1124,7 @@ def build_summary(result: dict[str, Any]) -> str:
     warnings = result.get("warnings")
     if isinstance(warnings, list) and warnings:
         lines.extend(["", "## Warnings"])
-        lines.extend([f"- {w}" for w in warnings if str(w).strip()])
+        lines.extend([f"- {format_warning_entry(w)}" for w in warnings if str(w).strip()])
     return "\n".join(lines) + "\n"
 
 
@@ -1038,6 +1183,7 @@ def main(argv: list[str] | None = None) -> int:
         client: BaseHQClient = MockHQClient(mock_spec)
     else:
         client = RealHQClient(args.hq_base)
+    webhook_preflight = build_webhook_preflight()
 
     started_at = now_utc()
     result: dict[str, Any] = {
@@ -1050,8 +1196,10 @@ def main(argv: list[str] | None = None) -> int:
         "error_class": None,
         "remote_run_id": None,
         "run_artifact_dir_resolution": "none",
-        "pointer_seen_console_run_id": None,
-        "pointer_seen_run_dir": None,
+        "run_to_done_resolution_method": "none",
+        "pointer_console_run_id_seen": None,
+        "pointer_run_dir_seen": None,
+        "fs_scan_checked_count": 0,
         "pointer_http_code": None,
         "doctor": {},
         "trigger": {},
@@ -1063,11 +1211,19 @@ def main(argv: list[str] | None = None) -> int:
             "deduped": False,
             "hash": "",
             "error_class": "",
+            "notify": webhook_preflight if not webhook_preflight.get("ok") else {},
         },
         "validators": [],
         "warnings": [],
         "bundle_dir": rel_path(bundle_dir, repo_root),
     }
+    if not webhook_preflight.get("ok"):
+        result["warnings"].append(
+            {
+                "warning": "DISCORD_WEBHOOK_UNAVAILABLE",
+                "error_class": webhook_preflight.get("error_class"),
+            }
+        )
 
     def finalize(exit_code: int) -> int:
         result["finished_at"] = now_utc()
@@ -1110,6 +1266,7 @@ def main(argv: list[str] | None = None) -> int:
                 proof_path=proof_for_alert,
                 novnc_url=None,
                 state=state,
+                webhook_preflight=webhook_preflight,
             )
             return finalize(1)
 
@@ -1137,6 +1294,7 @@ def main(argv: list[str] | None = None) -> int:
                 proof_path=proof_for_alert,
                 novnc_url=None,
                 state=state,
+                webhook_preflight=webhook_preflight,
             )
             return finalize(1)
 
@@ -1154,6 +1312,7 @@ def main(argv: list[str] | None = None) -> int:
                 proof_path=proof_for_alert,
                 novnc_url=None,
                 state=state,
+                webhook_preflight=webhook_preflight,
             )
             return finalize(1)
         if not remote_run_id:
@@ -1169,6 +1328,7 @@ def main(argv: list[str] | None = None) -> int:
                 proof_path=proof_for_alert,
                 novnc_url=None,
                 state=state,
+                webhook_preflight=webhook_preflight,
             )
             return finalize(1)
 
@@ -1181,6 +1341,7 @@ def main(argv: list[str] | None = None) -> int:
             poll_min=poll_min,
             poll_max=poll_max,
             raw_dir=raw_dir,
+            artifacts_root=artifacts_root,
         )
         result["poll"] = {
             "terminal_status": poll_result.terminal_status,
@@ -1189,14 +1350,18 @@ def main(argv: list[str] | None = None) -> int:
             "elapsed_sec": poll_result.elapsed_sec,
             "run_artifact_dir": poll_result.run_artifact_dir,
             "run_artifact_dir_resolution": poll_result.run_artifact_dir_resolution,
+            "run_to_done_resolution_method": poll_result.run_to_done_resolution_method,
             "browse_error": poll_result.browse_error,
-            "pointer_seen_console_run_id": poll_result.pointer_seen_console_run_id,
-            "pointer_seen_run_dir": poll_result.pointer_seen_run_dir,
+            "pointer_console_run_id_seen": poll_result.pointer_console_run_id_seen,
+            "pointer_run_dir_seen": poll_result.pointer_run_dir_seen,
+            "fs_scan_checked_count": poll_result.fs_scan_checked_count,
             "pointer_http_code": poll_result.pointer_http_code,
         }
         result["run_artifact_dir_resolution"] = poll_result.run_artifact_dir_resolution
-        result["pointer_seen_console_run_id"] = poll_result.pointer_seen_console_run_id
-        result["pointer_seen_run_dir"] = poll_result.pointer_seen_run_dir
+        result["run_to_done_resolution_method"] = poll_result.run_to_done_resolution_method
+        result["pointer_console_run_id_seen"] = poll_result.pointer_console_run_id_seen
+        result["pointer_run_dir_seen"] = poll_result.pointer_run_dir_seen
+        result["fs_scan_checked_count"] = poll_result.fs_scan_checked_count
         result["pointer_http_code"] = poll_result.pointer_http_code
         result["links"] = {
             "run_to_done_dir": poll_result.run_to_done_dir,
@@ -1223,6 +1388,7 @@ def main(argv: list[str] | None = None) -> int:
                 proof_path=proof_for_alert,
                 novnc_url=novnc_url,
                 state=state,
+                webhook_preflight=webhook_preflight,
             )
             return finalize(0)
 
@@ -1245,6 +1411,7 @@ def main(argv: list[str] | None = None) -> int:
                 proof_path=proof_for_alert,
                 novnc_url=None,
                 state=state,
+                webhook_preflight=webhook_preflight,
             )
             return finalize(1)
 
@@ -1281,16 +1448,24 @@ def main(argv: list[str] | None = None) -> int:
                 },
             )
             if trig.state == "FAILED" or not (trig.run_id or "").strip():
+                error_class = sanitize_error_class(
+                    trig.body.get("error_class") if isinstance(trig.body, dict) else None,
+                    default=f"VALIDATOR_TRIGGER_FAIL_{validator_action}",
+                )
                 validators.append(
                     {
                         "action": validator_action,
                         "status": "FAIL",
                         "terminal_status": TERMINAL_FAIL,
                         "run_id": trig.run_id,
-                        "error_class": sanitize_error_class(
-                            trig.body.get("error_class") if isinstance(trig.body, dict) else None,
-                            default=f"VALIDATOR_TRIGGER_FAIL_{validator_action}",
-                        ),
+                        "error_class": error_class,
+                    }
+                )
+                result["warnings"].append(
+                    {
+                        "warning": "VALIDATOR_TRIGGER_FAILED",
+                        "validator": validator_action,
+                        "error_class": error_class,
                     }
                 )
                 continue
@@ -1322,29 +1497,16 @@ def main(argv: list[str] | None = None) -> int:
                     "elapsed_sec": val_result.get("elapsed_sec"),
                 }
             )
+            if val_terminal != TERMINAL_SUCCESS:
+                result["warnings"].append(
+                    {
+                        "warning": "VALIDATOR_FAILED",
+                        "validator": validator_action,
+                        "error_class": val_error,
+                    }
+                )
 
         result["validators"] = validators
-        failed_validator = next((item for item in validators if item.get("status") == "FAIL"), None)
-        if failed_validator:
-            error_class = sanitize_error_class(
-                failed_validator.get("error_class"),
-                default="VALIDATOR_FAILED",
-            )
-            result["status"] = TERMINAL_FAIL
-            result["error_class"] = error_class
-            proof_for_alert = poll_result.proof_path or rel_path(bundle_dir / "RESULT.json", repo_root)
-            result["alert"] = send_terminal_alert(
-                project=args.project,
-                action=args.action,
-                terminal_status=TERMINAL_FAIL,
-                remote_run_id=remote_run_id,
-                error_class=error_class,
-                proof_path=proof_for_alert,
-                novnc_url=None,
-                state=state,
-            )
-            return finalize(1)
-
         result["status"] = TERMINAL_SUCCESS
         result["error_class"] = None
         result["alert"] = {
@@ -1353,6 +1515,7 @@ def main(argv: list[str] | None = None) -> int:
             "deduped": False,
             "hash": "",
             "error_class": "",
+            "notify": webhook_preflight if not webhook_preflight.get("ok") else {},
         }
         return finalize(0)
     except Exception as exc:  # noqa: BLE001
@@ -1369,6 +1532,7 @@ def main(argv: list[str] | None = None) -> int:
             proof_path=proof_for_alert,
             novnc_url=None,
             state=state,
+            webhook_preflight=webhook_preflight,
         )
         return finalize(1)
 

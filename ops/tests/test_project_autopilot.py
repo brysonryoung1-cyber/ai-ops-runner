@@ -12,6 +12,23 @@ def _load_result(artifacts_root: Path, run_id: str) -> dict:
     return json.loads(result_path.read_text(encoding="utf-8"))
 
 
+def _write_run_to_done_bundle(
+    artifacts_root: Path,
+    run_dir_name: str,
+    *,
+    proof_payload: dict,
+    precheck_payload: dict | None = None,
+) -> Path:
+    run_dir = artifacts_root / "soma_kajabi" / "run_to_done" / run_dir_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "PROOF.json").write_text(json.dumps(proof_payload), encoding="utf-8")
+    (run_dir / "PRECHECK.json").write_text(
+        json.dumps(precheck_payload or {"status": "PASS"}),
+        encoding="utf-8",
+    )
+    return run_dir
+
+
 class _FakeDiscordResponse:
     def __init__(self, status_code: int = 204):
         self._status_code = status_code
@@ -30,24 +47,38 @@ def test_mock_waiting_writes_bundle_and_dedupes_alert(tmp_path: Path, monkeypatc
     artifacts_root = tmp_path / "artifacts"
     state_root = tmp_path / "state"
     sent_messages: list[str] = []
+    remote_run_id = "20260305120000-abcd"
+    _write_run_to_done_bundle(
+        artifacts_root,
+        "run_to_done_20260305T120000Z_wait1111",
+        proof_payload={
+            "status": "WAITING_FOR_HUMAN",
+            "console_run_id": remote_run_id,
+            "novnc_url": "https://aiops-1.tailc75c62.ts.net/novnc/vnc.html?autoconnect=1",
+        },
+    )
 
     def _fake_notify(*, content: str, timeout_sec: int = 10):  # noqa: ARG001
         sent_messages.append(content)
         return {"ok": True, "http_code": 204}
 
     monkeypatch.setattr("ops.system.project_autopilot.send_discord_webhook_alert", _fake_notify)
+    monkeypatch.setattr(
+        "ops.system.project_autopilot.build_webhook_preflight",
+        lambda: {"ok": True, "source": "env", "error_class": None},
+    )
 
     rc1 = main(
         [
             "--project",
             "soma_kajabi",
-            "--action",
-            "soma_run_to_done",
-            "--mock",
-            "--mock-terminal-status",
-            "WAITING_FOR_HUMAN",
-            "--mock-run-id",
-            "20260305120000-abcd",
+                "--action",
+                "soma_run_to_done",
+                "--mock",
+                "--mock-terminal-status",
+                "WAITING_FOR_HUMAN",
+                "--mock-run-id",
+                remote_run_id,
             "--run-id",
             "ap_wait_1",
             "--state-root",
@@ -138,6 +169,17 @@ def test_mock_doctor_fail_exits_nonzero_and_writes_result(tmp_path: Path, monkey
 def test_mock_success_writes_proof_bundle(tmp_path: Path, monkeypatch) -> None:
     artifacts_root = tmp_path / "artifacts"
     state_root = tmp_path / "state"
+    remote_run_id = "20260305122000-abcd"
+    run_dir_name = "run_to_done_20260305T122000Z_scan1111"
+    _write_run_to_done_bundle(
+        artifacts_root,
+        run_dir_name,
+        proof_payload={
+            "status": "SUCCESS",
+            "console_run_id": remote_run_id,
+            "acceptance_path": "artifacts/soma_kajabi/acceptance/mock_run",
+        },
+    )
 
     monkeypatch.setattr(
         "ops.system.project_autopilot.send_discord_webhook_alert",
@@ -154,7 +196,7 @@ def test_mock_success_writes_proof_bundle(tmp_path: Path, monkeypatch) -> None:
             "--mock-terminal-status",
             "SUCCESS",
             "--mock-run-id",
-            "20260305122000-abcd",
+            remote_run_id,
             "--run-id",
             "ap_success",
             "--state-root",
@@ -175,37 +217,42 @@ def test_mock_success_writes_proof_bundle(tmp_path: Path, monkeypatch) -> None:
     assert (raw / "poll_001.json").is_file()
     poll_files = sorted(raw.glob("poll_*.json"))
     assert poll_files
-    assert (raw / "browse_run_to_done_dirs.json").is_file()
 
     result = _load_result(artifacts_root, "ap_success")
     assert result["status"] == "SUCCESS"
     assert result["alert"]["needed"] is False
-    assert result["run_artifact_dir_resolution"] == "listing"
-    assert result["links"]["run_to_done_dir"].startswith("artifacts/soma_kajabi/run_to_done/")
+    assert result["run_artifact_dir_resolution"] == "fs_scan"
+    assert result["poll"]["run_to_done_resolution_method"] == "fs_scan"
+    assert result["links"]["run_to_done_dir"] == f"artifacts/soma_kajabi/run_to_done/{run_dir_name}"
 
 
-def test_pointer_match_bypasses_listing_and_fetches_proof(tmp_path: Path) -> None:
+def test_fs_scan_resolution_finds_proof_by_console_run_id(tmp_path: Path) -> None:
     artifacts_root = tmp_path / "artifacts"
     state_root = tmp_path / "state"
-    run_dir_name = "run_to_done_20260305T123000Z_ptr1111"
-    remote_run_id = "20260305123000-abcd"
-    spec_path = tmp_path / "mock_pointer_match.json"
-    spec_path.write_text(
+    remote_run_id = "20260305122500-scan"
+    _write_run_to_done_bundle(
+        artifacts_root,
+        "run_to_done_20260305T122459Z_old0001",
+        proof_payload={"status": "SUCCESS", "console_run_id": "20260305122459-old1"},
+    )
+    matched_run_dir = _write_run_to_done_bundle(
+        artifacts_root,
+        "run_to_done_20260305T122500Z_scan2222",
+        proof_payload={
+            "status": "SUCCESS",
+            "console_run_id": remote_run_id,
+            "acceptance_path": "artifacts/soma_kajabi/acceptance/mock_fs_scan",
+        },
+    )
+    pointer_path = artifacts_root / "soma_kajabi" / "run_to_done" / "LATEST_RUN.json"
+    pointer_path.write_text(
         json.dumps(
             {
-                "pointer_payload": {
-                    "console_run_id": remote_run_id,
-                    "run_dir": run_dir_name,
-                    "status": "SUCCESS",
-                    "updated_at": "2026-03-05T12:30:00Z",
-                    "error_class": None,
-                },
-                "run_to_done_entries": [run_dir_name],
-                "proof_payload": {
-                    "status": "SUCCESS",
-                    "acceptance_path": "artifacts/soma_kajabi/acceptance/mock_pointer_match",
-                },
-                "precheck_payload": {"status": "PASS"},
+                "console_run_id": "20260305122459-old1",
+                "run_dir": "run_to_done_20260305T122459Z_old0001",
+                "status": "SUCCESS",
+                "updated_at": "2026-03-05T12:25:01Z",
+                "error_class": None,
             }
         ),
         encoding="utf-8",
@@ -230,47 +277,46 @@ def test_pointer_match_bypasses_listing_and_fetches_proof(tmp_path: Path) -> Non
             str(artifacts_root),
             "--validator-actions",
             "",
-            "--mock-hq-file",
-            str(spec_path),
         ]
     )
 
     assert rc == 0
     result = _load_result(artifacts_root, "ap_pointer_match")
     assert result["status"] == "SUCCESS"
-    assert result["run_artifact_dir_resolution"] == "pointer"
-    assert result["pointer_seen_console_run_id"] == remote_run_id
-    assert result["pointer_seen_run_dir"] == run_dir_name
-    assert result["poll"]["run_artifact_dir"] == f"artifacts/soma_kajabi/run_to_done/{run_dir_name}"
-    assert result["links"]["proof_path"] == f"artifacts/soma_kajabi/run_to_done/{run_dir_name}/PROOF.json"
+    assert result["run_artifact_dir_resolution"] == "fs_scan"
+    assert result["poll"]["run_to_done_resolution_method"] == "fs_scan"
+    assert result["fs_scan_checked_count"] >= 1
+    assert result["poll"]["run_artifact_dir"] == (
+        f"artifacts/soma_kajabi/run_to_done/{matched_run_dir.name}"
+    )
+    assert result["links"]["proof_path"] == (
+        f"artifacts/soma_kajabi/run_to_done/{matched_run_dir.name}/PROOF.json"
+    )
 
-    raw = artifacts_root / "system" / "project_autopilot" / "ap_pointer_match" / "raw"
-    assert (raw / "browse_run_to_done_pointer.json").is_file()
-    assert not (raw / "browse_run_to_done_dirs.json").exists()
 
-
-def test_pointer_mismatch_triggers_listing_fallback(tmp_path: Path) -> None:
+def test_pointer_resolution_match_uses_local_pointer(tmp_path: Path) -> None:
     artifacts_root = tmp_path / "artifacts"
     state_root = tmp_path / "state"
     remote_run_id = "20260305124000-abcd"
-    run_dir_name = "run_to_done_20260305T124000Z_list2222"
-    spec_path = tmp_path / "mock_pointer_mismatch.json"
-    spec_path.write_text(
+    run_dir_name = "run_to_done_20260305T124000Z_ptr2222"
+    _write_run_to_done_bundle(
+        artifacts_root,
+        run_dir_name,
+        proof_payload={
+            "status": "SUCCESS",
+            "acceptance_path": "artifacts/soma_kajabi/acceptance/mock_pointer_match",
+        },
+    )
+    pointer_path = artifacts_root / "soma_kajabi" / "run_to_done" / "LATEST_RUN.json"
+    pointer_path.parent.mkdir(parents=True, exist_ok=True)
+    pointer_path.write_text(
         json.dumps(
             {
-                "pointer_payload": {
-                    "console_run_id": "20260305123959-zzzz",
-                    "run_dir": "run_to_done_20260305T123959Z_ptr9999",
-                    "status": "SUCCESS",
-                    "updated_at": "2026-03-05T12:40:00Z",
-                    "error_class": None,
-                },
-                "run_to_done_entries": [run_dir_name],
-                "proof_payload": {
-                    "status": "SUCCESS",
-                    "acceptance_path": "artifacts/soma_kajabi/acceptance/mock_pointer_listing",
-                },
-                "precheck_payload": {"status": "PASS"},
+                "console_run_id": remote_run_id,
+                "run_dir": run_dir_name,
+                "status": "SUCCESS",
+                "updated_at": "2026-03-05T12:40:00Z",
+                "error_class": None,
             }
         ),
         encoding="utf-8",
@@ -295,26 +341,158 @@ def test_pointer_mismatch_triggers_listing_fallback(tmp_path: Path) -> None:
             str(artifacts_root),
             "--validator-actions",
             "",
-            "--mock-hq-file",
-            str(spec_path),
         ]
     )
 
     assert rc == 0
     result = _load_result(artifacts_root, "ap_pointer_mismatch")
     assert result["status"] == "SUCCESS"
-    assert result["run_artifact_dir_resolution"] == "listing"
-    assert result["pointer_seen_console_run_id"] == "20260305123959-zzzz"
-    assert result["pointer_seen_run_dir"] == "run_to_done_20260305T123959Z_ptr9999"
+    assert result["run_artifact_dir_resolution"] == "pointer"
+    assert result["poll"]["run_to_done_resolution_method"] == "pointer"
+    assert result["pointer_console_run_id_seen"] == remote_run_id
+    assert result["pointer_run_dir_seen"] == run_dir_name
     assert result["poll"]["run_artifact_dir"] == f"artifacts/soma_kajabi/run_to_done/{run_dir_name}"
 
-    raw = artifacts_root / "system" / "project_autopilot" / "ap_pointer_mismatch" / "raw"
-    assert (raw / "browse_run_to_done_pointer.json").is_file()
-    assert (raw / "browse_run_to_done_dirs.json").is_file()
+
+def test_validator_trigger_failure_is_warning_not_terminal_fail(tmp_path: Path) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    state_root = tmp_path / "state"
+    remote_run_id = "20260305125000-abcd"
+    _write_run_to_done_bundle(
+        artifacts_root,
+        "run_to_done_20260305T125000Z_scan3333",
+        proof_payload={
+            "status": "SUCCESS",
+            "console_run_id": remote_run_id,
+            "acceptance_path": "artifacts/soma_kajabi/acceptance/mock_validator_warning",
+        },
+    )
+    spec_path = tmp_path / "mock_validator_trigger_fail.json"
+    spec_path.write_text(
+        json.dumps(
+            {
+                "actions": {
+                    "soma_kajabi_verify_business_dod": {
+                        "trigger": {
+                            "state": "FAILED",
+                            "status_code": 403,
+                            "message": "forbidden",
+                            "body": {"error_class": "VALIDATOR_TRIGGER_FAIL_SOMA_KAJABI_VERIFY_BUSINESS_DOD"},
+                        },
+                        "polls": [],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rc = main(
+        [
+            "--project",
+            "soma_kajabi",
+            "--action",
+            "soma_run_to_done",
+            "--mock",
+            "--mock-terminal-status",
+            "SUCCESS",
+            "--mock-run-id",
+            remote_run_id,
+            "--run-id",
+            "ap_validator_warning",
+            "--state-root",
+            str(state_root),
+            "--artifacts-root",
+            str(artifacts_root),
+            "--validator-actions",
+            "soma_kajabi_verify_business_dod",
+            "--mock-hq-file",
+            str(spec_path),
+        ]
+    )
+
+    assert rc == 0
+    result = _load_result(artifacts_root, "ap_validator_warning")
+    assert result["status"] == "SUCCESS"
+    assert result["error_class"] is None
+    assert result["validators"][0]["status"] == "FAIL"
+    assert result["warnings"][-1] == {
+        "warning": "VALIDATOR_TRIGGER_FAILED",
+        "validator": "soma_kajabi_verify_business_dod",
+        "error_class": "VALIDATOR_TRIGGER_FAIL_SOMA_KAJABI_VERIFY_BUSINESS_DOD",
+    }
+
+
+def test_webhook_missing_is_recorded_but_not_fatal(tmp_path: Path) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    state_root = tmp_path / "state"
+    remote_run_id = "20260305125500-abcd"
+    _write_run_to_done_bundle(
+        artifacts_root,
+        "run_to_done_20260305T125500Z_scan4444",
+        proof_payload={
+            "status": "SUCCESS",
+            "console_run_id": remote_run_id,
+            "acceptance_path": "artifacts/soma_kajabi/acceptance/mock_webhook_missing",
+        },
+    )
+
+    rc = main(
+        [
+            "--project",
+            "soma_kajabi",
+            "--action",
+            "soma_run_to_done",
+            "--mock",
+            "--mock-terminal-status",
+            "SUCCESS",
+            "--mock-run-id",
+            remote_run_id,
+            "--run-id",
+            "ap_webhook_missing",
+            "--state-root",
+            str(state_root),
+            "--artifacts-root",
+            str(artifacts_root),
+            "--validator-actions",
+            "",
+        ]
+    )
+
+    assert rc == 0
+    result = _load_result(artifacts_root, "ap_webhook_missing")
+    assert result["status"] == "SUCCESS"
+    assert result["alert"]["needed"] is False
+    assert result["alert"]["sent"] is False
+    assert result["alert"]["notify"]["error_class"] == "DISCORD_WEBHOOK_MISSING"
+    assert {
+        "warning": "DISCORD_WEBHOOK_UNAVAILABLE",
+        "error_class": "DISCORD_WEBHOOK_MISSING",
+    } in result["warnings"]
 
 
 def test_mock_waiting_alert_uses_webhook_resolution_env_and_file(tmp_path: Path, monkeypatch) -> None:
     urls: list[str] = []
+    env_run_id = "20260305130000-env1"
+    file_run_id = "20260305130100-fil1"
+    _write_run_to_done_bundle(
+        tmp_path / "artifacts_env",
+        "run_to_done_20260305T130000Z_waitenv",
+        proof_payload={
+            "status": "WAITING_FOR_HUMAN",
+            "console_run_id": env_run_id,
+            "novnc_url": "https://aiops-1.tailc75c62.ts.net/novnc/vnc.html?autoconnect=1",
+        },
+    )
+    _write_run_to_done_bundle(
+        tmp_path / "artifacts_file",
+        "run_to_done_20260305T130100Z_waitfil",
+        proof_payload={
+            "status": "WAITING_FOR_HUMAN",
+            "console_run_id": file_run_id,
+            "novnc_url": "https://aiops-1.tailc75c62.ts.net/novnc/vnc.html?autoconnect=1",
+        },
+    )
 
     def _fake_urlopen(req, timeout=10):  # noqa: ANN001,ARG001
         urls.append(req.full_url)
@@ -334,7 +512,7 @@ def test_mock_waiting_alert_uses_webhook_resolution_env_and_file(tmp_path: Path,
             "--mock-terminal-status",
             "WAITING_FOR_HUMAN",
             "--mock-run-id",
-            "20260305130000-env1",
+            env_run_id,
             "--run-id",
             "ap_alert_env",
             "--state-root",
@@ -370,7 +548,7 @@ def test_mock_waiting_alert_uses_webhook_resolution_env_and_file(tmp_path: Path,
             "--mock-terminal-status",
             "WAITING_FOR_HUMAN",
             "--mock-run-id",
-            "20260305130100-fil1",
+            file_run_id,
             "--run-id",
             "ap_alert_file",
             "--state-root",
