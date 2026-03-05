@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
-import { executeAction, checkConnectivity, getHostdUrl, LONG_RUNNING_ACTIONS } from "@/lib/hostd";
+import {
+  executeAction,
+  checkConnectivity,
+  getHostdUrl,
+  LONG_RUNNING_ACTIONS,
+  resolveHostdAdminToken,
+} from "@/lib/hostd";
 import { acquireLock, releaseLock, getLockInfo, forceClearLock } from "@/lib/action-lock";
 import {
   writeAuditEntry,
@@ -45,6 +51,7 @@ function getAllowedOrigins(): Set<string> {
  */
 function validateOrigin(req: NextRequest): NextResponse | null {
   const allowedOrigins = getAllowedOrigins();
+  const adminToken = resolveHostdAdminToken();
 
   const origin = req.headers.get("origin");
   if (origin && allowedOrigins.has(origin)) {
@@ -82,7 +89,7 @@ function validateOrigin(req: NextRequest): NextResponse | null {
     required_header: "Origin or Sec-Fetch-Site: same-origin",
     trust_tailscale: process.env.OPENCLAW_TRUST_TAILSCALE === "1",
     hq_token_required: !!process.env.OPENCLAW_CONSOLE_TOKEN && process.env.OPENCLAW_TRUST_TAILSCALE !== "1",
-    admin_token_loaded: typeof process.env.OPENCLAW_ADMIN_TOKEN === "string" && process.env.OPENCLAW_ADMIN_TOKEN.length > 0,
+    admin_token_loaded: adminToken.token != null,
     origin_seen: req.headers.get("origin") ?? null,
     origin_allowed: false,
   };
@@ -198,7 +205,8 @@ async function runActionAsync(
         errorForRecord,
         runId,
         undefined,
-        result.artifact_dir ?? undefined
+        result.artifact_dir ?? undefined,
+        result.error_class ?? undefined
       );
       writeRunRecord(runRecord);
       if (
@@ -310,15 +318,15 @@ export async function POST(req: NextRequest) {
   // Admin-only actions: deploy_and_verify (and ship_only when exposed). Fail-closed.
   const adminOnlyActions = new Set(["deploy_and_verify"]);
   if (adminOnlyActions.has(actionName)) {
-    const adminToken = process.env.OPENCLAW_ADMIN_TOKEN;
-    if (typeof adminToken !== "string" || adminToken.length === 0) {
+    const adminToken = resolveHostdAdminToken();
+    if (!adminToken.token) {
       return NextResponse.json(
         { ok: false, error: "admin not configured" },
         { status: 503 }
       );
     }
     const provided = req.headers.get("x-openclaw-token");
-    if (provided !== adminToken) {
+    if (provided !== adminToken.token) {
       return NextResponse.json(
         {
           ok: false,
@@ -328,7 +336,7 @@ export async function POST(req: NextRequest) {
           required_header: "X-OpenClaw-Token (admin)",
           trust_tailscale: process.env.OPENCLAW_TRUST_TAILSCALE === "1",
           hq_token_required: true,
-          admin_token_loaded: typeof adminToken === "string" && adminToken.length > 0,
+          admin_token_loaded: adminToken.token != null,
           origin_seen: req.headers.get("origin") ?? null,
           origin_allowed: true,
         },
@@ -598,7 +606,8 @@ export async function POST(req: NextRequest) {
       errorForRecord,
       runId,
       undefined,
-      result.artifact_dir ?? undefined
+      result.artifact_dir ?? undefined,
+      result.error_class ?? undefined
     );
     writeRunRecord(runRecord);
 

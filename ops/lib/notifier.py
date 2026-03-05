@@ -9,22 +9,35 @@ from pathlib import Path
 from typing import Any
 from urllib import error, request
 
+DISCORD_WEBHOOK_ENV_VARS = (
+    "OPENCLAW_DISCORD_WEBHOOK_URL",
+    "DISCORD_WEBHOOK_URL",
+    "DISCORD_WEBHOOK",
+)
 DISCORD_WEBHOOK_SECRET_FILE = Path("/etc/ai-ops-runner/secrets/discord_webhook_url")
+DISCORD_WEBHOOK_CONFIG_FILE = Path("/etc/ai-ops-runner/config/discord_webhook_url")
 
 
 def resolve_discord_webhook_url() -> tuple[str | None, str]:
     """Resolve Discord webhook URL from env or secret file."""
 
-    env_url = os.environ.get("OPENCLAW_DISCORD_WEBHOOK_URL", "").strip()
-    if env_url:
-        return env_url, "env"
+    for env_name in DISCORD_WEBHOOK_ENV_VARS:
+        env_url = os.environ.get(env_name, "").strip()
+        if env_url:
+            return env_url, "env"
 
-    try:
-        if DISCORD_WEBHOOK_SECRET_FILE.exists():
-            file_url = DISCORD_WEBHOOK_SECRET_FILE.read_text(encoding="utf-8").strip()
+    saw_file_error = False
+    for candidate in (DISCORD_WEBHOOK_SECRET_FILE, DISCORD_WEBHOOK_CONFIG_FILE):
+        try:
+            if not candidate.exists():
+                continue
+            file_url = candidate.read_text(encoding="utf-8").strip()
             if file_url:
                 return file_url, "file"
-    except OSError:
+        except OSError:
+            saw_file_error = True
+
+    if saw_file_error:
         return None, "file_error"
 
     return None, "missing"

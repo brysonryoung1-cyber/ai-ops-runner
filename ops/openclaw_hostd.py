@@ -98,10 +98,16 @@ VERSION = "1.0.0"
 HOST = "127.0.0.1"
 PORT = 8877
 TOKEN_PATH = "/etc/ai-ops-runner/secrets/openclaw_admin_token"
+HOSTD_ENV_PATH = "/etc/ai-ops-runner/secrets/openclaw_hostd.env"
 ROOT_DIR = os.environ.get("OPENCLAW_REPO_ROOT", "/opt/ai-ops-runner")
 ARTIFACTS_HOSTD = "artifacts/hostd"
 MAX_STDOUT_BYTES = 2 * 1024 * 1024
 MAX_STDERR_BYTES = 512 * 1024
+ADMIN_TOKEN_EVIDENCE = (
+    "env OPENCLAW_ADMIN_TOKEN",
+    f"file {TOKEN_PATH}",
+    f"file {HOSTD_ENV_PATH}: OPENCLAW_ADMIN_TOKEN",
+)
 
 
 def _load_allowlist_from_registry() -> dict | None:
@@ -313,14 +319,56 @@ def handle_secrets_upload(body_raw: bytes) -> tuple[int, dict]:
     })
 
 
-def load_admin_token() -> str | None:
-    """Read admin token from file. Returns None if file missing or unreadable."""
+def _read_text_file(path: str) -> str | None:
     try:
-        if not os.path.isfile(TOKEN_PATH):
+        if not os.path.isfile(path):
             return None
-        with open(TOKEN_PATH, "r", encoding="utf-8") as f:
-            t = f.read().strip()
-            return t if t else None
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _parse_env_file_value(raw: str, key: str) -> str | None:
+    for line in raw.splitlines():
+        trimmed = line.strip()
+        if not trimmed or trimmed.startswith("#"):
+            continue
+        if "=" not in trimmed:
+            continue
+        lhs, rhs = trimmed.split("=", 1)
+        if lhs.strip() != key:
+            continue
+        value = rhs.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        value = value.strip()
+        return value or None
+    return None
+
+
+def resolve_admin_token() -> tuple[str | None, str, tuple[str, ...]]:
+    """Resolve admin token consistently across env, secret file, and hostd env file."""
+    env_token = os.environ.get("OPENCLAW_ADMIN_TOKEN", "").strip()
+    if env_token:
+        return env_token, "env", ADMIN_TOKEN_EVIDENCE
+
+    file_token = (_read_text_file(TOKEN_PATH) or "").strip()
+    if file_token:
+        return file_token, "file", ADMIN_TOKEN_EVIDENCE
+
+    env_file_token = _parse_env_file_value(_read_text_file(HOSTD_ENV_PATH) or "", "OPENCLAW_ADMIN_TOKEN")
+    if env_file_token:
+        return env_file_token, "env_file", ADMIN_TOKEN_EVIDENCE
+
+    return None, "missing", ADMIN_TOKEN_EVIDENCE
+
+
+def load_admin_token() -> str | None:
+    """Read admin token from env, file, or hostd env file. Returns None when unavailable."""
+    try:
+        token, _source, _evidence = resolve_admin_token()
+        return token
     except OSError:
         return None
 
@@ -512,12 +560,21 @@ class Handler(BaseHTTPRequestHandler):
     def _require_admin(self) -> bool:
         """Return True if admin token present and matches. Sends 403/503 and returns False otherwise."""
         token = self.headers.get("X-OpenClaw-Admin-Token") or ""
-        expected = load_admin_token()
+        expected, source, evidence = resolve_admin_token()
         if expected is None:
-            self.send_json(503, {"error": "admin not configured"})
+            self.send_json(503, {
+                "error": "admin not configured",
+                "error_class": "HOSTD_AUTH_MISSING",
+                "token_sources_checked": list(evidence),
+            })
             return False
         if not token or not constant_time_compare(token, expected):
-            self.send_json(403, {"error": "Forbidden"})
+            self.send_json(403, {
+                "error": "Forbidden",
+                "error_class": "HOSTD_FORBIDDEN",
+                "required_header": "X-OpenClaw-Admin-Token",
+                "auth_source": source,
+            })
             return False
         return True
 
