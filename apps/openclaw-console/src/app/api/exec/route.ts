@@ -131,7 +131,7 @@ async function runActionAsync(
   params?: Record<string, unknown>
 ): Promise<void> {
   try {
-    const result = await executeAction(actionName, params);
+    const result = await executeAction(actionName, params, runId);
     const finishedAt = new Date();
 
     if (result.httpStatus === 423) {
@@ -496,7 +496,7 @@ export async function POST(req: NextRequest) {
 
   try {
     // executeAction validates allowlist and calls hostd (fail-closed)
-    const result = await executeAction(actionName, execParams);
+    const result = await executeAction(actionName, execParams, runId);
 
     // Soma-first gate: pass through 423 Locked from hostd
     if (result.httpStatus === 423) {

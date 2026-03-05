@@ -215,7 +215,7 @@ export async function POST(
   const startedAt = new Date();
 
   try {
-    const result = await executeAction(action);
+    const result = await executeAction(action, undefined, runId);
 
     if (result.error?.includes("not configured") || result.error?.includes("unreachable")) {
       const finishedAt = new Date();

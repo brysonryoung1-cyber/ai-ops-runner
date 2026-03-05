@@ -111,7 +111,7 @@ export async function POST(req: NextRequest) {
 
   void (async () => {
     try {
-      const result = await executeAction(actionName);
+      const result = await executeAction(actionName, undefined, runId);
       const finishedAt = new Date();
 
       let errorForRecord = result.error || null;
