@@ -200,13 +200,13 @@ def _looks_like_console_run_id(value: str) -> bool:
     return bool(re.match(r"^\d{14}-[A-Za-z0-9_-]+$", value or ""))
 
 
-def _resolve_console_run_id(*, pointer_run_id: str, fallback_run_id: str) -> str:
+def _resolve_console_run_id(*, pointer_run_id: str) -> str | None:
     explicit = (os.environ.get("OPENCLAW_CONSOLE_RUN_ID") or "").strip()
     if explicit:
         return explicit
     if _looks_like_console_run_id(pointer_run_id):
         return pointer_run_id
-    return fallback_run_id
+    return None
 
 
 def write_latest_run_pointer(
@@ -230,10 +230,9 @@ def write_latest_run_pointer(
     pointer_dir = artifacts_root / "soma_kajabi" / "run_to_done"
     pointer_dir.mkdir(parents=True, exist_ok=True)
     pointer_path = pointer_dir / LATEST_RUN_POINTER_NAME
-    normalized_console_run_id = str(console_run_id or "").strip() or str(run_id).strip()
     payload = {
         "run_id": run_id,
-        "console_run_id": normalized_console_run_id,
+        "console_run_id": str(console_run_id).strip() if str(console_run_id or "").strip() else None,
         "run_dir": out_dir.name,
         "updated_at": _utc_now_z(),
         "status": _normalize_pointer_status(status),
@@ -274,23 +273,34 @@ def _safe_write_latest_run_pointer(
         )
 
 
-def write_initial_proof_files(out_dir: Path, run_id: str) -> None:
+def write_initial_proof_files(
+    out_dir: Path,
+    run_id: str,
+    *,
+    console_run_id: str | None = None,
+) -> None:
     """Write PROOF.json and PRECHECK.json at run start so remote helpers never 404."""
     now = datetime.now(timezone.utc).isoformat()
-    _write_json(out_dir / "PROOF.json", {
+    proof_payload = {
         "run_id": run_id,
         "status": "RUNNING",
         "phase": "init",
         "started_at": now,
         "project": "soma_kajabi",
         "action": "soma_run_to_done",
-    })
-    _write_json(out_dir / "PRECHECK.json", {
+    }
+    precheck_payload = {
         "run_id": run_id,
         "status": "RUNNING",
         "precheck": "pending",
         "started_at": now,
-    })
+    }
+    normalized_console_run_id = str(console_run_id or "").strip()
+    if normalized_console_run_id:
+        proof_payload["console_run_id"] = normalized_console_run_id
+        precheck_payload["console_run_id"] = normalized_console_run_id
+    _write_json(out_dir / "PROOF.json", proof_payload)
+    _write_json(out_dir / "PRECHECK.json", precheck_payload)
 
 
 def _update_proof(out_dir: Path, run_id: str, updates: dict) -> None:
@@ -330,21 +340,21 @@ def main() -> int:
     root = _repo_root()
     run_id = f"run_to_done_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
     pointer_run_id = (os.environ.get("OPENCLAW_RUN_ID") or run_id).strip() or run_id
-    console_run_id = _resolve_console_run_id(pointer_run_id=pointer_run_id, fallback_run_id=run_id)
+    console_run_id = _resolve_console_run_id(pointer_run_id=pointer_run_id)
     out_dir = root / "artifacts" / "soma_kajabi" / "run_to_done" / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
     def _write_pointer(status: str, error_class: str | None = None) -> None:
         _safe_write_latest_run_pointer(
             out_dir,
-            pointer_run_id,
+            run_id,
             status=status,
             error_class=error_class,
             console_run_id=console_run_id,
         )
 
     # Write initial proof files immediately so remote helpers never 404
-    write_initial_proof_files(out_dir, run_id)
+    write_initial_proof_files(out_dir, run_id, console_run_id=console_run_id)
     _write_pointer(status="RUNNING")
 
     # PRECHECK
