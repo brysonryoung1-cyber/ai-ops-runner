@@ -1,9 +1,10 @@
 [Unit]
-Description=OpenClaw Soma Autopilot timer (every 10 minutes)
+Description=OpenClaw Soma Project Autopilot timer (every 30 minutes)
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=10min
+OnBootSec=5min
+OnUnitActiveSec=30min
+RandomizedDelaySec=300
 Persistent=true
 
 [Install]

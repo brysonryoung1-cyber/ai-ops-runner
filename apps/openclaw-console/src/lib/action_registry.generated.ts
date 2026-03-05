@@ -68,6 +68,7 @@ export const ACTION_TO_HOSTD: Record<string, string> = {
   "soma_snapshot_practitioner": "soma_snapshot_practitioner",
   "soma_status": "soma_status",
   "soma_zane_finish_plan": "soma_zane_finish_plan",
+  "system.autopilot.soma_kajabi": "system.autopilot.soma_kajabi",
   "system.brain.loop": "system.brain.loop",
   "system.canary": "system.canary",
   "system.doctor.matrix": "system.doctor.matrix",
