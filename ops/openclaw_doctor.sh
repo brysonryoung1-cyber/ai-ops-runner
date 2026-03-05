@@ -829,7 +829,7 @@ fi
 echo "--- Systemd Failed Units ---"
 if command -v systemctl >/dev/null 2>&1; then
   FAILED_UNITS_RAW="$(systemctl --no-pager --plain --failed --type=service --type=timer 2>/dev/null || true)"
-  FAILED_UNITS="$(
+  ALL_FAILED_UNITS="$(
     printf '%s\n' "$FAILED_UNITS_RAW" | awk 'NF && $1 ~ /\.(service|timer)$/ {print $1}' | head -200
   )"
 
@@ -845,19 +845,37 @@ if command -v systemctl >/dev/null 2>&1; then
     fi
   done
 
-  COMBINED_FAILED="$(
-    printf '%s\n%s' "$FAILED_UNITS" "$TRACKED_FAILED" | sed '/^[[:space:]]*$/d' | sort -u | head -200
-  )"
-  if [ -n "$COMBINED_FAILED" ]; then
-    printf '%s\n' "$COMBINED_FAILED" > "$SYSTEMD_FAILED_TXT"
+  TRACKED_FAILED_COUNT="$(printf '%s\n' "$TRACKED_FAILED" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+  ALL_FAILED_COUNT="$(printf '%s\n' "$ALL_FAILED_UNITS" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+
+  {
+    echo "tracked_failed_units:"
+    if [ "$TRACKED_FAILED_COUNT" -gt 0 ]; then
+      printf '%s\n' "$TRACKED_FAILED" | sed '/^[[:space:]]*$/d'
+    else
+      echo "none"
+    fi
+    echo ""
+    echo "all_failed_units:"
+    if [ "$ALL_FAILED_COUNT" -gt 0 ]; then
+      printf '%s\n' "$ALL_FAILED_UNITS" | sed '/^[[:space:]]*$/d'
+    else
+      echo "none"
+    fi
+  } > "$SYSTEMD_FAILED_TXT"
+
+  if [ "$TRACKED_FAILED_COUNT" -gt 0 ]; then
     SYSTEMD_FAILED_STATUS="FAIL"
-    SYSTEMD_FAILED_COUNT="$(printf '%s\n' "$COMBINED_FAILED" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
-    fail "Failed systemd units detected ($SYSTEMD_FAILED_COUNT) — see $SYSTEMD_FAILED_TXT"
+    SYSTEMD_FAILED_COUNT="$TRACKED_FAILED_COUNT"
+    fail "Tracked systemd units failed ($TRACKED_FAILED_COUNT) — see $SYSTEMD_FAILED_TXT"
   else
-    echo "none" > "$SYSTEMD_FAILED_TXT"
     SYSTEMD_FAILED_STATUS="PASS"
     SYSTEMD_FAILED_COUNT=0
-    pass "No failed systemd units (tracked: openclaw-autopilot, openclaw-novnc-guard, openclaw-reconcile)"
+    if [ "$ALL_FAILED_COUNT" -gt 0 ]; then
+      pass "Tracked systemd units healthy; non-tracked failed units recorded ($ALL_FAILED_COUNT)"
+    else
+      pass "No failed systemd units (tracked: openclaw-autopilot, openclaw-novnc-guard, openclaw-reconcile)"
+    fi
   fi
 
   SYSTEMD_FAILED_TRACKED_JSON="$(python3 -c "
@@ -885,10 +903,27 @@ try:
     tracked = json.loads(tracked_json)
 except json.JSONDecodeError:
     tracked = {}
+all_failed_count = 0
+try:
+    with open(failed_txt, "r", encoding="utf-8") as f:
+        section = ""
+        for raw in f:
+            line = raw.strip()
+            if line == "all_failed_units:":
+                section = "all"
+                continue
+            if line in ("tracked_failed_units:", "", "none"):
+                continue
+            if section == "all":
+                all_failed_count += 1
+except OSError:
+    all_failed_count = 0
+
 payload = {
     "timestamp": datetime.now(timezone.utc).isoformat(),
     "status": status,
     "failed_count": failed_count,
+    "all_failed_count": all_failed_count,
     "failed_txt": failed_txt,
     "tracked_units": tracked,
 }
