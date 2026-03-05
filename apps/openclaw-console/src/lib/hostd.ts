@@ -10,6 +10,7 @@
  */
 
 import { Agent, fetch as undiciFetch } from "undici";
+import { existsSync, readFileSync } from "fs";
 import { ACTION_TO_HOSTD } from "./action_registry.generated";
 
 /** Actions that may run >5 min; use extended exec timeout. Exported for async exec routing. */
@@ -43,7 +44,22 @@ export interface HostdResult {
   required_condition?: string;
 }
 
+export interface HostdAdminTokenResolution {
+  token: string | null;
+  source: "env" | "file" | "env_file" | "missing";
+  source_detail: string;
+  evidence: string[];
+}
+
 export const HOSTD_ACTIONS = Object.keys(ACTION_TO_HOSTD);
+
+const HOSTD_ADMIN_TOKEN_FILE = "/etc/ai-ops-runner/secrets/openclaw_admin_token";
+const HOSTD_ENV_FILE = "/etc/ai-ops-runner/secrets/openclaw_hostd.env";
+const HOSTD_ADMIN_TOKEN_EVIDENCE = [
+  "env OPENCLAW_ADMIN_TOKEN",
+  `file ${HOSTD_ADMIN_TOKEN_FILE}`,
+  `file ${HOSTD_ENV_FILE}: OPENCLAW_ADMIN_TOKEN`,
+] as const;
 
 function buildMockStdout(actionName: string): string {
   const payloads: Record<string, Record<string, unknown>> = {
@@ -107,6 +123,131 @@ export function getHostdUrl(): string | null {
   return url.replace(/\/$/, "");
 }
 
+function safeReadFile(path: string): string | null {
+  try {
+    if (!existsSync(path)) return null;
+    return readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+function parseEnvFileValue(raw: string, key: string): string | null {
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!match || match[1] !== key) continue;
+    let value = match[2].trim();
+    if (
+      (value.startsWith("\"") && value.endsWith("\"")) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    return value.trim() || null;
+  }
+  return null;
+}
+
+export function resolveHostdAdminToken(): HostdAdminTokenResolution {
+  const envToken = process.env.OPENCLAW_ADMIN_TOKEN?.trim();
+  if (envToken) {
+    return {
+      token: envToken,
+      source: "env",
+      source_detail: "OPENCLAW_ADMIN_TOKEN",
+      evidence: [...HOSTD_ADMIN_TOKEN_EVIDENCE],
+    };
+  }
+
+  const fileToken = safeReadFile(HOSTD_ADMIN_TOKEN_FILE)?.trim();
+  if (fileToken) {
+    return {
+      token: fileToken,
+      source: "file",
+      source_detail: HOSTD_ADMIN_TOKEN_FILE,
+      evidence: [...HOSTD_ADMIN_TOKEN_EVIDENCE],
+    };
+  }
+
+  const envFileToken = parseEnvFileValue(
+    safeReadFile(HOSTD_ENV_FILE) ?? "",
+    "OPENCLAW_ADMIN_TOKEN"
+  );
+  if (envFileToken) {
+    return {
+      token: envFileToken,
+      source: "env_file",
+      source_detail: `${HOSTD_ENV_FILE}:OPENCLAW_ADMIN_TOKEN`,
+      evidence: [...HOSTD_ADMIN_TOKEN_EVIDENCE],
+    };
+  }
+
+  return {
+    token: null,
+    source: "missing",
+    source_detail: "unresolved",
+    evidence: [...HOSTD_ADMIN_TOKEN_EVIDENCE],
+  };
+}
+
+function buildHostdAuthMissingSummary(evidence: readonly string[]): string {
+  return `HOSTD_AUTH_MISSING: console could not resolve hostd admin token; checked ${evidence.join(", ")}`;
+}
+
+function normalizeHostdErrorPayload(
+  status: number,
+  data: {
+    error?: string;
+    error_class?: string;
+    required_header?: string;
+    auth_source?: string;
+    token_sources_checked?: string[];
+  },
+  auth: HostdAdminTokenResolution
+): { error: string; error_class?: string } {
+  const isAuthForbidden =
+    status === 403 &&
+    (
+      data.error === "Forbidden" ||
+      data.error_class === "HOSTD_FORBIDDEN" ||
+      typeof data.required_header === "string" ||
+      typeof data.auth_source === "string"
+    );
+  const errorClass = data.error_class
+    ?? (isAuthForbidden ? "HOSTD_FORBIDDEN" : undefined)
+    ?? (status === 503 && data.error === "admin not configured" ? "HOSTD_AUTH_MISSING" : undefined);
+
+  if (errorClass === "HOSTD_AUTH_MISSING") {
+    const evidence = Array.isArray(data.token_sources_checked) && data.token_sources_checked.length > 0
+      ? data.token_sources_checked
+      : auth.evidence;
+    return {
+      error: buildHostdAuthMissingSummary(evidence),
+      error_class: errorClass,
+    };
+  }
+
+  if (errorClass === "HOSTD_FORBIDDEN") {
+    const header = data.required_header ?? "X-OpenClaw-Admin-Token";
+    const tokenSource = data.auth_source ?? auth.source_detail;
+    const reason =
+      typeof data.error === "string" && data.error.trim() && data.error !== "Forbidden"
+        ? data.error.trim()
+        : "hostd rejected the admin token";
+    return {
+      error: `HOSTD_FORBIDDEN: ${reason}; header=${header}; token_source=${tokenSource}`,
+      error_class: errorClass,
+    };
+  }
+
+  return {
+    error: data.error ?? `HTTP ${status}`,
+    error_class: errorClass,
+  };
+}
+
 /**
  * Execute an allowlisted action via hostd. Returns result compatible with former SSH result shape.
  * For code.opencode.propose_patch, pass params { goal, ref?, test_command?, dry_run? }.
@@ -148,13 +289,23 @@ export async function executeAction(
     };
   }
 
-  const adminToken = process.env.OPENCLAW_ADMIN_TOKEN;
+  const adminToken = resolveHostdAdminToken();
+  if (!adminToken.token) {
+    return {
+      ok: false,
+      action: actionName,
+      stdout: "",
+      stderr: "",
+      exitCode: null,
+      durationMs: Date.now() - start,
+      error: buildHostdAuthMissingSummary(adminToken.evidence),
+      error_class: "HOSTD_AUTH_MISSING",
+    };
+  }
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  if (adminToken) {
-    headers["X-OpenClaw-Admin-Token"] = adminToken;
-  }
+  headers["X-OpenClaw-Admin-Token"] = adminToken.token;
 
   // Resolve exec timeout: env override, or 60m for long-running, 60s for normal.
   // Undici bodyTimeout (default 300s) kills long requests; use Agent with bodyTimeout: 0.
@@ -212,6 +363,7 @@ export async function executeAction(
     }
 
     if (!res.ok) {
+      const normalizedError = normalizeHostdErrorPayload(res.status, data, adminToken);
       const payload = {
         ok: false,
         action: actionName,
@@ -219,9 +371,9 @@ export async function executeAction(
         stderr: data.stderr ?? "",
         exitCode: null,
         durationMs,
-        error: data.error ?? `HTTP ${res.status}`,
+        error: normalizedError.error,
         httpStatus: res.status,
-        error_class: data.error_class,
+        error_class: normalizedError.error_class,
         required_condition: data.required_condition,
       };
       return payload;
