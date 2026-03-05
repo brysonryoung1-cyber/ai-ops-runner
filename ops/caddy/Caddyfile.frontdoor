@@ -18,9 +18,14 @@
 # PATH-ONLY matching (no header matchers needed; Caddy reverse_proxy
 # handles WebSocket upgrades automatically when it sees Upgrade headers).
 (proxy_routes) {
+	@browser_gateway path /browser-gateway /browser-gateway/*
+	@novnc_websockify path /novnc/websockify /novnc/websockify/*
+	@websockify path /websockify /websockify/*
+	@api path /api /api/*
+
 	route {
 		# Browser Gateway — CDP streaming (primary human gate transport)
-		handle /browser-gateway/* {
+		handle @browser_gateway {
 			uri strip_prefix /browser-gateway
 			reverse_proxy 127.0.0.1:8890 {
 				transport http {
@@ -29,7 +34,8 @@
 			}
 		}
 
-		handle /novnc/websockify* {
+		# WebSocket endpoints must route to 6080 before /novnc/* or the HQ catch-all.
+		handle @novnc_websockify {
 			uri strip_prefix /novnc
 			reverse_proxy 127.0.0.1:6080 {
 				transport http {
@@ -38,7 +44,7 @@
 			}
 		}
 
-		handle /websockify* {
+		handle @websockify {
 			reverse_proxy 127.0.0.1:6080 {
 				transport http {
 					versions 1.1
@@ -49,6 +55,10 @@
 		# /novnc/* — noVNC web UI (vnc.html, app/, etc.)
 		handle_path /novnc/* {
 			reverse_proxy 127.0.0.1:6080
+		}
+
+		handle @api {
+			reverse_proxy 127.0.0.1:8787
 		}
 
 		# All other paths → HQ Console (catch-all)

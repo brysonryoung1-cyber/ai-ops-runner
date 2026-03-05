@@ -470,6 +470,11 @@ if grep -q 'openclaw_fix_ssh_tailscale_only' "$DOCTOR"; then
 else
   fail "openclaw_doctor.sh missing remediation script reference"
 fi
+if grep -q 'frontdoor_ws_upgrade_probe.py' "$DOCTOR"; then
+  pass "openclaw_doctor.sh runs the frontdoor WS upgrade probe"
+else
+  fail "openclaw_doctor.sh missing frontdoor WS upgrade probe"
+fi
 if [ -f "$ROOT_DIR/ops/openclaw_fix_ssh_tailscale_only.sh" ]; then
   pass "ops/openclaw_fix_ssh_tailscale_only.sh exists"
   if [ -x "$ROOT_DIR/ops/openclaw_fix_ssh_tailscale_only.sh" ]; then

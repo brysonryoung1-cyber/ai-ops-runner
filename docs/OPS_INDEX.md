@@ -2,7 +2,7 @@
 
 Complete index of all operational scripts and commands in ai-ops-runner. This document is canonical and MUST be updated on every change.
 
-**Last Updated**: 2026-02-24
+**Last Updated**: 2026-03-06
 
 ## Quick Reference
 
@@ -10,7 +10,7 @@ Complete index of all operational scripts and commands in ai-ops-runner. This do
 |---------|---------|
 | `./ops/openclaw_vps_deploy.sh` | **One-command full deploy to aiops-1** |
 | `./ops/openclaw_heal.sh` | One-command apply + verify + evidence |
-| `./ops/openclaw_doctor.sh` | Infrastructure health checks (9 checks) |
+| `./ops/openclaw_doctor.sh` | Infrastructure health checks |
 | `./ops/openclaw_guard.sh` | Continuous regression guard |
 | `./ops/openclaw_notify.sh "msg"` | Send Pushover alert |
 | `./ops/openclaw_apply_remote.sh` | Remote apply + verify from Mac |
@@ -22,12 +22,19 @@ Complete index of all operational scripts and commands in ai-ops-runner. This do
 
 | Script | Description | Run As | Frequency |
 |--------|-------------|--------|-----------|
-| `ops/openclaw_doctor.sh` | Full health check (Tailscale, Docker, API, ports, disk, keys, hostd) | any | hourly (timer) |
+| `ops/openclaw_doctor.sh` | Full health check (Tailscale, Docker, API, frontdoor WS, ports, disk, keys, hostd) | any | hourly (timer) |
+| `python3 ops/scripts/frontdoor_ws_upgrade_probe.py --host 127.0.0.1 --port 8788` | Assert `/websockify` and `/novnc/websockify` return `101 Switching Protocols`; writes headers/status artifact when `--artifact-dir` is set | any | on-demand |
 | `ops/openclaw_hq_audit.sh` | **HQ Audit** — localhost-only, agentic (via HQ → Actions → Run HQ Audit) | hostd | on-demand |
 | `ops/hostd_watchdog.sh` | hostd auto-heal (probe /health, restart on fail; via timer) | root | 60s (timer) |
 | `ops/openclaw_heal.sh` | Apply + verify + evidence bundle | root | on-demand |
 | `ops/openclaw_guard.sh` | Regression guard with safe auto-remediation | root | 10min (timer) |
 | `ops/doctor_repo.sh` | Repo health (files, hooks, configs) | any | on-demand |
+
+Frontdoor WS routing contract:
+`/websockify` and `/novnc/websockify` must both terminate at `127.0.0.1:6080` before the `/novnc/*` and HQ catch-all handlers.
+Run `python3 ops/scripts/frontdoor_ws_upgrade_probe.py --host 127.0.0.1 --port 8788 --artifact-dir artifacts/doctor/manual_frontdoor_ws_probe` to verify the live frontdoor path.
+Good looks like `101 Switching Protocols` on both endpoints.
+`404`, `200`, or a missing `Upgrade` response means Caddy routing or precedence drifted and noVNC audit will fail closed.
 
 ### Deploy
 

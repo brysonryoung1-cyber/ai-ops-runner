@@ -20,6 +20,9 @@ cd "$ROOT_DIR"
 
 FAILURES=0
 CHECKS=0
+DOCTOR_TIMESTAMP="${OPENCLAW_DOCTOR_RUN_ID:-$(date -u +%Y%m%d_%H%M%S)}"
+DOCTOR_JSON_DIR="$ROOT_DIR/artifacts/doctor/${DOCTOR_TIMESTAMP}"
+mkdir -p "$DOCTOR_JSON_DIR" 2>/dev/null || true
 
 pass() { CHECKS=$((CHECKS + 1)); echo "  PASS: $1"; }
 fail() { CHECKS=$((CHECKS + 1)); FAILURES=$((FAILURES + 1)); echo "  FAIL: $1" >&2; }
@@ -134,6 +137,39 @@ if [ "$API_HEALTHZ_OK" -eq 1 ]; then
 else
   fail "API healthz FAILED after 6 attempts (127.0.0.1:8000)"
   [ -n "$API_HEALTHZ_LAST_ERR" ] && echo "  Last curl output: ${API_HEALTHZ_LAST_ERR:0:500}" >&2
+fi
+
+# --- 3b. Frontdoor WS upgrade (127.0.0.1:8788) ---
+echo "--- Frontdoor WS upgrade ---"
+FRONTDOOR_WS_PROBE_JSON="$DOCTOR_JSON_DIR/frontdoor_ws_upgrade/result.json"
+FRONTDOOR_WS_SUMMARY="probe_missing"
+FRONTDOOR_WS_STATUS="FAIL"
+if [ -x "$ROOT_DIR/ops/scripts/frontdoor_ws_upgrade_probe.py" ]; then
+  FRONTDOOR_WS_STDOUT="$(
+    python3 "$ROOT_DIR/ops/scripts/frontdoor_ws_upgrade_probe.py" \
+      --host 127.0.0.1 \
+      --port 8788 \
+      --artifact-dir "$DOCTOR_JSON_DIR/frontdoor_ws_upgrade" 2>/dev/null
+  )" || FRONTDOOR_WS_RC=$?
+  FRONTDOOR_WS_RC="${FRONTDOOR_WS_RC:-0}"
+  if [ -n "${FRONTDOOR_WS_STDOUT:-}" ]; then
+    FRONTDOOR_WS_SUMMARY="$(python3 -c "
+import json, sys
+try:
+    payload = json.loads(sys.stdin.read())
+    print(payload.get('message') or 'probe_failed')
+except Exception:
+    print('probe_parse_error')
+" <<<"$FRONTDOOR_WS_STDOUT" 2>/dev/null || echo "probe_parse_error")"
+  fi
+  if [ "$FRONTDOOR_WS_RC" -eq 0 ]; then
+    FRONTDOOR_WS_STATUS="PASS"
+    pass "Frontdoor WS upgrade OK (101 on /websockify + /novnc/websockify)"
+  else
+    fail "Frontdoor WS upgrade FAILED ($FRONTDOOR_WS_SUMMARY)"
+  fi
+else
+  fail "frontdoor_ws_upgrade_probe.py not found"
 fi
 
 # --- 4. Public Port Audit (tailnet-aware) ---
@@ -814,24 +850,28 @@ else
 fi
 
 # --- JSON Output ---
-DOCTOR_TIMESTAMP="$(date -u +%Y%m%d_%H%M%S)"
-DOCTOR_JSON_DIR="$ROOT_DIR/artifacts/doctor/${DOCTOR_TIMESTAMP}"
-mkdir -p "$DOCTOR_JSON_DIR" 2>/dev/null || true
-
-python3 - "$DOCTOR_JSON_DIR/doctor.json" "$CHECKS" "$FAILURES" "$(hostname 2>/dev/null || echo unknown)" <<'PYEOF'
+python3 - "$DOCTOR_JSON_DIR/doctor.json" "$CHECKS" "$FAILURES" "$(hostname 2>/dev/null || echo unknown)" "$FRONTDOOR_WS_STATUS" "$FRONTDOOR_WS_SUMMARY" "$FRONTDOOR_WS_PROBE_JSON" <<'PYEOF'
 import json, sys
 from datetime import datetime, timezone
 out_file = sys.argv[1]
 checks = int(sys.argv[2])
 failures = int(sys.argv[3])
 hostname = sys.argv[4]
+frontdoor_ws_status = sys.argv[5]
+frontdoor_ws_summary = sys.argv[6]
+frontdoor_ws_probe_json = sys.argv[7]
 result = {
     "timestamp": datetime.now(timezone.utc).isoformat(),
     "hostname": hostname,
     "result": "PASS" if failures == 0 else "FAIL",
     "checks_total": checks,
     "checks_passed": checks - failures,
-    "checks_failed": failures
+    "checks_failed": failures,
+    "frontdoor_ws_upgrade": {
+        "status": frontdoor_ws_status,
+        "summary": frontdoor_ws_summary,
+        "artifact": frontdoor_ws_probe_json,
+    },
 }
 with open(out_file, "w") as f:
     json.dump(result, f, indent=2)

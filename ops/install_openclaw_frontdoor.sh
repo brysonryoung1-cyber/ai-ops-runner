@@ -59,6 +59,26 @@ if ! tailscale cert --cert-file /etc/ssl/tailscale/aiops-1.crt --key-file /etc/s
 fi
 echo "  TLS cert: /etc/ssl/tailscale/aiops-1.{crt,key}"
 
+echo "Validating frontdoor config..."
+caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null
+python3 - "$CADDYFILE" <<'PY'
+from pathlib import Path
+import sys
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+required = [
+    "@novnc_websockify path /novnc/websockify /novnc/websockify/*",
+    "@websockify path /websockify /websockify/*",
+    "handle @novnc_websockify",
+    "handle @websockify",
+    "reverse_proxy 127.0.0.1:6080",
+]
+missing = [item for item in required if item not in text]
+if missing:
+    print("frontdoor routing contract missing: " + ", ".join(missing), file=sys.stderr)
+    raise SystemExit(1)
+PY
+
 # Substitute ROOT_DIR in unit
 sed "s|/opt/ai-ops-runner|$ROOT_DIR|g" "$UNIT_SRC" | tee "$UNIT_DST" >/dev/null
 systemctl daemon-reload
