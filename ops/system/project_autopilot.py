@@ -304,12 +304,16 @@ class PollResult:
     poll_count: int
     elapsed_sec: float
     run_artifact_dir: str | None
+    run_artifact_dir_resolution: str
     run_to_done_dir: str | None
     proof_payload: dict[str, Any] | None
     precheck_payload: dict[str, Any] | None
     proof_path: str | None
     precheck_path: str | None
     browse_error: str | None
+    pointer_seen_console_run_id: str | None
+    pointer_seen_run_dir: str | None
+    pointer_http_code: int | None
     novnc_url: str | None
 
 
@@ -364,6 +368,7 @@ class MockSpec:
     run_to_done_dir: str | None
     proof_payload: dict[str, Any] | None
     precheck_payload: dict[str, Any] | None
+    pointer_payload: dict[str, Any] | None
 
 
 def _mock_run_to_done_entry_from_run_id(run_id: str) -> str:
@@ -435,6 +440,7 @@ def default_mock_spec(args: argparse.Namespace) -> MockSpec:
         run_to_done_dir=run_to_done_dir,
         proof_payload=proof_payload,
         precheck_payload={"status": "PASS"},
+        pointer_payload=None,
     )
 
 
@@ -466,6 +472,7 @@ def load_mock_spec(path: str, defaults: MockSpec) -> MockSpec:
         run_to_done_dir=run_to_done_dir or None,
         proof_payload=loaded.get("proof_payload") if isinstance(loaded.get("proof_payload"), dict) else defaults.proof_payload,
         precheck_payload=loaded.get("precheck_payload") if isinstance(loaded.get("precheck_payload"), dict) else defaults.precheck_payload,
+        pointer_payload=loaded.get("pointer_payload") if isinstance(loaded.get("pointer_payload"), dict) else defaults.pointer_payload,
     )
 
 
@@ -531,6 +538,15 @@ class MockHQClient(BaseHQClient):
 
     def browse(self, rel_path_value: str) -> tuple[int, str]:
         rel = rel_path_value.strip("/")
+        if rel == "soma_kajabi/run_to_done/LATEST_RUN.json" and self.spec.pointer_payload is not None:
+            return 200, json.dumps(
+                {
+                    "content": json.dumps(self.spec.pointer_payload),
+                    "contentType": "json",
+                    "fileName": "LATEST_RUN.json",
+                    "entries": [],
+                }
+            )
         if rel == "soma_kajabi/run_to_done":
             entries = [{"name": name, "type": "dir"} for name in self.spec.run_to_done_entries]
             return 200, json.dumps({"entries": entries})
@@ -590,6 +606,8 @@ def resolve_run_to_done_artifacts(
     raw_dir: Path,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
+        "run_artifact_dir": None,
+        "run_artifact_dir_resolution": "none",
         "run_to_done_dir": None,
         "proof_payload": None,
         "precheck_payload": None,
@@ -598,19 +616,85 @@ def resolve_run_to_done_artifacts(
         "browse_error": None,
         "proof_http_code": None,
         "precheck_http_code": None,
+        "pointer_seen_console_run_id": None,
+        "pointer_seen_run_dir": None,
+        "pointer_http_code": None,
     }
+    pointer_reason: str | None = None
+
+    if remote_run_id.strip():
+        pointer_code, pointer_body = client.browse("soma_kajabi/run_to_done/LATEST_RUN.json")
+        out["pointer_http_code"] = int(pointer_code)
+        write_raw_response(raw_dir / "browse_run_to_done_pointer.json", pointer_code, pointer_body)
+        if pointer_code == 200:
+            pointer_payload = parse_artifact_browse_proof(pointer_body)
+            if isinstance(pointer_payload, dict):
+                raw_console = pointer_payload.get("console_run_id")
+                if not isinstance(raw_console, str) or not raw_console.strip():
+                    legacy_run_id = pointer_payload.get("run_id")
+                    raw_console = legacy_run_id if isinstance(legacy_run_id, str) else ""
+                pointer_console_run_id = raw_console.strip()
+                raw_run_dir = pointer_payload.get("run_dir")
+                pointer_run_dir = raw_run_dir.strip() if isinstance(raw_run_dir, str) else ""
+                out["pointer_seen_console_run_id"] = pointer_console_run_id or None
+                out["pointer_seen_run_dir"] = pointer_run_dir or None
+                if pointer_console_run_id and pointer_run_dir and pointer_console_run_id == remote_run_id:
+                    run_dir = f"artifacts/soma_kajabi/run_to_done/{pointer_run_dir}"
+                    out["run_to_done_dir"] = run_dir
+                    out["run_artifact_dir"] = run_dir
+                    out["run_artifact_dir_resolution"] = "pointer"
+                    proof_rel = f"{run_dir.removeprefix('artifacts/').rstrip('/')}/PROOF.json"
+                    precheck_rel = f"{run_dir.removeprefix('artifacts/').rstrip('/')}/PRECHECK.json"
+                    proof_code, proof_payload = try_fetch_artifact_json(
+                        client=client,
+                        raw_dir=raw_dir,
+                        rel_path_value=proof_rel,
+                        raw_name="browse_run_to_done_proof.json",
+                    )
+                    precheck_code, precheck_payload = try_fetch_artifact_json(
+                        client=client,
+                        raw_dir=raw_dir,
+                        rel_path_value=precheck_rel,
+                        raw_name="browse_run_to_done_precheck.json",
+                    )
+                    out["proof_http_code"] = proof_code
+                    out["precheck_http_code"] = precheck_code
+                    if proof_payload is not None:
+                        out["proof_payload"] = proof_payload
+                        out["proof_path"] = f"{run_dir.rstrip('/')}/PROOF.json"
+                    if precheck_payload is not None:
+                        out["precheck_payload"] = precheck_payload
+                        out["precheck_path"] = f"{run_dir.rstrip('/')}/PRECHECK.json"
+                    return out
+                if not pointer_console_run_id:
+                    pointer_reason = "pointer_console_run_id_missing"
+                elif not pointer_run_dir:
+                    pointer_reason = "pointer_run_dir_missing"
+                else:
+                    pointer_reason = (
+                        f"pointer_console_run_id_mismatch:{pointer_console_run_id}!={remote_run_id}"
+                    )
+            else:
+                pointer_reason = "pointer_parse_failed"
+        else:
+            pointer_reason = f"pointer_http_{pointer_code}"
+
     browse_code, browse_body = client.browse("soma_kajabi/run_to_done")
     write_raw_response(raw_dir / "browse_run_to_done_dirs.json", browse_code, browse_body)
     if browse_code != 200:
-        out["browse_error"] = f"browse_run_to_done_http_{browse_code}"
+        browse_error = f"browse_run_to_done_http_{browse_code}"
+        out["browse_error"] = f"{pointer_reason}; {browse_error}" if pointer_reason else browse_error
         return out
     entries = parse_browse_dir_entries(browse_body)
     resolved = resolve_run_to_done_dir(remote_run_id, entries)
     run_dir = resolved.get("resolved_dir")
     if not isinstance(run_dir, str) or not run_dir.strip():
-        out["browse_error"] = str(resolved.get("error") or "run_to_done_dir_unresolved")
+        browse_error = str(resolved.get("error") or "run_to_done_dir_unresolved")
+        out["browse_error"] = f"{pointer_reason}; {browse_error}" if pointer_reason else browse_error
         return out
     out["run_to_done_dir"] = run_dir
+    out["run_artifact_dir"] = run_dir
+    out["run_artifact_dir_resolution"] = "listing"
     proof_rel = f"{run_dir.removeprefix('artifacts/').rstrip('/')}/PROOF.json"
     precheck_rel = f"{run_dir.removeprefix('artifacts/').rstrip('/')}/PRECHECK.json"
     proof_code, proof_payload = try_fetch_artifact_json(
@@ -718,6 +802,10 @@ def poll_to_terminal(
         )
     if terminal_status == TERMINAL_RUNNING:
         terminal_status = TERMINAL_FAIL
+    run_to_done_dir = run_to_done_info.get("run_to_done_dir")
+    resolved_run_artifact_dir = run_to_done_info.get("run_artifact_dir")
+    if isinstance(resolved_run_artifact_dir, str) and resolved_run_artifact_dir.strip():
+        run_artifact_dir = resolved_run_artifact_dir
     return PollResult(
         terminal_status=terminal_status,
         run_status=run_status,
@@ -725,12 +813,16 @@ def poll_to_terminal(
         poll_count=poll_count,
         elapsed_sec=elapsed_sec,
         run_artifact_dir=run_artifact_dir,
-        run_to_done_dir=run_to_done_info.get("run_to_done_dir"),
+        run_artifact_dir_resolution=str(run_to_done_info.get("run_artifact_dir_resolution") or "none"),
+        run_to_done_dir=run_to_done_dir if isinstance(run_to_done_dir, str) else None,
         proof_payload=run_to_done_info.get("proof_payload"),
         precheck_payload=run_to_done_info.get("precheck_payload"),
         proof_path=run_to_done_info.get("proof_path"),
         precheck_path=run_to_done_info.get("precheck_path"),
         browse_error=run_to_done_info.get("browse_error"),
+        pointer_seen_console_run_id=run_to_done_info.get("pointer_seen_console_run_id"),
+        pointer_seen_run_dir=run_to_done_info.get("pointer_seen_run_dir"),
+        pointer_http_code=run_to_done_info.get("pointer_http_code"),
         novnc_url=novnc_url,
     )
 
@@ -854,6 +946,7 @@ def build_summary(result: dict[str, Any]) -> str:
         f"- Remote run id: `{result.get('remote_run_id')}`",
         f"- Poll count: `{result.get('poll', {}).get('poll_count')}`",
         f"- Poll elapsed sec: `{result.get('poll', {}).get('elapsed_sec')}`",
+        f"- Run artifact resolution: `{result.get('run_artifact_dir_resolution')}`",
     ]
     links = result.get("links") if isinstance(result.get("links"), dict) else {}
     if links:
@@ -956,6 +1049,10 @@ def main(argv: list[str] | None = None) -> int:
         "status": TERMINAL_RUNNING,
         "error_class": None,
         "remote_run_id": None,
+        "run_artifact_dir_resolution": "none",
+        "pointer_seen_console_run_id": None,
+        "pointer_seen_run_dir": None,
+        "pointer_http_code": None,
         "doctor": {},
         "trigger": {},
         "poll": {},
@@ -1091,8 +1188,16 @@ def main(argv: list[str] | None = None) -> int:
             "poll_count": poll_result.poll_count,
             "elapsed_sec": poll_result.elapsed_sec,
             "run_artifact_dir": poll_result.run_artifact_dir,
+            "run_artifact_dir_resolution": poll_result.run_artifact_dir_resolution,
             "browse_error": poll_result.browse_error,
+            "pointer_seen_console_run_id": poll_result.pointer_seen_console_run_id,
+            "pointer_seen_run_dir": poll_result.pointer_seen_run_dir,
+            "pointer_http_code": poll_result.pointer_http_code,
         }
+        result["run_artifact_dir_resolution"] = poll_result.run_artifact_dir_resolution
+        result["pointer_seen_console_run_id"] = poll_result.pointer_seen_console_run_id
+        result["pointer_seen_run_dir"] = poll_result.pointer_seen_run_dir
+        result["pointer_http_code"] = poll_result.pointer_http_code
         result["links"] = {
             "run_to_done_dir": poll_result.run_to_done_dir,
             "proof_path": poll_result.proof_path,
