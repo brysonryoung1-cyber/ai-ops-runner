@@ -105,6 +105,7 @@ class TestLatestRunPointer:
         pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
 
         assert pointer["run_id"] == "20260304155603-a0c4"
+        assert pointer["console_run_id"] == "20260304155603-a0c4"
         assert pointer["run_dir"] == "run_to_done_20260304T155603Z_abcdef12"
         assert pointer["status"] == "RUNNING"
         assert "updated_at" in pointer
@@ -129,6 +130,7 @@ class TestLatestRunPointer:
         assert expected_pointer.exists(), f"Pointer must exist at {expected_pointer}"
         pointer = json.loads(expected_pointer.read_text(encoding="utf-8"))
         assert pointer["run_id"] == "test-env-pointer"
+        assert pointer["console_run_id"] == "test-env-pointer"
         assert pointer["status"] == "SUCCESS"
 
     def test_pointer_creates_parent_dirs(self, tmp_path, monkeypatch):
@@ -149,6 +151,34 @@ class TestLatestRunPointer:
         expected_pointer = new_root / "soma_kajabi" / "run_to_done" / "LATEST_RUN.json"
         assert expected_pointer.exists()
         assert expected_pointer.parent.is_dir()
+
+    def test_main_writes_console_run_id_from_env(self, tmp_path, monkeypatch):
+        root = tmp_path / "repo"
+        root.mkdir()
+        (root / "config" / "project_state.json").parent.mkdir(parents=True)
+        (root / "config" / "project_state.json").write_text('{"projects":{}}')
+
+        artifacts_root = tmp_path / "canonical_artifacts"
+        artifacts_root.mkdir()
+        monkeypatch.setenv("OPENCLAW_ARTIFACTS_ROOT", str(artifacts_root))
+        monkeypatch.setenv("OPENCLAW_CONSOLE_RUN_ID", "20260305141500-c0de")
+        monkeypatch.delenv("OPENCLAW_RUN_ID", raising=False)
+
+        mod = _load_module()
+        mod._repo_root = lambda: root
+        mod._precheck_drift = lambda *a: True
+        mod._precheck_hostd = lambda: False
+
+        with patch("sys.argv", ["soma_run_to_done.py"]):
+            rc = mod.main()
+
+        assert rc == 1
+        pointer_path = artifacts_root / "soma_kajabi" / "run_to_done" / "LATEST_RUN.json"
+        assert pointer_path.exists()
+        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+        assert pointer["console_run_id"] == "20260305141500-c0de"
+        assert isinstance(pointer.get("run_id"), str) and pointer["run_id"]
+        assert str(pointer.get("run_dir", "")).startswith("run_to_done_")
 
 
 class TestProofExistsEarlyOnPrecheckFail:

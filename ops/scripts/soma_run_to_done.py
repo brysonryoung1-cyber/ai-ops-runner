@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -195,11 +196,25 @@ def _normalize_pointer_status(status: str) -> str:
     return "RUNNING"
 
 
+def _looks_like_console_run_id(value: str) -> bool:
+    return bool(re.match(r"^\d{14}-[A-Za-z0-9_-]+$", value or ""))
+
+
+def _resolve_console_run_id(*, pointer_run_id: str, fallback_run_id: str) -> str:
+    explicit = (os.environ.get("OPENCLAW_CONSOLE_RUN_ID") or "").strip()
+    if explicit:
+        return explicit
+    if _looks_like_console_run_id(pointer_run_id):
+        return pointer_run_id
+    return fallback_run_id
+
+
 def write_latest_run_pointer(
     out_dir: Path,
     run_id: str,
     status: str,
     error_class: str | None = None,
+    console_run_id: str | None = None,
 ) -> None:
     """Atomically write LATEST_RUN.json to canonical artifacts root.
 
@@ -215,8 +230,10 @@ def write_latest_run_pointer(
     pointer_dir = artifacts_root / "soma_kajabi" / "run_to_done"
     pointer_dir.mkdir(parents=True, exist_ok=True)
     pointer_path = pointer_dir / LATEST_RUN_POINTER_NAME
+    normalized_console_run_id = str(console_run_id or "").strip() or str(run_id).strip()
     payload = {
         "run_id": run_id,
+        "console_run_id": normalized_console_run_id,
         "run_dir": out_dir.name,
         "updated_at": _utc_now_z(),
         "status": _normalize_pointer_status(status),
@@ -234,9 +251,16 @@ def _safe_write_latest_run_pointer(
     run_id: str,
     status: str,
     error_class: str | None = None,
+    console_run_id: str | None = None,
 ) -> None:
     try:
-        write_latest_run_pointer(out_dir, run_id, status=status, error_class=error_class)
+        write_latest_run_pointer(
+            out_dir,
+            run_id,
+            status=status,
+            error_class=error_class,
+            console_run_id=console_run_id,
+        )
     except Exception as exc:
         print(
             json.dumps(
@@ -306,12 +330,22 @@ def main() -> int:
     root = _repo_root()
     run_id = f"run_to_done_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
     pointer_run_id = (os.environ.get("OPENCLAW_RUN_ID") or run_id).strip() or run_id
+    console_run_id = _resolve_console_run_id(pointer_run_id=pointer_run_id, fallback_run_id=run_id)
     out_dir = root / "artifacts" / "soma_kajabi" / "run_to_done" / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    def _write_pointer(status: str, error_class: str | None = None) -> None:
+        _safe_write_latest_run_pointer(
+            out_dir,
+            pointer_run_id,
+            status=status,
+            error_class=error_class,
+            console_run_id=console_run_id,
+        )
+
     # Write initial proof files immediately so remote helpers never 404
     write_initial_proof_files(out_dir, run_id)
-    _safe_write_latest_run_pointer(out_dir, pointer_run_id, status="RUNNING")
+    _write_pointer(status="RUNNING")
 
     # PRECHECK
     _update_proof(out_dir, run_id, {"phase": "precheck"})
@@ -324,9 +358,7 @@ def main() -> int:
         _update_proof(out_dir, run_id, {
             "status": "FAIL", "error_class": "DRIFT_DEPLOY_FAILED", "phase": "precheck",
         })
-        _safe_write_latest_run_pointer(
-            out_dir, pointer_run_id, status="FAIL", error_class="DRIFT_DEPLOY_FAILED"
-        )
+        _write_pointer(status="FAIL", error_class="DRIFT_DEPLOY_FAILED")
         print(json.dumps({"ok": False, "error_class": "DRIFT_DEPLOY_FAILED", "run_id": run_id, "project": "soma_kajabi", "action": "soma_run_to_done"}))
         return 1
 
@@ -338,9 +370,7 @@ def main() -> int:
         _update_proof(out_dir, run_id, {
             "status": "FAIL", "error_class": "HOSTD_UNREACHABLE", "phase": "precheck",
         })
-        _safe_write_latest_run_pointer(
-            out_dir, pointer_run_id, status="FAIL", error_class="HOSTD_UNREACHABLE"
-        )
+        _write_pointer(status="FAIL", error_class="HOSTD_UNREACHABLE")
         print(json.dumps({"ok": False, "error_class": "HOSTD_UNREACHABLE", "run_id": run_id, "project": "soma_kajabi", "action": "soma_run_to_done"}))
         return 1
 
@@ -357,9 +387,7 @@ def main() -> int:
             "status": "FAIL", "error_class": error_class, "phase": "precheck",
             "novnc_readiness_artifact_dir": novnc_artifact_dir,
         })
-        _safe_write_latest_run_pointer(
-            out_dir, pointer_run_id, status="FAIL", error_class=error_class
-        )
+        _write_pointer(status="FAIL", error_class=error_class)
         print(
             json.dumps(
                 {
@@ -390,9 +418,7 @@ def main() -> int:
             "status": "ALREADY_RUNNING", "phase": "trigger",
             "active_run_id": active_run_id,
         })
-        _safe_write_latest_run_pointer(
-            out_dir, pointer_run_id, status="FAIL", error_class="ALREADY_RUNNING"
-        )
+        _write_pointer(status="FAIL", error_class="ALREADY_RUNNING")
         print(json.dumps({
             "ok": False,
             "error_class": "ALREADY_RUNNING",
@@ -411,9 +437,7 @@ def main() -> int:
         _update_proof(out_dir, run_id, {
             "status": "FAIL", "error_class": "TRIGGER_FAILED", "phase": "trigger",
         })
-        _safe_write_latest_run_pointer(
-            out_dir, pointer_run_id, status="FAIL", error_class="TRIGGER_FAILED"
-        )
+        _write_pointer(status="FAIL", error_class="TRIGGER_FAILED")
         print(json.dumps({
             "ok": False,
             "error_class": "TRIGGER_FAILED",
@@ -430,9 +454,7 @@ def main() -> int:
         _update_proof(out_dir, run_id, {
             "status": "FAIL", "error_class": "NO_RUN_ID", "phase": "trigger",
         })
-        _safe_write_latest_run_pointer(
-            out_dir, pointer_run_id, status="FAIL", error_class="NO_RUN_ID"
-        )
+        _write_pointer(status="FAIL", error_class="NO_RUN_ID")
         print(json.dumps({"ok": False, "error_class": "NO_RUN_ID", "run_id": run_id}))
         return 1
 
@@ -530,9 +552,7 @@ def main() -> int:
             "auto_run_id": auto_run_id,
             "elapsed_sec": elapsed_sec,
         })
-        _safe_write_latest_run_pointer(
-            out_dir, pointer_run_id, status="FAIL", error_class="POLL_TIMEOUT"
-        )
+        _write_pointer(status="FAIL", error_class="POLL_TIMEOUT")
         print(json.dumps({
             "ok": False,
             "error_class": "POLL_TIMEOUT",
@@ -565,7 +585,7 @@ def main() -> int:
             "artifact_dir": artifact_dir,
             "build_sha": _get_build_sha(root),
         })
-        _safe_write_latest_run_pointer(out_dir, pointer_run_id, status="WAITING_FOR_HUMAN")
+        _write_pointer(status="WAITING_FOR_HUMAN")
         (out_dir / "PROOF.md").write_text(
             f"# Soma Run to DONE — WAITING_FOR_HUMAN\n\n"
             f"**novnc_url**: {novnc_url}\n\n"
@@ -618,9 +638,7 @@ def main() -> int:
                     str(accept_base / (Path(artifact_dir or "").name or "UNKNOWN")),
                 ],
             })
-            _safe_write_latest_run_pointer(
-                out_dir, pointer_run_id, status="FAIL", error_class="ACCEPTANCE_MISSING_FOR_RUN"
-            )
+            _write_pointer(status="FAIL", error_class="ACCEPTANCE_MISSING_FOR_RUN")
             print(json.dumps({
                 "ok": False,
                 "status": "FAILURE",
@@ -651,9 +669,7 @@ def main() -> int:
                 "acceptance_dir": acceptance_rel,
                 "message": "mirror_report.json not found in acceptance dir",
             })
-            _safe_write_latest_run_pointer(
-                out_dir, pointer_run_id, status="FAIL", error_class="ACCEPTANCE_MISSING_FOR_RUN"
-            )
+            _write_pointer(status="FAIL", error_class="ACCEPTANCE_MISSING_FOR_RUN")
             print(json.dumps({
                 "ok": False,
                 "status": "FAILURE",
@@ -677,9 +693,7 @@ def main() -> int:
                 "mirror_pass": False,
                 "mirror_exceptions_count": exceptions_count,
             })
-            _safe_write_latest_run_pointer(
-                out_dir, pointer_run_id, status="FAIL", error_class="MIRROR_FAIL"
-            )
+            _write_pointer(status="FAIL", error_class="MIRROR_FAIL")
             (out_dir / "PROOF.md").write_text(
                 f"# Soma Run to DONE — FAILURE (Mirror)\n\n"
                 f"- build_sha: {_get_build_sha(root)}\n"
@@ -712,7 +726,7 @@ def main() -> int:
             "mirror_exceptions_count": 0,
             "exceptions_count": 0,
         })
-        _safe_write_latest_run_pointer(out_dir, pointer_run_id, status="SUCCESS")
+        _write_pointer(status="SUCCESS")
         (out_dir / "PROOF.md").write_text(
             f"# Soma Run to DONE — SUCCESS\n\n"
             f"- build_sha: {_get_build_sha(root)}\n"
@@ -780,7 +794,7 @@ def main() -> int:
             "artifact_dir": artifact_dir,
             "build_sha": _get_build_sha(root),
         })
-        _safe_write_latest_run_pointer(out_dir, pointer_run_id, status="WAITING_FOR_HUMAN")
+        _write_pointer(status="WAITING_FOR_HUMAN")
         (out_dir / "PROOF.md").write_text(
             f"# Soma Run to DONE — WAITING_FOR_HUMAN (auth gate)\n\n"
             f"**novnc_url**: {novnc_url}\n\n**Instruction**: {instruction}\n"
@@ -802,12 +816,7 @@ def main() -> int:
         "project": "soma_kajabi",
         "action": "soma_run_to_done",
     })
-    _safe_write_latest_run_pointer(
-        out_dir,
-        pointer_run_id,
-        status=terminal_status,
-        error_class=error_class,
-    )
+    _write_pointer(status=terminal_status, error_class=error_class)
     print(json.dumps({
         "ok": False,
         "status": terminal_status,
