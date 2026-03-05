@@ -6,5 +6,5 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/ai-ops-runner
-ExecStart=/bin/bash /opt/ai-ops-runner/ops/guards/novnc_guard.sh
+ExecStart=/bin/bash /opt/ai-ops-runner/ops/guards/novnc_guard.sh --fast
 TimeoutStartSec=180

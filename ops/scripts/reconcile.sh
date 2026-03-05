@@ -26,9 +26,10 @@ mkdir -p "$LOCK_DIR"
 LOCK_FILE="$LOCK_DIR/reconcile.lock"
 exec 201>"$LOCK_FILE"
 if ! flock -n 201 2>/dev/null; then
-  echo '{"status":"SKIP","reason":"lock_contention","run_id":"'"$RUN_ID"'"}' > "$RECONCILE_DIR/result.json"
+  echo "SKIP_LOCK_CONTENDED run_id=$RUN_ID timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$RECONCILE_DIR/SKIP_LOCK_CONTENDED.txt"
+  echo '{"status":"SKIP","reason":"SKIP_LOCK_CONTENDED","run_id":"'"$RUN_ID"'","artifact":"artifacts/system/reconcile/'"$RUN_ID"'/SKIP_LOCK_CONTENDED.txt"}' > "$RECONCILE_DIR/result.json"
   cat "$RECONCILE_DIR/result.json"
-  exit 2
+  exit 0
 fi
 
 # Deterministic mapping: failing invariant -> playbook

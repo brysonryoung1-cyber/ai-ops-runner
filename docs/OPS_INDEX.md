@@ -36,6 +36,12 @@ Run `python3 ops/scripts/frontdoor_ws_upgrade_probe.py --host 127.0.0.1 --port 8
 Good looks like `101 Switching Protocols` on both endpoints.
 `404`, `200`, or a missing `Upgrade` response means Caddy routing or precedence drifted and noVNC audit will fail closed.
 
+Service hardening notes (2026-03-06):
+- `openclaw-autopilot` now wraps git calls with explicit `safe.directory` and can SKIP safely using `/api/ui/health_public` or deploy receipt `build_sha` fallback when git fetch cannot run.
+- `openclaw-novnc-guard` now defaults to FAST checks (`PASS_FAST`) and explicitly logs DEEP skip states (for example `SKIP_DEEP_XVFB_MISSING`); DEEP remains available via `--deep`.
+- `openclaw-reconcile` lock contention is now a non-fatal skip (`SKIP_LOCK_CONTENDED`, exit `0`) to avoid systemd failed state on expected overlap.
+- `openclaw_doctor` now records and fails on systemd failed units in `systemd_failed_units.status` with bounded evidence at `systemd_failed_units/failed.txt`.
+
 ### Deploy
 
 | Script | Description | Run As |
