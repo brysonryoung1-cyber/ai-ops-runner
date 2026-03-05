@@ -1,11 +1,12 @@
 [Unit]
-Description=OpenClaw Soma Autopilot — timer-driven soma_run_to_done tick
+Description=OpenClaw Soma Project Autopilot (Doctor-gated run-to-terminal lane)
 After=ai-ops-runner.service
 Wants=ai-ops-runner.service
 
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/ai-ops-runner
-ExecStart=/usr/bin/python3 /opt/ai-ops-runner/ops/scripts/soma_autopilot_tick.py
-TimeoutStartSec=60
+ExecStart=/usr/bin/python3 /opt/ai-ops-runner/ops/system/project_autopilot.py --project soma_kajabi --action soma_run_to_done --max-seconds 2100 --poll-interval 6..24
+TimeoutStartSec=2200
 Environment=OPENCLAW_REPO_ROOT=/opt/ai-ops-runner
+Environment=PYTHONUNBUFFERED=1
