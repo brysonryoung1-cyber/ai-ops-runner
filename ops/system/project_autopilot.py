@@ -41,6 +41,7 @@ from ops.lib.notifier import (
     resolve_discord_webhook_url,
     send_discord_webhook_alert,
 )
+from ops.system.soma_preflight import run_soma_preflight
 
 DEFAULT_MAX_SECONDS = 2100
 DEFAULT_POLL_INTERVAL = "6..24"
@@ -49,6 +50,11 @@ DEFAULT_STATE_ROOT = Path("/var/lib/ai-ops-runner/soma_autopilot")
 DOCTOR_TIMEOUT_SEC = 300
 SEEN_ALERTS_MAX = 200
 RUN_TO_DONE_SCAN_LIMIT = 200
+PREFLIGHT_TRANSITIONS_NOTIFY = {
+    ("GO", "HUMAN_ONLY"),
+    ("HUMAN_ONLY", "GO"),
+    ("GO", "NO_GO"),
+}
 
 
 def now_utc() -> str:
@@ -298,6 +304,116 @@ def format_alert_message(
     if novnc_url:
         lines.append(f"- novnc_url: {novnc_url}")
     return "\n".join(lines)
+
+
+def base_alert_payload(webhook_preflight: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "SKIPPED",
+        "needed": False,
+        "sent": False,
+        "deduped": False,
+        "hash": "",
+        "terminal_error_class": "",
+        "error_class": "",
+        "message": "",
+        "notify": webhook_preflight if not webhook_preflight.get("ok") else {},
+    }
+
+
+def format_preflight_transition_message(
+    *,
+    current_status: str,
+    reasons: list[str],
+    proof_path: str,
+    novnc_url: str | None,
+    gate_expiry: str | None,
+) -> str:
+    reason_text = ", ".join(reasons) if reasons else "none"
+    if current_status == "HUMAN_ONLY":
+        lines = [
+            "Soma needs you: Kajabi login",
+            f"reason_codes: {reason_text}",
+            f"proof_path: {proof_path}",
+            f"novnc_url: {novnc_url or ''}",
+            f"gate_expiry: {gate_expiry or ''}",
+            "instruction: Log in + 2FA then CLOSE noVNC window to release profile lock",
+        ]
+        return "\n".join(lines)
+    if current_status == "NO_GO":
+        return (
+            "Soma preflight NO_GO\n"
+            f"reason_codes: {reason_text}\n"
+            f"proof_path: {proof_path}"
+        )
+    return (
+        "Soma preflight GO\n"
+        f"reason_codes: {reason_text}\n"
+        f"proof_path: {proof_path}"
+    )
+
+
+def send_preflight_transition_alert(
+    *,
+    previous_status: str | None,
+    current_status: str,
+    reasons: list[str],
+    proof_path: str,
+    novnc_url: str | None,
+    gate_expiry: str | None,
+    state: dict[str, Any],
+    webhook_preflight: dict[str, Any],
+) -> dict[str, Any]:
+    base = base_alert_payload(webhook_preflight)
+    prev = previous_status or ""
+    curr = current_status.upper()
+
+    should_notify = False
+    if prev:
+        should_notify = (prev, curr) in PREFLIGHT_TRANSITIONS_NOTIFY
+    elif curr in {"HUMAN_ONLY", "NO_GO"}:
+        should_notify = True
+    if not should_notify:
+        return base
+
+    alert_hash = build_alert_hash(
+        event_type=f"preflight:{prev or 'NONE'}->{curr}",
+        matrix_status=curr,
+        failed_checks=reasons,
+    )
+    prior_hash = str(state.get("preflight_last_alert_hash") or "")
+    if prior_hash and prior_hash == alert_hash:
+        return {
+            **base,
+            "status": "DEDUPED",
+            "needed": True,
+            "deduped": True,
+            "hash": alert_hash,
+        }
+
+    message = format_preflight_transition_message(
+        current_status=curr,
+        reasons=reasons,
+        proof_path=proof_path,
+        novnc_url=novnc_url,
+        gate_expiry=gate_expiry,
+    )
+    if not webhook_preflight.get("ok"):
+        notify = dict(webhook_preflight)
+    else:
+        notify = send_discord_webhook_alert(content=message)
+    sent = bool(notify.get("ok"))
+    if sent:
+        state["preflight_last_alert_hash"] = alert_hash
+    return {
+        **base,
+        "status": "SENT" if sent else "ERROR",
+        "needed": True,
+        "sent": sent,
+        "hash": alert_hash,
+        "error_class": str(notify.get("error_class") or ""),
+        "message": str(notify.get("message") or ""),
+        "notify": notify,
+    }
 
 
 @dataclass
@@ -1116,6 +1232,15 @@ def build_summary(result: dict[str, Any]) -> str:
         f"- Poll elapsed sec: `{result.get('poll', {}).get('elapsed_sec')}`",
         f"- Run artifact resolution: `{result.get('run_artifact_dir_resolution')}`",
     ]
+    preflight = result.get("preflight") if isinstance(result.get("preflight"), dict) else {}
+    if preflight:
+        lines.extend(
+            [
+                f"- Preflight status: `{preflight.get('status')}`",
+                f"- Preflight reasons: `{', '.join(preflight.get('reasons') or [])}`",
+                f"- Preflight proof: `{preflight.get('result_path')}`",
+            ]
+        )
     links = result.get("links") if isinstance(result.get("links"), dict) else {}
     if links:
         lines.extend(
@@ -1212,7 +1337,9 @@ def main(argv: list[str] | None = None) -> int:
         client: BaseHQClient = MockHQClient(mock_spec)
     else:
         client = RealHQClient(args.hq_base)
+    terminal_alerts_enabled = bool(args.mock)
     webhook_preflight = build_webhook_preflight()
+    previous_preflight_status = str(state.get("last_preflight_status") or "").strip().upper() or None
 
     started_at = now_utc()
     result: dict[str, Any] = {
@@ -1234,17 +1361,8 @@ def main(argv: list[str] | None = None) -> int:
         "trigger": {},
         "poll": {},
         "links": {},
-        "alert": {
-            "status": "SKIPPED",
-            "needed": False,
-            "sent": False,
-            "deduped": False,
-            "hash": "",
-            "terminal_error_class": "",
-            "error_class": "",
-            "message": "",
-            "notify": webhook_preflight if not webhook_preflight.get("ok") else {},
-        },
+        "preflight": {},
+        "alert": base_alert_payload(webhook_preflight),
         "validators": [],
         "warnings": [],
         "bundle_dir": rel_path(bundle_dir, repo_root),
@@ -1269,6 +1387,10 @@ def main(argv: list[str] | None = None) -> int:
                 "remote_run_id": result.get("remote_run_id"),
                 "finished_at": result.get("finished_at"),
             }
+            if isinstance(result.get("preflight"), dict):
+                pf_status = str(result["preflight"].get("status") or "").strip().upper()
+                if pf_status:
+                    state["last_preflight_status"] = pf_status
             atomic_write_json(state_path, state)
             return exit_code
         except OSError as exc:
@@ -1276,7 +1398,107 @@ def main(argv: list[str] | None = None) -> int:
             result["finalize_error"] = f"{type(exc).__name__}: {str(exc)[:240]}"
             return 1
 
+    def maybe_send_terminal_alert(
+        *,
+        terminal_status: str,
+        remote_run_id: str,
+        error_class: str,
+        proof_path: str,
+        novnc_url: str | None,
+    ) -> dict[str, Any]:
+        if not terminal_alerts_enabled:
+            return base_alert_payload(webhook_preflight)
+        return send_terminal_alert(
+            project=args.project,
+            action=args.action,
+            terminal_status=terminal_status,
+            remote_run_id=remote_run_id,
+            error_class=error_class,
+            proof_path=proof_path,
+            novnc_url=novnc_url,
+            state=state,
+            webhook_preflight=webhook_preflight,
+        )
+
     try:
+        preflight_enabled = args.project == "soma_kajabi" and args.action == "soma_run_to_done"
+        if preflight_enabled:
+            preflight_payload = run_soma_preflight(
+                artifacts_root=artifacts_root,
+                hq_base=args.hq_base,
+                run_id=f"{run_id}_preflight",
+                mock=args.mock,
+            )
+            atomic_write_json(bundle_dir / "soma_preflight.json", preflight_payload)
+            preflight_status = str(preflight_payload.get("status") or "NO_GO").strip().upper()
+            preflight_reasons = [
+                str(item).strip()
+                for item in (preflight_payload.get("reasons") or [])
+                if str(item).strip()
+            ]
+            preflight_result_path = str(
+                preflight_payload.get("result_path")
+                or rel_path(bundle_dir / "soma_preflight.json", repo_root)
+            )
+            result["preflight"] = {
+                "status": preflight_status,
+                "reasons": preflight_reasons,
+                "result_path": preflight_result_path,
+                "active_run_id": preflight_payload.get("active_run_id"),
+                "active_status": preflight_payload.get("active_status"),
+                "novnc_url": preflight_payload.get("novnc_url"),
+                "gate_expiry": preflight_payload.get("gate_expiry"),
+                "checks": preflight_payload.get("checks"),
+            }
+
+            transition_alert = send_preflight_transition_alert(
+                previous_status=previous_preflight_status,
+                current_status=preflight_status,
+                reasons=preflight_reasons,
+                proof_path=preflight_result_path,
+                novnc_url=(
+                    str(preflight_payload.get("novnc_url")).strip()
+                    if isinstance(preflight_payload.get("novnc_url"), str)
+                    else None
+                ),
+                gate_expiry=(
+                    str(preflight_payload.get("gate_expiry")).strip()
+                    if isinstance(preflight_payload.get("gate_expiry"), str)
+                    else None
+                ),
+                state=state,
+                webhook_preflight=webhook_preflight,
+            )
+            if bool(transition_alert.get("needed")):
+                result["alert"] = transition_alert
+
+            if preflight_status == "HUMAN_ONLY":
+                result["status"] = TERMINAL_WAITING
+                result["error_class"] = "WAITING_FOR_HUMAN"
+                result["remote_run_id"] = preflight_payload.get("active_run_id")
+                result["novnc_url"] = preflight_payload.get("novnc_url")
+                return finalize(0)
+
+            if preflight_status == "NO_GO":
+                result["status"] = "NO_GO"
+                result["error_class"] = sanitize_error_class(
+                    preflight_reasons[0] if preflight_reasons else "SOMA_PREFLIGHT_NO_GO",
+                    default="SOMA_PREFLIGHT_NO_GO",
+                )
+                result["remote_run_id"] = preflight_payload.get("active_run_id")
+                return finalize(0)
+        else:
+            result["preflight"] = {
+                "status": "SKIP",
+                "reasons": ["NON_SOMA_LANE"],
+                "result_path": None,
+                "active_run_id": None,
+                "active_status": "idle",
+                "novnc_url": None,
+                "gate_expiry": None,
+                "checks": {},
+            }
+
         doctor_payload = run_doctor_core(
             bundle_dir=bundle_dir,
             hq_base=args.hq_base,
@@ -1294,16 +1516,12 @@ def main(argv: list[str] | None = None) -> int:
             result["status"] = TERMINAL_FAIL
             result["error_class"] = "DOCTOR_MATRIX_FAIL"
             proof_for_alert = rel_path(bundle_dir / "RESULT.json", repo_root)
-            result["alert"] = send_terminal_alert(
-                project=args.project,
-                action=args.action,
+            result["alert"] = maybe_send_terminal_alert(
                 terminal_status=TERMINAL_FAIL,
                 remote_run_id=run_id,
                 error_class="DOCTOR_MATRIX_FAIL",
                 proof_path=proof_for_alert,
                 novnc_url=None,
-                state=state,
-                webhook_preflight=webhook_preflight,
             )
             return finalize(0)
 
@@ -1322,16 +1540,12 @@ def main(argv: list[str] | None = None) -> int:
             result["status"] = TERMINAL_FAIL
             result["error_class"] = error_class
             proof_for_alert = rel_path(bundle_dir / "RESULT.json", repo_root)
-            result["alert"] = send_terminal_alert(
-                project=args.project,
-                action=args.action,
+            result["alert"] = maybe_send_terminal_alert(
                 terminal_status=TERMINAL_FAIL,
                 remote_run_id=run_id,
                 error_class=error_class,
                 proof_path=proof_for_alert,
                 novnc_url=None,
-                state=state,
-                webhook_preflight=webhook_preflight,
             )
             return finalize(0)
 
@@ -1340,32 +1554,24 @@ def main(argv: list[str] | None = None) -> int:
             result["status"] = TERMINAL_FAIL
             result["error_class"] = "ALREADY_RUNNING_NO_ACTIVE_RUN_ID"
             proof_for_alert = rel_path(bundle_dir / "RESULT.json", repo_root)
-            result["alert"] = send_terminal_alert(
-                project=args.project,
-                action=args.action,
+            result["alert"] = maybe_send_terminal_alert(
                 terminal_status=TERMINAL_FAIL,
                 remote_run_id=run_id,
                 error_class="ALREADY_RUNNING_NO_ACTIVE_RUN_ID",
                 proof_path=proof_for_alert,
                 novnc_url=None,
-                state=state,
-                webhook_preflight=webhook_preflight,
             )
             return finalize(0)
         if not remote_run_id:
             result["status"] = TERMINAL_FAIL
             result["error_class"] = "RUN_ID_MISSING"
             proof_for_alert = rel_path(bundle_dir / "RESULT.json", repo_root)
-            result["alert"] = send_terminal_alert(
-                project=args.project,
-                action=args.action,
+            result["alert"] = maybe_send_terminal_alert(
                 terminal_status=TERMINAL_FAIL,
                 remote_run_id=run_id,
                 error_class="RUN_ID_MISSING",
                 proof_path=proof_for_alert,
                 novnc_url=None,
-                state=state,
-                webhook_preflight=webhook_preflight,
             )
             return finalize(0)
 
@@ -1416,16 +1622,12 @@ def main(argv: list[str] | None = None) -> int:
             result["error_class"] = TERMINAL_WAITING
             result["novnc_url"] = novnc_url
             proof_for_alert = poll_result.proof_path or rel_path(bundle_dir / "RESULT.json", repo_root)
-            result["alert"] = send_terminal_alert(
-                project=args.project,
-                action=args.action,
+            result["alert"] = maybe_send_terminal_alert(
                 terminal_status=TERMINAL_WAITING,
                 remote_run_id=remote_run_id,
                 error_class=TERMINAL_WAITING,
                 proof_path=proof_for_alert,
                 novnc_url=novnc_url,
-                state=state,
-                webhook_preflight=webhook_preflight,
             )
             return finalize(0)
 
@@ -1439,16 +1641,12 @@ def main(argv: list[str] | None = None) -> int:
             result["status"] = TERMINAL_FAIL
             result["error_class"] = error_class
             proof_for_alert = poll_result.proof_path or rel_path(bundle_dir / "RESULT.json", repo_root)
-            result["alert"] = send_terminal_alert(
-                project=args.project,
-                action=args.action,
+            result["alert"] = maybe_send_terminal_alert(
                 terminal_status=TERMINAL_FAIL,
                 remote_run_id=remote_run_id,
                 error_class=error_class,
                 proof_path=proof_for_alert,
                 novnc_url=None,
-                state=state,
-                webhook_preflight=webhook_preflight,
             )
             return finalize(1 if args.exit_nonzero_on_terminal_fail else 0)
 
@@ -1563,16 +1761,12 @@ def main(argv: list[str] | None = None) -> int:
         result["error_class"] = sanitize_error_class(type(exc).__name__, default="AUTOPILOT_EXCEPTION")
         result["warnings"].append(f"exception:{type(exc).__name__}:{str(exc)[:240]}")
         proof_for_alert = rel_path(bundle_dir / "RESULT.json", repo_root)
-        result["alert"] = send_terminal_alert(
-            project=args.project,
-            action=args.action,
+        result["alert"] = maybe_send_terminal_alert(
             terminal_status=TERMINAL_FAIL,
             remote_run_id=str(result.get("remote_run_id") or run_id),
             error_class=str(result["error_class"]),
             proof_path=proof_for_alert,
             novnc_url=None,
-            state=state,
-            webhook_preflight=webhook_preflight,
         )
         return finalize(0)
 

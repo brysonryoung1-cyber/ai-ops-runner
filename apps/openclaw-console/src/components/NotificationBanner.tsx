@@ -8,6 +8,8 @@ interface Banner {
   novnc_url?: string;
   instruction?: string;
   failed_invariant?: string;
+  failed_checks?: string[];
+  warning_checks?: string[];
   proof_paths?: string[];
   message?: string;
 }
@@ -52,19 +54,47 @@ export default function NotificationBanner() {
   }
 
   if (banner.type === "CANARY_DEGRADED") {
+    const failedChecks =
+      banner.failed_checks && banner.failed_checks.length > 0
+        ? banner.failed_checks
+        : banner.failed_invariant
+          ? [banner.failed_invariant]
+          : [];
     return (
       <div
         data-testid="notification-banner-canary"
         className="bg-red-500/15 border-b border-red-500/30 px-4 py-3"
       >
         <p className="text-sm text-red-200 font-medium">Canary degraded</p>
-        {banner.failed_invariant && (
+        {failedChecks.length > 0 && (
           <p className="text-xs text-red-100/90 mt-1">
-            Failing: {banner.failed_invariant}
+            Failing: {failedChecks.join(", ")}
           </p>
         )}
         {banner.proof_paths && banner.proof_paths.length > 0 && (
           <p className="text-xs text-red-100/80 mt-1">
+            Proof: {banner.proof_paths[0]}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  if (banner.type === "CANARY_WARN") {
+    const warningChecks = banner.warning_checks || [];
+    return (
+      <div
+        data-testid="notification-banner-canary-warn"
+        className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-3"
+      >
+        <p className="text-sm text-amber-200 font-medium">Canary warning (optional checks)</p>
+        {warningChecks.length > 0 && (
+          <p className="text-xs text-amber-100/90 mt-1">
+            Checks: {warningChecks.join(", ")}
+          </p>
+        )}
+        {banner.proof_paths && banner.proof_paths.length > 0 && (
+          <p className="text-xs text-amber-100/80 mt-1">
             Proof: {banner.proof_paths[0]}
           </p>
         )}
