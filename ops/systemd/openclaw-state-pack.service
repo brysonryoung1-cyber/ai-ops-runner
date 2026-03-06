@@ -1,5 +1,5 @@
 [Unit]
-Description=OpenClaw Reconcile — desired state + invariants loop
+Description=OpenClaw State Pack generator
 After=ai-ops-runner.service openclaw-frontdoor.service
 Wants=ai-ops-runner.service
 
@@ -7,6 +7,7 @@ Wants=ai-ops-runner.service
 Type=oneshot
 WorkingDirectory=/opt/ai-ops-runner
 EnvironmentFile=-/etc/ai-ops-runner/openclaw.env
-ExecStart=/bin/bash /opt/ai-ops-runner/ops/scripts/reconcile.sh
-TimeoutStartSec=600
 Environment=OPENCLAW_REPO_ROOT=/opt/ai-ops-runner
+ExecStart=/bin/bash /opt/ai-ops-runner/ops/scripts/state_pack_generate.sh
+SuccessExitStatus=10
+TimeoutStartSec=300

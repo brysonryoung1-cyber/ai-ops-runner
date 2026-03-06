@@ -21,14 +21,23 @@ cd "$ROOT_DIR"
 FAILURES=0
 CHECKS=0
 DOCTOR_TIMESTAMP="${OPENCLAW_DOCTOR_RUN_ID:-$(date -u +%Y%m%d_%H%M%S)}"
-DOCTOR_JSON_DIR="$ROOT_DIR/artifacts/doctor/${DOCTOR_TIMESTAMP}"
+ARTIFACTS_ROOT="${OPENCLAW_ARTIFACTS_ROOT:-$ROOT_DIR/artifacts}"
+DOCTOR_JSON_DIR="$ARTIFACTS_ROOT/doctor/${DOCTOR_TIMESTAMP}"
 mkdir -p "$DOCTOR_JSON_DIR" 2>/dev/null || true
 SYSTEMD_FAILED_DIR="$DOCTOR_JSON_DIR/systemd_failed_units"
 SYSTEMD_FAILED_TXT="$SYSTEMD_FAILED_DIR/failed.txt"
 SYSTEMD_FAILED_STATUS="SKIP"
 SYSTEMD_FAILED_COUNT=0
 SYSTEMD_FAILED_TRACKED_JSON="{}"
+STATE_PACK_FRESHNESS_DIR="$DOCTOR_JSON_DIR/state_pack_freshness"
+STATE_PACK_FRESHNESS_JSON="$STATE_PACK_FRESHNESS_DIR/status.json"
+STATE_PACK_FRESHNESS_STATUS="FAIL"
+STATE_PACK_FRESHNESS_REASON="NOT_RUN"
+STATE_PACK_FRESHNESS_LATEST_PATH=""
+STATE_PACK_FRESHNESS_AGE_SEC=""
+STATE_PACK_FRESHNESS_THRESHOLD_SEC="${OPENCLAW_STATE_PACK_FRESHNESS_THRESHOLD_SEC:-7200}"
 mkdir -p "$SYSTEMD_FAILED_DIR" 2>/dev/null || true
+mkdir -p "$STATE_PACK_FRESHNESS_DIR" 2>/dev/null || true
 
 pass() { CHECKS=$((CHECKS + 1)); echo "  PASS: $1"; }
 fail() { CHECKS=$((CHECKS + 1)); FAILURES=$((FAILURES + 1)); echo "  FAIL: $1" >&2; }
@@ -176,6 +185,35 @@ except Exception:
   fi
 else
   fail "frontdoor_ws_upgrade_probe.py not found"
+fi
+
+# --- 3c. State Pack Freshness ---
+echo "--- State Pack Freshness ---"
+STATE_PACK_FRESHNESS_PAYLOAD="$(
+  python3 - "$ROOT_DIR" "$ARTIFACTS_ROOT" "$STATE_PACK_FRESHNESS_THRESHOLD_SEC" "$STATE_PACK_FRESHNESS_JSON" <<'PYEOF'
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from ops.lib.state_pack_contract import evaluate_state_pack_freshness
+
+payload = evaluate_state_pack_freshness(
+    artifacts_root=Path(sys.argv[2]),
+    threshold_sec=int(sys.argv[3]),
+)
+Path(sys.argv[4]).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+print(json.dumps(payload))
+PYEOF
+)" || STATE_PACK_FRESHNESS_PAYLOAD='{"status":"FAIL","reason":"STATE_PACK_FRESHNESS_CHECK_ERROR","latest_path":"","age_sec":"","threshold_sec":0}'
+STATE_PACK_FRESHNESS_STATUS="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("status","FAIL"))' "$STATE_PACK_FRESHNESS_PAYLOAD" 2>/dev/null || echo FAIL)"
+STATE_PACK_FRESHNESS_REASON="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("reason","STATE_PACK_FRESHNESS_CHECK_ERROR"))' "$STATE_PACK_FRESHNESS_PAYLOAD" 2>/dev/null || echo STATE_PACK_FRESHNESS_CHECK_ERROR)"
+STATE_PACK_FRESHNESS_LATEST_PATH="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("latest_path") or "")' "$STATE_PACK_FRESHNESS_PAYLOAD" 2>/dev/null || echo "")"
+STATE_PACK_FRESHNESS_AGE_SEC="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("age_sec") if json.loads(sys.argv[1]).get("age_sec") is not None else "")' "$STATE_PACK_FRESHNESS_PAYLOAD" 2>/dev/null || echo "")"
+if [ "$STATE_PACK_FRESHNESS_STATUS" = "PASS" ]; then
+  pass "State pack freshness OK (age=${STATE_PACK_FRESHNESS_AGE_SEC:-0}s threshold=${STATE_PACK_FRESHNESS_THRESHOLD_SEC}s)"
+else
+  fail "State pack freshness FAILED (${STATE_PACK_FRESHNESS_REASON}; latest=${STATE_PACK_FRESHNESS_LATEST_PATH:-missing}; age=${STATE_PACK_FRESHNESS_AGE_SEC:-unknown}s threshold=${STATE_PACK_FRESHNESS_THRESHOLD_SEC}s)"
 fi
 
 # --- 4. Public Port Audit (tailnet-aware) ---
@@ -835,7 +873,7 @@ if command -v systemctl >/dev/null 2>&1; then
 
   TRACKED_FILE="$SYSTEMD_FAILED_DIR/tracked_states.txt"
   : > "$TRACKED_FILE"
-  TRACKED_UNITS="openclaw-autopilot.service openclaw-novnc-guard.service openclaw-reconcile.service"
+  TRACKED_UNITS="openclaw-autopilot.service openclaw-novnc-guard.service openclaw-reconcile.service openclaw-state-pack.service openclaw-state-pack.timer"
   TRACKED_FAILED=""
   for unit in $TRACKED_UNITS; do
     unit_state="$(systemctl is-failed "$unit" 2>/dev/null || echo unknown)"
@@ -874,7 +912,7 @@ if command -v systemctl >/dev/null 2>&1; then
     if [ "$ALL_FAILED_COUNT" -gt 0 ]; then
       pass "Tracked systemd units healthy; non-tracked failed units recorded ($ALL_FAILED_COUNT)"
     else
-      pass "No failed systemd units (tracked: openclaw-autopilot, openclaw-novnc-guard, openclaw-reconcile)"
+      pass "No failed systemd units (tracked: openclaw-autopilot, openclaw-novnc-guard, openclaw-reconcile, openclaw-state-pack)"
     fi
   fi
 
@@ -966,7 +1004,7 @@ else
 fi
 
 # --- JSON Output ---
-python3 - "$DOCTOR_JSON_DIR/doctor.json" "$CHECKS" "$FAILURES" "$(hostname 2>/dev/null || echo unknown)" "$FRONTDOOR_WS_STATUS" "$FRONTDOOR_WS_SUMMARY" "$FRONTDOOR_WS_PROBE_JSON" "$SYSTEMD_FAILED_STATUS" "$SYSTEMD_FAILED_COUNT" "$SYSTEMD_FAILED_TXT" "$SYSTEMD_FAILED_DIR/status.json" <<'PYEOF'
+python3 - "$DOCTOR_JSON_DIR/doctor.json" "$CHECKS" "$FAILURES" "$(hostname 2>/dev/null || echo unknown)" "$FRONTDOOR_WS_STATUS" "$FRONTDOOR_WS_SUMMARY" "$FRONTDOOR_WS_PROBE_JSON" "$SYSTEMD_FAILED_STATUS" "$SYSTEMD_FAILED_COUNT" "$SYSTEMD_FAILED_TXT" "$SYSTEMD_FAILED_DIR/status.json" "$STATE_PACK_FRESHNESS_STATUS" "$STATE_PACK_FRESHNESS_REASON" "$STATE_PACK_FRESHNESS_LATEST_PATH" "$STATE_PACK_FRESHNESS_AGE_SEC" "$STATE_PACK_FRESHNESS_THRESHOLD_SEC" "$STATE_PACK_FRESHNESS_JSON" <<'PYEOF'
 import json, sys
 from datetime import datetime, timezone
 out_file = sys.argv[1]
@@ -980,6 +1018,12 @@ systemd_failed_status = sys.argv[8]
 systemd_failed_count = int(sys.argv[9])
 systemd_failed_txt = sys.argv[10]
 systemd_failed_status_json = sys.argv[11]
+state_pack_freshness_status = sys.argv[12]
+state_pack_freshness_reason = sys.argv[13]
+state_pack_freshness_latest_path = sys.argv[14]
+state_pack_freshness_age_sec = sys.argv[15]
+state_pack_freshness_threshold_sec = int(sys.argv[16])
+state_pack_freshness_status_json = sys.argv[17]
 result = {
     "timestamp": datetime.now(timezone.utc).isoformat(),
     "hostname": hostname,
@@ -997,6 +1041,14 @@ result = {
         "failed_count": systemd_failed_count,
         "failed_txt": systemd_failed_txt,
         "status_json": systemd_failed_status_json,
+    },
+    "state_pack_freshness": {
+        "status": state_pack_freshness_status,
+        "reason": state_pack_freshness_reason,
+        "latest_path": state_pack_freshness_latest_path,
+        "age_sec": int(state_pack_freshness_age_sec) if state_pack_freshness_age_sec else None,
+        "threshold_sec": state_pack_freshness_threshold_sec,
+        "status_json": state_pack_freshness_status_json,
     },
 }
 with open(out_file, "w") as f:
