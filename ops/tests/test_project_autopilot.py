@@ -163,7 +163,7 @@ def test_mock_doctor_fail_exits_nonzero_and_writes_result(tmp_path: Path, monkey
     assert rc == 0
     result = _load_result(artifacts_root, "ap_doctor_fail")
     assert result["status"] == "FAIL"
-    assert result["error_class"] == "DOCTOR_MATRIX_FAIL"
+    assert result["error_class"] == "DOCTOR_FAILED"
     assert result["doctor"]["status"] == "FAIL"
     assert result["alert"]["status"] in {"SENT", "ERROR", "SKIPPED", "DEDUPED"}
 
@@ -686,22 +686,15 @@ def test_doctor_empty_output_produces_structured_error(tmp_path: Path, monkeypat
     artifacts_root = tmp_path / "artifacts"
     state_root = tmp_path / "state"
 
-    def _empty_run_doctor_core(*, bundle_dir, hq_base, mock, mock_status):
-        raw_dir = bundle_dir / "raw"
-        raw_dir.mkdir(parents=True, exist_ok=True)
-        project_autopilot.atomic_write_text(raw_dir / "doctor_matrix_stdout.txt", "")
-        project_autopilot.atomic_write_text(raw_dir / "doctor_matrix_stderr.txt", "ImportError: circular import")
-        return {
-            "ok": False,
-            "status": "FAIL",
-            "error_class": "DOCTOR_EMPTY_OUTPUT",
-            "rc": 1,
-            "stdout_len": 0,
-            "stderr_tail": ["ImportError: circular import"],
-            "cmd": ["python", "doctor_matrix.py"],
-        }
+    class _Proc:
+        returncode = 1
+        stdout = ""
+        stderr = (
+            "Traceback (most recent call last):\n"
+            "ImportError: cannot import name 'main' from partially initialized module"
+        )
 
-    monkeypatch.setattr(project_autopilot, "run_doctor_core", _empty_run_doctor_core)
+    monkeypatch.setattr(project_autopilot.subprocess, "run", lambda *args, **kwargs: _Proc())
 
     rc = main(
         [
@@ -717,14 +710,20 @@ def test_doctor_empty_output_produces_structured_error(tmp_path: Path, monkeypat
             str(artifacts_root),
             "--validator-actions",
             "",
+            "--hq-base",
+            "http://127.0.0.1:8787",
         ]
     )
 
     assert rc == 0
     result = _load_result(artifacts_root, "ap_doctor_empty_test")
     assert result["status"] == "FAIL"
-    assert result["error_class"] == "DOCTOR_MATRIX_FAIL"
+    assert result["error_class"] == "DOCTOR_FAILED"
     assert result["doctor"]["status"] == "FAIL"
+    assert result["doctor"]["error_class"] == "DOCTOR_EMPTY_OUTPUT"
+    assert result["doctor"]["stdout_len"] == 0
+    assert any("ImportError" in line for line in result["doctor"]["stderr_tail"])
+    assert "VALUEERROR" not in str(result).upper()
 
 
 def test_doctor_nonzero_exit_produces_structured_error(tmp_path: Path, monkeypatch) -> None:
@@ -771,8 +770,9 @@ def test_doctor_nonzero_exit_produces_structured_error(tmp_path: Path, monkeypat
     assert rc == 0
     result = _load_result(artifacts_root, "ap_doctor_nonzero_test")
     assert result["status"] == "FAIL"
-    assert result["error_class"] == "DOCTOR_MATRIX_FAIL"
+    assert result["error_class"] == "DOCTOR_FAILED"
     assert result["doctor"]["status"] == "FAIL"
+    assert result["doctor"]["error_class"] == "DOCTOR_SUBPROCESS_FAILED"
 
 
 def test_mock_waiting_alert_uses_webhook_resolution_env_and_file(tmp_path: Path, monkeypatch) -> None:
