@@ -646,7 +646,7 @@ def test_doctor_subprocess_cwd_and_pythonpath(tmp_path: Path, monkeypatch) -> No
     original_run = subprocess.run
 
     def _subprocess_run_capture(cmd, **kwargs):
-        if cmd and "doctor_matrix.py" in str(cmd):
+        if cmd and "system.doctor_matrix" in str(cmd):
             captured_calls.append({
                 "cmd": cmd,
                 "cwd": kwargs.get("cwd"),
@@ -672,6 +672,7 @@ def test_doctor_subprocess_cwd_and_pythonpath(tmp_path: Path, monkeypatch) -> No
 
     assert len(captured_calls) == 1, "doctor subprocess should have been called once"
     call = captured_calls[0]
+    assert call["cmd"][1:3] == ["-m", "system.doctor_matrix"], f"expected module invocation, got {call['cmd']}"
     assert call["cwd"] == str(REPO_ROOT), f"cwd should be REPO_ROOT, got {call['cwd']}"
     assert call["env"] is not None, "env should be passed"
     assert call["env"].get("PYTHONPATH") == str(REPO_ROOT), f"PYTHONPATH should be REPO_ROOT"
