@@ -40,8 +40,8 @@ Service hardening notes (2026-03-06):
 - `openclaw-autopilot` now wraps git calls with explicit `safe.directory` and can SKIP safely using `/api/ui/health_public` or deploy receipt `build_sha` fallback when git fetch cannot run.
 - `openclaw-novnc-guard` now defaults to FAST checks (`PASS_FAST`) and explicitly logs DEEP skip states (for example `SKIP_DEEP_XVFB_MISSING`); DEEP remains available via `--deep`.
 - `openclaw-reconcile` lock contention is now a non-fatal skip (`SKIP_LOCK_CONTENDED`, exit `0`) to avoid systemd failed state on expected overlap.
-- `openclaw-reconcile` now treats a missing or empty `artifacts/system/state_pack/` as a controlled failure (`state_pack_missing_or_empty`, exit `1`) instead of bubbling up shell `ls` exit `2`.
-- That keeps the failure mode deterministic for systemd, tests, and triage artifacts when `state_pack.sh` produces no directory.
+- `openclaw-reconcile` now treats a missing or empty `artifacts/system/state_pack/` as a controlled skip (`state_pack_missing_or_empty`, exit `0`) instead of bubbling up shell `ls` exit `2`.
+- That keeps systemd out of the failed state while preserving a deterministic reason in logs and reconcile artifacts when `state_pack.sh` produces no directory.
 - `openclaw_doctor` now records and fails on systemd failed units in `systemd_failed_units.status` with bounded evidence at `systemd_failed_units/failed.txt`.
 
 ### Deploy
