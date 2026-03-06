@@ -8,6 +8,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SYSTEMD_DIR="/etc/systemd/system"
 
 echo "=== openclaw_install_reconcile.sh ==="
+sudo bash "$SCRIPT_DIR/openclaw_install_shared_env.sh"
 sudo cp "$SCRIPT_DIR/systemd/openclaw-reconcile.service" "$SYSTEMD_DIR/"
 sudo cp "$SCRIPT_DIR/systemd/openclaw-reconcile.timer" "$SYSTEMD_DIR/"
 sudo systemctl daemon-reload

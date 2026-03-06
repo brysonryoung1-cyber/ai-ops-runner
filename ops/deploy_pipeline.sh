@@ -226,8 +226,21 @@ else
 fi
 echo ""
 
-# --- Step 2c4b: Install openclaw-reconcile timer (idempotent) ---
-echo "==> Step 2c4b: Install openclaw-reconcile timer"
+# --- Step 2c4b: Install openclaw-state-pack timer (idempotent) ---
+echo "==> Step 2c4b: Install openclaw-state-pack timer"
+if [ -f "$SCRIPT_DIR/openclaw_install_state_pack.sh" ]; then
+  if ! sudo bash "$SCRIPT_DIR/openclaw_install_state_pack.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/state_pack_install.log"; then
+    echo "  WARNING: state-pack timer install failed (non-fatal)" >&2
+  else
+    echo "  openclaw-state-pack: installed (every 5 min)"
+  fi
+else
+  echo "  (openclaw_install_state_pack.sh not found — skip)"
+fi
+echo ""
+
+# --- Step 2c4c: Install openclaw-reconcile timer (idempotent) ---
+echo "==> Step 2c4c: Install openclaw-reconcile timer"
 if [ -f "$SCRIPT_DIR/openclaw_install_reconcile.sh" ]; then
   if ! sudo bash "$SCRIPT_DIR/openclaw_install_reconcile.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/reconcile_install.log"; then
     echo "  WARNING: reconcile timer install failed (non-fatal)" >&2
@@ -239,8 +252,8 @@ else
 fi
 echo ""
 
-# --- Step 2c4c: Install openclaw-canary timer (idempotent) ---
-echo "==> Step 2c4c: Install openclaw-canary timer"
+# --- Step 2c4d: Install openclaw-canary timer (idempotent) ---
+echo "==> Step 2c4d: Install openclaw-canary timer"
 if [ -f "$SCRIPT_DIR/openclaw_install_canary.sh" ]; then
   if ! sudo bash "$SCRIPT_DIR/openclaw_install_canary.sh" 2>&1 | tee "$DEPLOY_ARTIFACT_DIR/canary_install.log"; then
     echo "  WARNING: canary timer install failed (non-fatal)" >&2

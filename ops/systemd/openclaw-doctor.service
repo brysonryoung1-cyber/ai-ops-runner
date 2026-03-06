@@ -6,5 +6,6 @@ Requires=ai-ops-runner.service
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/ai-ops-runner
+EnvironmentFile=-/etc/ai-ops-runner/openclaw.env
 ExecStart=/bin/bash /opt/ai-ops-runner/ops/openclaw_doctor.sh
 TimeoutStartSec=120
