@@ -98,3 +98,52 @@ def test_reconcile_lock_contention_exits_zero_and_writes_skip_reason(tmp_path: P
     payload = json.loads(result_files[0].read_text(encoding="utf-8"))
     assert payload["status"] == "SKIP"
     assert payload["reason"] == "SKIP_LOCK_CONTENDED"
+
+
+def test_reconcile_missing_state_pack_is_controlled_failure(tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    scripts_dir = repo_root / "ops" / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    reconcile_copy = scripts_dir / "reconcile.sh"
+    reconcile_copy.write_text(RECONCILE_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    reconcile_copy.chmod(0o755)
+
+    state_pack_stub = scripts_dir / "state_pack.sh"
+    state_pack_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    state_pack_stub.chmod(0o755)
+
+    flock_stub = bin_dir / "flock"
+    flock_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    flock_stub.chmod(0o755)
+
+    artifacts_root = tmp_path / "artifacts"
+    (artifacts_root / "system" / "state_pack").mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env["OPENCLAW_ARTIFACTS_ROOT"] = str(artifacts_root)
+    env["OPENCLAW_RECONCILE_BACKOFF_SEC"] = "0"
+    env["OPENCLAW_RECONCILE_MAX_ATTEMPTS"] = "1"
+    env["OPENCLAW_RECONCILE_LOCK_DIR"] = str(tmp_path / "locks")
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+
+    proc = subprocess.run(
+        ["bash", str(reconcile_copy)],
+        cwd=str(repo_root),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.returncode != 2
+    assert "state_pack_missing_or_empty" in proc.stdout
+
+    result_files = list((artifacts_root / "system" / "reconcile").glob("*/result.json"))
+    assert result_files, "expected reconcile result.json artifact"
+    payload = json.loads(result_files[0].read_text(encoding="utf-8"))
+    assert payload["status"] == "FAILURE"
+    assert payload["reason"] == "State pack generation failed"
