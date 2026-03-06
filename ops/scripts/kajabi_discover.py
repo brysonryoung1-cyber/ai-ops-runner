@@ -22,16 +22,23 @@ Error classes:
 from __future__ import annotations
 
 import json
-import sys
 import os
+import re
 import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 
 KAJABI_PRODUCTS_PATH = Path("/etc/ai-ops-runner/secrets/soma_kajabi/kajabi_products.json")
 TARGET_PRODUCTS = ["Home User Library", "Practitioner Library"]
+DEFAULT_SITE_ORIGIN = "https://zane-mccourtney.mykajabi.com"
+MEMBERSHIPS_PAGE_PATH_CANDIDATES = ["/memberships", "/memberships-soma"]
+COMMUNITY_PAGE_PATH = "/community"
+PRIVACY_PAGE_PATH = "/privacy-policy"
+TERMS_PAGE_PATH = "/terms"
+EXPECTED_COMMUNITY_GROUPS = ["Home Users", "Practitioners"]
 
 
 def _resolve_storage_state_path() -> Path:
@@ -40,7 +47,8 @@ def _resolve_storage_state_path() -> Path:
     from services.soma_kajabi.connector_config import get_storage_state_path, load_soma_kajabi_config
     cfg, _err = load_soma_kajabi_config(root)
     return get_storage_state_path(cfg)
-MEMBERSHIPS_PAGE_URL = "https://zane-mccourtney.mykajabi.com/memberships-soma"
+
+
 REQUIRED_OFFER_URLS = ["/offers/q6ntyjef/checkout", "/offers/MHMmHyVZ/checkout"]
 
 
@@ -73,6 +81,36 @@ def _artifact_dir() -> Path:
     return out
 
 
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def _write_latest_pointer(out_dir: Path, status: str, error_class: str | None = None) -> None:
+    root = _repo_root()
+    pointer = root / "artifacts" / "soma_kajabi" / "discover" / "LATEST.json"
+    rel = str(out_dir)
+    try:
+        rel = str(out_dir.relative_to(root))
+    except ValueError:
+        pass
+    payload: dict[str, Any] = {
+        "run_id": out_dir.name,
+        "artifact_dir": str(out_dir),
+        "artifact_rel": rel,
+        "status": status,
+        "updated_at": _now_iso(),
+    }
+    if error_class:
+        payload["error_class"] = error_class
+    try:
+        _atomic_write_json(pointer, payload)
+    except Exception:
+        pass
+
+
 def _extract_slug_from_url(href: str) -> str:
     """Extract product slug from URL like .../products/home-user-library or .../products/123."""
     if "/products/" in href:
@@ -99,6 +137,183 @@ def _write_error(out_dir: Path, error_class: str, **kwargs) -> dict:
     return doc
 
 
+def _build_site_url(site_origin: str, path_or_url: str) -> str:
+    if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
+        return path_or_url
+    if not path_or_url.startswith("/"):
+        path_or_url = "/" + path_or_url
+    return f"{site_origin.rstrip('/')}{path_or_url}"
+
+
+def _capture_page(
+    page: Any,
+    *,
+    url: str,
+    out_file: Path,
+    safe_screenshot: Any | None = None,
+    screenshot_path: Path | None = None,
+) -> dict[str, Any]:
+    status_code = 0
+    final_url = url
+    error = ""
+    ok = False
+    content = ""
+    try:
+        response = page.goto(url, wait_until="load", timeout=30000)
+        page.wait_for_load_state("networkidle", timeout=10000)
+        if response is not None:
+            status_attr = getattr(response, "status", None)
+            if callable(status_attr):
+                status_code = int(status_attr())
+            elif status_attr is not None:
+                status_code = int(status_attr)
+        final_url = getattr(page, "url", url) or url
+        content = page.content() or ""
+        out_file.write_text(content[:131072], encoding="utf-8")
+        if safe_screenshot and screenshot_path:
+            safe_screenshot(page, str(screenshot_path))
+        ok = 200 <= status_code < 400
+    except Exception as exc:
+        error = str(exc)[:200]
+        final_url = getattr(page, "url", url) or url
+        try:
+            out_file.write_text("(capture failed)", encoding="utf-8")
+        except Exception:
+            pass
+
+    return {
+        "requested_url": url,
+        "final_url": final_url,
+        "status": status_code,
+        "ok": ok,
+        "error": error,
+        "content": content,
+    }
+
+
+def _extract_community_json(html: str) -> dict[str, Any]:
+    lower = (html or "").lower()
+    name = "Soma Community" if "soma community" in lower else ""
+    if not name:
+        m = re.search(r"<h1[^>]*>(.*?)</h1>", html or "", flags=re.IGNORECASE | re.DOTALL)
+        if m:
+            name = re.sub(r"<[^>]+>", " ", m.group(1))
+            name = " ".join(name.split())[:120]
+    groups = [g for g in EXPECTED_COMMUNITY_GROUPS if g.lower() in lower]
+    return {
+        "name": name,
+        "groups": [{"name": g} for g in groups],
+        "heuristic": True,
+        "captured_at": _now_iso(),
+    }
+
+
+def _capture_required_pages(
+    page: Any,
+    *,
+    out_dir: Path,
+    site_origin: str,
+    safe_screenshot: Any | None = None,
+) -> dict[str, Any]:
+    statuses: dict[str, dict[str, Any]] = {}
+
+    # Memberships capture: try /memberships then /memberships-soma
+    memberships_best: dict[str, Any] | None = None
+    for path in MEMBERSHIPS_PAGE_PATH_CANDIDATES:
+        result = _capture_page(
+            page,
+            url=_build_site_url(site_origin, path),
+            out_file=out_dir / "memberships_page.html",
+            safe_screenshot=safe_screenshot,
+            screenshot_path=out_dir / "memberships_screenshot.png",
+        )
+        result.pop("content", None)
+        result["path"] = path
+        memberships_best = memberships_best or result
+        if result.get("ok"):
+            memberships_best = result
+            break
+    if memberships_best is None:
+        memberships_best = {
+            "requested_url": _build_site_url(site_origin, MEMBERSHIPS_PAGE_PATH_CANDIDATES[0]),
+            "final_url": "",
+            "status": 0,
+            "ok": False,
+            "error": "capture_not_attempted",
+            "path": MEMBERSHIPS_PAGE_PATH_CANDIDATES[0],
+        }
+    memberships_best["artifact"] = "memberships_page.html"
+    statuses["memberships"] = memberships_best
+
+    community_result = _capture_page(
+        page,
+        url=_build_site_url(site_origin, COMMUNITY_PAGE_PATH),
+        out_file=out_dir / "community.html",
+        safe_screenshot=safe_screenshot,
+        screenshot_path=out_dir / "community_screenshot.png",
+    )
+    community_html = community_result.pop("content", "")
+    community_result["path"] = COMMUNITY_PAGE_PATH
+    community_result["artifact"] = "community.html"
+    statuses["community"] = community_result
+
+    privacy_result = _capture_page(
+        page,
+        url=_build_site_url(site_origin, PRIVACY_PAGE_PATH),
+        out_file=out_dir / "privacy.html",
+    )
+    privacy_result.pop("content", None)
+    privacy_result["path"] = PRIVACY_PAGE_PATH
+    privacy_result["artifact"] = "privacy.html"
+    statuses["privacy"] = privacy_result
+
+    terms_result = _capture_page(
+        page,
+        url=_build_site_url(site_origin, TERMS_PAGE_PATH),
+        out_file=out_dir / "terms.html",
+    )
+    terms_result.pop("content", None)
+    terms_result["path"] = TERMS_PAGE_PATH
+    terms_result["artifact"] = "terms.html"
+    statuses["terms"] = terms_result
+
+    if community_html:
+        try:
+            (out_dir / "community.json").write_text(
+                json.dumps(_extract_community_json(community_html), indent=2),
+                encoding="utf-8",
+            )
+            statuses["community"]["community_json_written"] = True
+        except Exception:
+            statuses["community"]["community_json_written"] = False
+    else:
+        statuses["community"]["community_json_written"] = False
+
+    memberships_content = ""
+    memberships_file = out_dir / "memberships_page.html"
+    if memberships_file.exists():
+        memberships_content = memberships_file.read_text(errors="replace")
+    offer_urls_found = [u for u in REQUIRED_OFFER_URLS if u in memberships_content]
+
+    _atomic_write_json(
+        out_dir / "statuses.json",
+        {
+            "captured_at": _now_iso(),
+            "site_origin": site_origin,
+            "statuses": statuses,
+        },
+    )
+
+    return {
+        "statuses": statuses,
+        "offer_urls_found": offer_urls_found,
+        "memberships_page_captured": bool(statuses.get("memberships", {}).get("ok")),
+        "community_page_captured": bool(statuses.get("community", {}).get("ok")),
+        "privacy_page_captured": bool(statuses.get("privacy", {}).get("ok")),
+        "terms_page_captured": bool(statuses.get("terms", {}).get("ok")),
+    }
+
+
 def main() -> int:
     root = _repo_root()
     if str(root) not in sys.path:
@@ -119,6 +334,7 @@ def main() -> int:
             artifact_dir=str(out_dir),
         )
         (out_dir / "products.json").write_text(json.dumps({"products": {}, "error_class": doc["error_class"]}, indent=2))
+        _write_latest_pointer(out_dir, status="FAIL", error_class="KAJABI_STORAGE_STATE_MISSING")
         print(json.dumps({"ok": False, "error_class": "KAJABI_STORAGE_STATE_MISSING", "artifact_dir": str(out_dir)}))
         return 1
 
@@ -132,6 +348,7 @@ def main() -> int:
             artifact_dir=str(out_dir),
         )
         (out_dir / "products.json").write_text(json.dumps({"products": {}, "error_class": doc["error_class"]}, indent=2))
+        _write_latest_pointer(out_dir, status="FAIL", error_class="PLAYWRIGHT_NOT_INSTALLED")
         print(json.dumps({"ok": False, "error_class": "PLAYWRIGHT_NOT_INSTALLED", "artifact_dir": str(out_dir)}))
         return 1
 
@@ -139,6 +356,14 @@ def main() -> int:
     final_url = ""
     title = ""
     site_origin: str | None = None
+    page_capture: dict[str, Any] = {
+        "statuses": {},
+        "offer_urls_found": [],
+        "memberships_page_captured": False,
+        "community_page_captured": False,
+        "privacy_page_captured": False,
+        "terms_page_captured": False,
+    }
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -162,6 +387,7 @@ def main() -> int:
                 pass
             browser.close()
             (out_dir / "products.json").write_text(json.dumps({"products": {}, "error_class": "KAJABI_NAVIGATION_FAILED"}, indent=2))
+            _write_latest_pointer(out_dir, status="FAIL", error_class="KAJABI_NAVIGATION_FAILED")
             print(json.dumps({"ok": False, "error_class": "KAJABI_NAVIGATION_FAILED", "artifact_dir": str(out_dir)}))
             return 1
 
@@ -185,10 +411,11 @@ def main() -> int:
                 pass
             browser.close()
             (out_dir / "products.json").write_text(json.dumps({"products": {}, "error_class": error_class}, indent=2))
+            _write_latest_pointer(out_dir, status="FAIL", error_class=error_class)
             print(json.dumps({"ok": False, "error_class": error_class, "artifact_dir": str(out_dir)}))
             return 1
 
-        site_origin = bootstrap.site_origin or "https://zane-mccourtney.mykajabi.com"
+        site_origin = bootstrap.site_origin or DEFAULT_SITE_ORIGIN
         final_url = safe_url(page)
         title = safe_title(page)
 
@@ -268,24 +495,13 @@ def main() -> int:
                 except Exception:
                     pass
 
-        # Capture memberships page for offer URL validation (SOMA_LOCKED_SPEC §9)
-        memberships_page_captured = False
-        try:
-            page.goto(MEMBERSHIPS_PAGE_URL, wait_until="load", timeout=30000)
-            page.wait_for_load_state("networkidle", timeout=10000)
-            memberships_content = page.content() or ""
-            (out_dir / "memberships_page.html").write_text(
-                memberships_content[:131072], encoding="utf-8"
-            )
-            safe_screenshot(page, str(out_dir / "memberships_screenshot.png"))
-            offer_urls_found = [u for u in REQUIRED_OFFER_URLS if u in memberships_content]
-            memberships_page_captured = True
-        except Exception:
-            try:
-                (out_dir / "memberships_page.html").write_text("(capture failed)", encoding="utf-8")
-            except Exception:
-                pass
-            offer_urls_found = []
+        # Capture required frontdoor pages used by Business DoD checks.
+        page_capture = _capture_required_pages(
+            page,
+            out_dir=out_dir,
+            site_origin=site_origin,
+            safe_screenshot=safe_screenshot,
+        )
 
         browser.close()
 
@@ -305,8 +521,12 @@ def main() -> int:
         "product_count": len(products_output),
         "targets_found": list(products_output.keys()),
         "targets_missing": [t for t in TARGET_PRODUCTS if t not in products_output],
-        "memberships_page_captured": memberships_page_captured,
-        "offer_urls_found": offer_urls_found,
+        "memberships_page_captured": page_capture["memberships_page_captured"],
+        "community_page_captured": page_capture["community_page_captured"],
+        "privacy_page_captured": page_capture["privacy_page_captured"],
+        "terms_page_captured": page_capture["terms_page_captured"],
+        "capture_statuses": page_capture["statuses"],
+        "offer_urls_found": page_capture["offer_urls_found"],
         "offer_urls_required": REQUIRED_OFFER_URLS,
     }
     (out_dir / "debug.json").write_text(json.dumps(debug_doc, indent=2))
@@ -324,6 +544,7 @@ def main() -> int:
     except OSError:
         pass  # May lack write permission; artifacts still written
 
+    _write_latest_pointer(out_dir, status="PASS")
     print(json.dumps({
         "ok": True,
         "artifact_dir": str(out_dir),
@@ -331,8 +552,11 @@ def main() -> int:
         "products_found": list(products_output.keys()),
         "products_missing": [t for t in TARGET_PRODUCTS if t not in products_output],
         "product_count": len(products_output),
-        "memberships_page_captured": memberships_page_captured,
-        "offer_urls_found": offer_urls_found,
+        "memberships_page_captured": page_capture["memberships_page_captured"],
+        "community_page_captured": page_capture["community_page_captured"],
+        "privacy_page_captured": page_capture["privacy_page_captured"],
+        "terms_page_captured": page_capture["terms_page_captured"],
+        "offer_urls_found": page_capture["offer_urls_found"],
     }))
     return 0
 
