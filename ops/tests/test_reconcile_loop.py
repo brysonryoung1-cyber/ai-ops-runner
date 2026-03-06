@@ -149,6 +149,29 @@ print(json.dumps(payload))
     artifacts_root = tmp_path / "artifacts"
     run_dir = artifacts_root / "system" / "state_pack" / "existing_run"
     run_dir.mkdir(parents=True, exist_ok=True)
+    for name in [
+        "health_public.json",
+        "autopilot_status.json",
+        "llm_status.json",
+        "tailscale_serve.txt",
+        "ports.txt",
+        "systemd_openclaw-novnc.txt",
+        "systemd_openclaw-frontdoor.txt",
+        "systemd_openclaw-hostd.txt",
+        "systemd_openclaw-guard.txt",
+        "systemd_hq.txt",
+        "latest_runs_index.json",
+        "build_sha.txt",
+        "novnc_http_check.json",
+        "ws_probe.json",
+        "SUMMARY.md",
+    ]:
+        (run_dir / name).write_text("{}\n", encoding="utf-8")
+    (run_dir / "RESULT.json").write_text(
+        json.dumps({"status": "PASS", "reason": "state_pack_generated"}) + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "LATEST.ok").write_text('{"ok":true}\n', encoding="utf-8")
     latest_json = artifacts_root / "system" / "state_pack" / "LATEST.json"
     latest_json.parent.mkdir(parents=True, exist_ok=True)
     latest_json.write_text(
@@ -158,8 +181,11 @@ print(json.dumps(payload))
                 "reason": "state_pack_generated",
                 "run_id": "existing_run",
                 "generated_at": datetime.now(timezone.utc).isoformat(),
+                "finished_at": datetime.now(timezone.utc).isoformat(),
                 "latest_path": str(run_dir),
                 "result_path": str(run_dir / "RESULT.json"),
+                "schema_version": 1,
+                "sha": "abc1234",
             }
         ),
         encoding="utf-8",

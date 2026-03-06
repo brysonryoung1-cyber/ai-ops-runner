@@ -44,6 +44,13 @@ Service hardening notes (2026-03-06):
 - That keeps systemd out of the failed state while preserving a deterministic reason in logs and reconcile artifacts when `state_pack.sh` produces no directory.
 - `openclaw_doctor` now records and fails on systemd failed units in `systemd_failed_units.status` with bounded evidence at `systemd_failed_units/failed.txt`.
 
+State pack contract and retention:
+- `ops/scripts/state_pack_generate.sh` now writes `artifacts/system/state_pack/<run_id>/LATEST.ok` as the completion marker and updates `LATEST.json` with `schema_version`, `sha`, `finished_at`, and the canonical `result_path`.
+- `ops/openclaw_doctor.sh` runs both `state_pack_freshness` and `state_pack_integrity` on every invocation; `doctor.json` now includes both checks plus bounded artifacts at `artifacts/doctor/<run_id>/state_pack_freshness/status.json`, `artifacts/doctor/<run_id>/state_pack_integrity/status.json`, and `artifacts/doctor/<run_id>/state_pack_integrity/details.json`.
+- `ops/scripts/state_pack_prune.sh` enforces retention for `artifacts/system/state_pack/` with defaults `STATE_PACK_KEEP_COUNT=288`, `STATE_PACK_KEEP_HOURS` disabled unless set, and `STATE_PACK_DISK_THRESHOLD_PCT=85`.
+- When disk usage on the artifacts filesystem reaches the threshold, prune switches to disk-guard mode, keeps at least the latest pack plus `STATE_PACK_KEEP_COUNT_MIN` (default `24`), and records reason `DISK_GUARD_ACTIVE`.
+- Every prune run writes an atomic bounded report to `artifacts/system/state_pack/PRUNE_LAST.json`; generation invokes prune automatically after a successful `LATEST.json` update and records prune status in the pack `RESULT.json`.
+
 ### Deploy
 
 | Script | Description | Run As |

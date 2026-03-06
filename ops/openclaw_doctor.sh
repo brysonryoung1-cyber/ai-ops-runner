@@ -36,8 +36,15 @@ STATE_PACK_FRESHNESS_REASON="NOT_RUN"
 STATE_PACK_FRESHNESS_LATEST_PATH=""
 STATE_PACK_FRESHNESS_AGE_SEC=""
 STATE_PACK_FRESHNESS_THRESHOLD_SEC="${OPENCLAW_STATE_PACK_FRESHNESS_THRESHOLD_SEC:-7200}"
+STATE_PACK_INTEGRITY_DIR="$DOCTOR_JSON_DIR/state_pack_integrity"
+STATE_PACK_INTEGRITY_STATUS_JSON="$STATE_PACK_INTEGRITY_DIR/status.json"
+STATE_PACK_INTEGRITY_DETAILS_JSON="$STATE_PACK_INTEGRITY_DIR/details.json"
+STATE_PACK_INTEGRITY_STATUS="FAIL"
+STATE_PACK_INTEGRITY_REASON="NOT_RUN"
+STATE_PACK_INTEGRITY_LATEST_PATH=""
 mkdir -p "$SYSTEMD_FAILED_DIR" 2>/dev/null || true
 mkdir -p "$STATE_PACK_FRESHNESS_DIR" 2>/dev/null || true
+mkdir -p "$STATE_PACK_INTEGRITY_DIR" 2>/dev/null || true
 
 pass() { CHECKS=$((CHECKS + 1)); echo "  PASS: $1"; }
 fail() { CHECKS=$((CHECKS + 1)); FAILURES=$((FAILURES + 1)); echo "  FAIL: $1" >&2; }
@@ -214,6 +221,46 @@ if [ "$STATE_PACK_FRESHNESS_STATUS" = "PASS" ]; then
   pass "State pack freshness OK (age=${STATE_PACK_FRESHNESS_AGE_SEC:-0}s threshold=${STATE_PACK_FRESHNESS_THRESHOLD_SEC}s)"
 else
   fail "State pack freshness FAILED (${STATE_PACK_FRESHNESS_REASON}; latest=${STATE_PACK_FRESHNESS_LATEST_PATH:-missing}; age=${STATE_PACK_FRESHNESS_AGE_SEC:-unknown}s threshold=${STATE_PACK_FRESHNESS_THRESHOLD_SEC}s)"
+fi
+
+# --- 3d. State Pack Integrity ---
+echo "--- State Pack Integrity ---"
+STATE_PACK_INTEGRITY_PAYLOAD="$(
+  python3 - "$ROOT_DIR" "$ARTIFACTS_ROOT" "$STATE_PACK_INTEGRITY_STATUS_JSON" "$STATE_PACK_INTEGRITY_DETAILS_JSON" <<'PYEOF'
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from ops.lib.state_pack_contract import evaluate_state_pack_integrity
+
+payload = evaluate_state_pack_integrity(artifacts_root=Path(sys.argv[2]))
+status_payload = {
+    "status": payload.get("status"),
+    "reason": payload.get("reason"),
+    "latest_json": payload.get("latest_json"),
+    "latest_path": payload.get("latest_path"),
+    "result_path": payload.get("result_path"),
+    "run_id": payload.get("run_id"),
+    "finished_at": payload.get("finished_at"),
+    "sha": payload.get("sha"),
+    "schema_version": payload.get("schema_version"),
+}
+details_payload = payload.get("details") or {}
+if isinstance(details_payload.get("missing_files"), list):
+    details_payload["missing_files"] = details_payload["missing_files"][:10]
+Path(sys.argv[3]).write_text(json.dumps(status_payload, indent=2) + "\n", encoding="utf-8")
+Path(sys.argv[4]).write_text(json.dumps(details_payload, indent=2) + "\n", encoding="utf-8")
+print(json.dumps(status_payload))
+PYEOF
+)" || STATE_PACK_INTEGRITY_PAYLOAD='{"status":"FAIL","reason":"STATE_PACK_INTEGRITY_CHECK_ERROR","latest_path":""}'
+STATE_PACK_INTEGRITY_STATUS="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("status","FAIL"))' "$STATE_PACK_INTEGRITY_PAYLOAD" 2>/dev/null || echo FAIL)"
+STATE_PACK_INTEGRITY_REASON="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("reason","STATE_PACK_INTEGRITY_CHECK_ERROR"))' "$STATE_PACK_INTEGRITY_PAYLOAD" 2>/dev/null || echo STATE_PACK_INTEGRITY_CHECK_ERROR)"
+STATE_PACK_INTEGRITY_LATEST_PATH="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("latest_path") or "")' "$STATE_PACK_INTEGRITY_PAYLOAD" 2>/dev/null || echo "")"
+if [ "$STATE_PACK_INTEGRITY_STATUS" = "PASS" ]; then
+  pass "State pack integrity OK (latest=${STATE_PACK_INTEGRITY_LATEST_PATH:-missing})"
+else
+  fail "State pack integrity FAILED (${STATE_PACK_INTEGRITY_REASON}; latest=${STATE_PACK_INTEGRITY_LATEST_PATH:-missing})"
 fi
 
 # --- 4. Public Port Audit (tailnet-aware) ---
@@ -1004,7 +1051,7 @@ else
 fi
 
 # --- JSON Output ---
-python3 - "$DOCTOR_JSON_DIR/doctor.json" "$CHECKS" "$FAILURES" "$(hostname 2>/dev/null || echo unknown)" "$FRONTDOOR_WS_STATUS" "$FRONTDOOR_WS_SUMMARY" "$FRONTDOOR_WS_PROBE_JSON" "$SYSTEMD_FAILED_STATUS" "$SYSTEMD_FAILED_COUNT" "$SYSTEMD_FAILED_TXT" "$SYSTEMD_FAILED_DIR/status.json" "$STATE_PACK_FRESHNESS_STATUS" "$STATE_PACK_FRESHNESS_REASON" "$STATE_PACK_FRESHNESS_LATEST_PATH" "$STATE_PACK_FRESHNESS_AGE_SEC" "$STATE_PACK_FRESHNESS_THRESHOLD_SEC" "$STATE_PACK_FRESHNESS_JSON" <<'PYEOF'
+python3 - "$DOCTOR_JSON_DIR/doctor.json" "$CHECKS" "$FAILURES" "$(hostname 2>/dev/null || echo unknown)" "$FRONTDOOR_WS_STATUS" "$FRONTDOOR_WS_SUMMARY" "$FRONTDOOR_WS_PROBE_JSON" "$SYSTEMD_FAILED_STATUS" "$SYSTEMD_FAILED_COUNT" "$SYSTEMD_FAILED_TXT" "$SYSTEMD_FAILED_DIR/status.json" "$STATE_PACK_FRESHNESS_STATUS" "$STATE_PACK_FRESHNESS_REASON" "$STATE_PACK_FRESHNESS_LATEST_PATH" "$STATE_PACK_FRESHNESS_AGE_SEC" "$STATE_PACK_FRESHNESS_THRESHOLD_SEC" "$STATE_PACK_FRESHNESS_JSON" "$STATE_PACK_INTEGRITY_STATUS" "$STATE_PACK_INTEGRITY_REASON" "$STATE_PACK_INTEGRITY_LATEST_PATH" "$STATE_PACK_INTEGRITY_STATUS_JSON" "$STATE_PACK_INTEGRITY_DETAILS_JSON" <<'PYEOF'
 import json, sys
 from datetime import datetime, timezone
 out_file = sys.argv[1]
@@ -1024,6 +1071,11 @@ state_pack_freshness_latest_path = sys.argv[14]
 state_pack_freshness_age_sec = sys.argv[15]
 state_pack_freshness_threshold_sec = int(sys.argv[16])
 state_pack_freshness_status_json = sys.argv[17]
+state_pack_integrity_status = sys.argv[18]
+state_pack_integrity_reason = sys.argv[19]
+state_pack_integrity_latest_path = sys.argv[20]
+state_pack_integrity_status_json = sys.argv[21]
+state_pack_integrity_details_json = sys.argv[22]
 result = {
     "timestamp": datetime.now(timezone.utc).isoformat(),
     "hostname": hostname,
@@ -1049,6 +1101,13 @@ result = {
         "age_sec": int(state_pack_freshness_age_sec) if state_pack_freshness_age_sec else None,
         "threshold_sec": state_pack_freshness_threshold_sec,
         "status_json": state_pack_freshness_status_json,
+    },
+    "state_pack_integrity": {
+        "status": state_pack_integrity_status,
+        "reason": state_pack_integrity_reason,
+        "latest_path": state_pack_integrity_latest_path,
+        "status_json": state_pack_integrity_status_json,
+        "details_json": state_pack_integrity_details_json,
     },
 }
 with open(out_file, "w") as f:
