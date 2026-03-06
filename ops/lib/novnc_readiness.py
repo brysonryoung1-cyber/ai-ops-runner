@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Convergent noVNC readiness gate with bounded recovery + proof artifacts.
+"""Deterministic noVNC readiness gate with bounded self-heal + proof artifacts.
 
 This module is the single readiness authority used by openclaw_novnc_doctor and
 Soma prechecks. It is fail-closed:
   - PASS only when all required probes are green
-  - FAIL with NOVNC_NOT_READY (or a concrete subclass) after bounded retries
+  - FAIL with NOVNC_NOT_READY (or a concrete subclass) with explicit artifacts
 
 Required probes:
   1) HTTP GET /novnc/vnc.html contains noVNC marker(s)
@@ -13,10 +13,10 @@ Required probes:
   4) WebSocket upgrade handshake on /websockify (local)
   5) Optional tailnet WSS probe (if tooling/host available)
 
-Recovery between attempts is deterministic and idempotent:
-  - safe stale X lock cleanup for configured DISPLAY
-  - systemctl restart openclaw-novnc.service
-  - optional extra unit restarts from OPENCLAW_NOVNC_RECOVERY_UNITS
+Self-heal is deterministic and single-shot:
+  - only for tcp_backend_vnc failures (127.0.0.1:5900 not accepting TCP)
+  - one safe restart attempt per run_id (rate-limited by artifact marker)
+  - one post-restart re-probe; if still failing, fail-closed with evidence
 """
 
 from __future__ import annotations
@@ -51,6 +51,7 @@ HARD_MAX_WAIT = 180
 TARGET_MAX_WAIT_FAST = 45
 BACKOFF_DEEP = (2, 4, 8, 16, 32, 32)
 BACKOFF_FAST = (2, 4, 8)
+BACKEND_SELFHEAL_SLEEP_SEC = float(os.environ.get("OPENCLAW_NOVNC_BACKEND_SELFHEAL_SLEEP_SEC", "3"))
 JOURNAL_LINES = 200
 HTTP_MARKERS = ("novnc", "vnc_lite.html", "app/ui.js", "core/rfb")
 PROCESS_RE = re.compile(r"(novnc|websockify|xvfb|fluxbox|x11vnc|vnc)", re.IGNORECASE)
@@ -441,6 +442,87 @@ def _recover_once(root: Path, display: str, attempt: int) -> dict[str, Any]:
     }
 
 
+def _run_backend_selfheal_restart(root: Path) -> dict[str, Any]:
+    """Run one safe restart via allowlisted script first, then direct fallback."""
+    restart_script = root / "ops" / "scripts" / "novnc_restart.sh"
+    if restart_script.exists():
+        rc, stdout, stderr = _run_cmd(["bash", str(restart_script)], timeout=45, cwd=root)
+        return {
+            "method": "allowlisted_script",
+            "command": ["bash", str(restart_script)],
+            "rc": rc,
+            "ok": rc == 0,
+            "stdout_tail": stdout[-400:],
+            "stderr_tail": stderr[-400:],
+        }
+
+    rc, stdout, stderr = _run_cmd(["systemctl", "restart", SYSTEMD_UNIT], timeout=30, cwd=root)
+    return {
+        "method": "systemctl_direct_fallback",
+        "command": ["systemctl", "restart", SYSTEMD_UNIT],
+        "rc": rc,
+        "ok": rc == 0,
+        "stdout_tail": stdout[-400:],
+        "stderr_tail": stderr[-400:],
+    }
+
+
+def _backend_selfheal_attempt_path(out_dir: Path) -> Path:
+    return out_dir / "novnc_backend_selfheal" / "attempt.json"
+
+
+def _is_tcp_backend_vnc_failure(snapshot: dict[str, Any]) -> bool:
+    checks = snapshot.get("checks") or {}
+    backend = checks.get("tcp_backend_vnc") or {}
+    return bool(not snapshot.get("ready") and not backend.get("ok"))
+
+
+def _attempt_backend_selfheal_once(
+    *,
+    root: Path,
+    out_dir: Path,
+    run_id: str,
+    probe_snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    attempt_path = _backend_selfheal_attempt_path(out_dir)
+    attempt_path.parent.mkdir(parents=True, exist_ok=True)
+    if attempt_path.exists():
+        previous: dict[str, Any] = {}
+        try:
+            previous = json.loads(attempt_path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, json.JSONDecodeError):
+            previous = {}
+        return {
+            "attempt": int(probe_snapshot.get("attempt") or 0),
+            "timestamp": _now_iso(),
+            "attempted": False,
+            "rate_limited": True,
+            "reason": "already_attempted_for_run_id",
+            "run_id": run_id,
+            "attempt_artifact": str(_artifact_rel(root, attempt_path)),
+            "previous_attempt": previous,
+        }
+
+    restart_result = _run_backend_selfheal_restart(root)
+    payload = {
+        "attempt": int(probe_snapshot.get("attempt") or 0),
+        "timestamp": _now_iso(),
+        "attempted": True,
+        "rate_limited": False,
+        "run_id": run_id,
+        "trigger_error_class": probe_snapshot.get("error_class") or "NOVNC_BACKEND_UNAVAILABLE",
+        "trigger": {
+            "tcp_backend_vnc": (probe_snapshot.get("checks") or {}).get("tcp_backend_vnc") or {},
+            "tcp_websockify": (probe_snapshot.get("checks") or {}).get("tcp_websockify") or {},
+            "ws_local": (probe_snapshot.get("checks") or {}).get("ws_local") or {},
+        },
+        "restart": restart_result,
+    }
+    _write_json(attempt_path, payload)
+    payload["attempt_artifact"] = str(_artifact_rel(root, attempt_path))
+    return payload
+
+
 class _Clock:
     def monotonic(self) -> float:
         return time.monotonic()
@@ -661,49 +743,72 @@ def ensure_novnc_ready(
     )
     out_dir = root / "artifacts" / "novnc_readiness" / rid
     out_dir.mkdir(parents=True, exist_ok=True)
-    display = _read_display()
-
     mode = "fast" if mode == "fast" else "deep"
-    backoff = BACKOFF_FAST if mode == "fast" else BACKOFF_DEEP
-    default_wait = TARGET_MAX_WAIT_FAST if mode == "fast" else TARGET_MAX_WAIT_DEEP
-    wait_budget = max_wait_sec if max_wait_sec is not None else default_wait
-    wait_budget = max(10, min(int(wait_budget), HARD_MAX_WAIT))
     tailnet_hold = 3 if mode == "fast" else 8
 
     remediation_suppressed = _is_gate_active(root)
+    started = time.monotonic()
+    probes: list[dict[str, Any]] = []
+    recoveries: list[dict[str, Any]] = []
+    sleeps: list[dict[str, Any]] = []
 
-    def _probe(attempt: int) -> dict[str, Any]:
-        snap = _collect_probe_snapshot(
-            root=root,
-            mode=mode,
-            novnc_port=novnc_port,
-            vnc_port=vnc_port,
-            frontdoor_port=frontdoor_port,
-            tailnet_hold_sec=tailnet_hold,
-        )
-        snap["attempt"] = attempt
-        if remediation_suppressed:
-            snap["remediation_suppressed"] = True
-        return snap
-
-    def _recover(attempt: int, _snapshot: dict[str, Any]) -> dict[str, Any]:
-        if remediation_suppressed:
-            return {
-                "attempt": attempt,
-                "timestamp": _now_iso(),
-                "suppressed": True,
-                "reason": "remediation suppressed due to active login window",
-            }
-        return _recover_once(root, display, attempt)
-
-    max_attempts = 1 if remediation_suppressed else len(backoff) + 1
-    state = run_convergent_readiness(
-        _probe,
-        _recover,
-        backoff_seconds=backoff,
-        max_wait_seconds=wait_budget,
-        max_attempts=max_attempts,
+    initial = _collect_probe_snapshot(
+        root=root,
+        mode=mode,
+        novnc_port=novnc_port,
+        vnc_port=vnc_port,
+        frontdoor_port=frontdoor_port,
+        tailnet_hold_sec=tailnet_hold,
     )
+    initial["attempt"] = 0
+    if remediation_suppressed:
+        initial["remediation_suppressed"] = True
+    probes.append(initial)
+
+    # Single-shot self-heal for deterministic backend tcp_backend_vnc failures only.
+    if _is_tcp_backend_vnc_failure(initial):
+        if remediation_suppressed:
+            recoveries.append(
+                {
+                    "attempt": 0,
+                    "timestamp": _now_iso(),
+                    "attempted": False,
+                    "suppressed": True,
+                    "reason": "remediation suppressed due to active login window",
+                }
+            )
+        else:
+            recovery = _attempt_backend_selfheal_once(
+                root=root,
+                out_dir=out_dir,
+                run_id=rid,
+                probe_snapshot=initial,
+            )
+            recoveries.append(recovery)
+            if recovery.get("attempted"):
+                sleep_sec = max(0.0, float(BACKEND_SELFHEAL_SLEEP_SEC))
+                if sleep_sec > 0:
+                    time.sleep(sleep_sec)
+                    sleeps.append({"attempt": 0, "sleep_sec": round(sleep_sec, 2)})
+                second = _collect_probe_snapshot(
+                    root=root,
+                    mode=mode,
+                    novnc_port=novnc_port,
+                    vnc_port=vnc_port,
+                    frontdoor_port=frontdoor_port,
+                    tailnet_hold_sec=tailnet_hold,
+                )
+                second["attempt"] = 1
+                probes.append(second)
+
+    state = {
+        "ok": bool((probes[-1] or {}).get("ready")),
+        "attempts": len(probes),
+        "elapsed_sec": round(max(0.0, time.monotonic() - started), 2),
+        "probes": probes,
+        "recoveries": recoveries,
+        "sleeps": sleeps,
+    }
     final_probe = (state.get("probes") or [{}])[-1]
     ws_local = final_probe.get("ws_stability_local") or "failed"
     ws_tailnet = final_probe.get("ws_stability_tailnet") or "failed"
@@ -749,7 +854,7 @@ def ensure_novnc_ready_with_recovery(
     emit_artifacts: bool = True,
     max_wait_sec: int | None = None,
 ) -> ReadinessOutcome:
-    # Recovery is already built into ensure_novnc_ready state machine.
+    # Recovery is already built into ensure_novnc_ready single-shot backend self-heal.
     return ensure_novnc_ready(
         run_id=run_id,
         mode=mode,
