@@ -7,12 +7,15 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ARTIFACTS_ROOT="${OPENCLAW_ARTIFACTS_ROOT:-/opt/ai-ops-runner/artifacts}"
 STATE_PACK_BASE="$ARTIFACTS_ROOT/system/state_pack"
 LOCK_DIR="${OPENCLAW_STATE_PACK_LOCK_DIR:-$ARTIFACTS_ROOT/.locks}"
+PRUNE_SCRIPT="$SCRIPT_DIR/state_pack_prune.sh"
 RUN_ID="${OPENCLAW_RUN_ID:-state_pack_$(date -u +%Y%m%dT%H%M%SZ)_$(od -A n -t x4 -N 2 /dev/urandom 2>/dev/null | tr -d ' ' || echo "$$")}"
 OUT_DIR="$STATE_PACK_BASE/$RUN_ID"
 RESULT_PATH="$OUT_DIR/RESULT.json"
 LATEST_PATH="$STATE_PACK_BASE/LATEST.json"
+PACK_OK_PATH="$OUT_DIR/LATEST.ok"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ARTIFACT_DIR_REL="artifacts/system/state_pack/$RUN_ID"
+SCHEMA_VERSION=1
 
 mkdir -p "$STATE_PACK_BASE" "$LOCK_DIR" "$OUT_DIR"
 
@@ -53,6 +56,13 @@ PACK_STATUS="fail"
 FAIL_COUNT=0
 CHECKS_JSON="[]"
 EVIDENCE_JSON="[]"
+WARNINGS_JSON="[]"
+BUILD_SHA="unknown"
+PRUNE_JSON="{}"
+PRUNE_STATUS="SKIP"
+PRUNE_REASON="NOT_RUN"
+PRUNE_REPORT_PATH="$STATE_PACK_BASE/PRUNE_LAST.json"
+PRUNE_REPORT_REL="artifacts/system/state_pack/PRUNE_LAST.json"
 
 run_generation() {
   # --- 1. health_public ---
@@ -243,7 +253,7 @@ write_result() {
   local contract_status="$1"
   local reason="$2"
   local finished_at="$3"
-  python3 - "$RESULT_PATH" "$contract_status" "$reason" "$RUN_ID" "$STARTED_AT" "$finished_at" "$OUT_DIR" "$ARTIFACT_DIR_REL" "$PACK_STATUS" "$CHECKS_JSON" "$EVIDENCE_JSON" <<'PYEOF'
+  python3 - "$RESULT_PATH" "$contract_status" "$reason" "$RUN_ID" "$STARTED_AT" "$finished_at" "$OUT_DIR" "$ARTIFACT_DIR_REL" "$PACK_STATUS" "$CHECKS_JSON" "$EVIDENCE_JSON" "$SCHEMA_VERSION" "$BUILD_SHA" "$PACK_OK_PATH" "$WARNINGS_JSON" "$PRUNE_JSON" <<'PYEOF'
 import json
 import sys
 from pathlib import Path
@@ -261,6 +271,11 @@ payload = {
     "pack_status": sys.argv[9],
     "checks": json.loads(sys.argv[10]),
     "evidence": json.loads(sys.argv[11]),
+    "schema_version": int(sys.argv[12]),
+    "sha": sys.argv[13],
+    "completion_marker": sys.argv[14],
+    "warnings": json.loads(sys.argv[15]),
+    "prune": json.loads(sys.argv[16]),
 }
 out_file.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 print(json.dumps(payload, separators=(",", ":")))
@@ -271,7 +286,7 @@ write_latest() {
   local finished_at="$1"
   local latest_tmp
   latest_tmp="$(mktemp "$STATE_PACK_BASE/.LATEST.json.tmp.XXXXXX")"
-  python3 - "$latest_tmp" "$RUN_ID" "$finished_at" "$OUT_DIR" "$RESULT_PATH" "$ARTIFACT_DIR_REL" "$PACK_STATUS" <<'PYEOF'
+  python3 - "$latest_tmp" "$RUN_ID" "$finished_at" "$OUT_DIR" "$RESULT_PATH" "$ARTIFACT_DIR_REL" "$PACK_STATUS" "$SCHEMA_VERSION" "$BUILD_SHA" <<'PYEOF'
 import json
 import sys
 from pathlib import Path
@@ -281,14 +296,97 @@ payload = {
     "reason": "state_pack_generated",
     "run_id": sys.argv[2],
     "generated_at": sys.argv[3],
+    "finished_at": sys.argv[3],
     "latest_path": sys.argv[4],
     "result_path": sys.argv[5],
     "artifact_dir": sys.argv[6],
     "pack_status": sys.argv[7],
+    "schema_version": int(sys.argv[8]),
+    "sha": sys.argv[9],
 }
 Path(sys.argv[1]).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 PYEOF
   mv "$latest_tmp" "$LATEST_PATH"
+}
+
+write_completion_marker() {
+  python3 - "$PACK_OK_PATH" "$RUN_ID" "$RESULT_STATUS" "$RESULT_REASON" "$STARTED_AT" "$FINISHED_AT" <<'PYEOF'
+import json
+import sys
+from pathlib import Path
+
+payload = {
+    "ok": True,
+    "run_id": sys.argv[2],
+    "status": sys.argv[3],
+    "reason": sys.argv[4],
+    "started_at": sys.argv[5],
+    "finished_at": sys.argv[6],
+}
+Path(sys.argv[1]).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+PYEOF
+}
+
+run_prune() {
+  local prune_output
+  local prune_rc=0
+  prune_output="$(
+    STATE_PACK_KEEP_COUNT="${STATE_PACK_KEEP_COUNT:-288}" \
+    STATE_PACK_KEEP_HOURS="${STATE_PACK_KEEP_HOURS:-}" \
+    STATE_PACK_DISK_THRESHOLD_PCT="${STATE_PACK_DISK_THRESHOLD_PCT:-85}" \
+    "$PRUNE_SCRIPT" --root "$ARTIFACTS_ROOT" 2>&1
+  )" || prune_rc=$?
+  if [ "$prune_rc" -eq 0 ]; then
+    PRUNE_JSON="$(python3 - "$PRUNE_REPORT_PATH" "$PRUNE_REPORT_REL" <<'PYEOF'
+import json
+import sys
+from pathlib import Path
+
+report_path = Path(sys.argv[1])
+payload = {"status": "WARN", "reason": "PRUNE_REPORT_MISSING", "artifact": sys.argv[2]}
+if report_path.exists():
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload.setdefault("artifact", sys.argv[2])
+print(json.dumps(payload))
+PYEOF
+)"
+    PRUNE_STATUS="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("status","PASS"))' "$PRUNE_JSON" 2>/dev/null || echo PASS)"
+    PRUNE_REASON="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("reason","RETENTION_APPLIED"))' "$PRUNE_JSON" 2>/dev/null || echo RETENTION_APPLIED)"
+    return 0
+  fi
+
+  WARNINGS_JSON="$(python3 - "$prune_output" "$PRUNE_REPORT_PATH" "$PRUNE_REPORT_REL" <<'PYEOF'
+import json
+import sys
+
+warning = {
+    "code": "STATE_PACK_PRUNE_WARN",
+    "reason": "PRUNE_EXEC_FAILED",
+    "detail": (sys.argv[1] or "").strip()[:400],
+    "report_path": sys.argv[2],
+    "artifact": sys.argv[3],
+}
+print(json.dumps([warning]))
+PYEOF
+)"
+  PRUNE_STATUS="WARN"
+  PRUNE_REASON="PRUNE_EXEC_FAILED"
+  PRUNE_JSON="$(python3 - "$PRUNE_REPORT_PATH" "$PRUNE_REPORT_REL" "$prune_output" <<'PYEOF'
+import json
+import sys
+
+payload = {
+    "status": "WARN",
+    "reason": "PRUNE_EXEC_FAILED",
+    "report_path": sys.argv[1],
+    "artifact": sys.argv[2],
+    "detail": (sys.argv[3] or "").strip()[:400],
+}
+print(json.dumps(payload))
+PYEOF
+)"
+  echo "WARN: state_pack_prune failed ($PRUNE_REASON)" >&2
+  return 0
 }
 
 EXIT_CODE=1
@@ -297,12 +395,19 @@ RESULT_REASON="STATE_PACK_GENERATION_FAILED"
 
 if run_generation; then
   FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  if write_latest "$FINISHED_AT"; then
+  if write_result "PASS" "state_pack_generated" "$FINISHED_AT" >/dev/null && write_latest "$FINISHED_AT"; then
     RESULT_STATUS="PASS"
     RESULT_REASON="state_pack_generated"
-    EXIT_CODE=0
+    if run_prune && write_result "$RESULT_STATUS" "$RESULT_REASON" "$FINISHED_AT" >/dev/null && write_completion_marker; then
+      EXIT_CODE=0
+    else
+      RESULT_STATUS="FAIL"
+      RESULT_REASON="STATE_PACK_FINALIZE_FAILED"
+      write_result "$RESULT_STATUS" "$RESULT_REASON" "$FINISHED_AT" >/dev/null 2>&1 || true
+    fi
   else
     RESULT_REASON="LATEST_UPDATE_FAILED"
+    write_result "FAIL" "$RESULT_REASON" "$FINISHED_AT" >/dev/null 2>&1 || true
   fi
 else
   FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
