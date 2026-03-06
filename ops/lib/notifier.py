@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from typing import Any
 from urllib import error, request
+from urllib.parse import urlparse
 
 DISCORD_WEBHOOK_ENV_VARS = (
     "OPENCLAW_DISCORD_WEBHOOK_URL",
@@ -55,6 +56,20 @@ def build_alert_hash(*, event_type: str, matrix_status: str, failed_checks: list
     return hashlib.sha256(raw).hexdigest()
 
 
+def _is_valid_webhook_url(raw_url: str | None) -> bool:
+    if not isinstance(raw_url, str):
+        return False
+    text = raw_url.strip()
+    if not text:
+        return False
+    parsed = urlparse(text)
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    if not parsed.netloc:
+        return False
+    return bool(parsed.path.strip("/"))
+
+
 def send_discord_webhook_alert(
     *,
     content: str,
@@ -63,50 +78,77 @@ def send_discord_webhook_alert(
     """Send Discord webhook alert without ever logging/storing secrets."""
 
     webhook_url, source = resolve_discord_webhook_url()
-    if not webhook_url:
+    if not _is_valid_webhook_url(webhook_url):
         return {
             "ok": False,
-            "error_class": "DISCORD_WEBHOOK_MISSING",
+            "error_class": "DISCORD_WEBHOOK_INVALID",
             "source": source,
+            "status_code": None,
+            "message": "Discord webhook URL is missing or invalid.",
         }
 
     body = json.dumps({"content": content}).encode("utf-8")
-    req = request.Request(
-        webhook_url,
-        data=body,
-        method="POST",
-        headers={"Content-Type": "application/json"},
-    )
     try:
+        req = request.Request(
+            webhook_url,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
         with request.urlopen(req, timeout=timeout_sec) as resp:
             status = int(resp.getcode() or 0)
             if 200 <= status < 300:
-                return {"ok": True, "http_code": status, "source": source}
+                return {
+                    "ok": True,
+                    "source": source,
+                    "status_code": status,
+                    "message": "",
+                }
             return {
                 "ok": False,
-                "error_class": "DISCORD_HTTP_STATUS",
-                "http_code": status,
+                "error_class": "DISCORD_HTTP_ERROR",
+                "status_code": status,
                 "source": source,
+                "message": f"Discord webhook returned HTTP {status}.",
             }
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "error_class": "DISCORD_WEBHOOK_INVALID",
+            "source": source,
+            "status_code": None,
+            "message": str(exc) or "Discord webhook URL is invalid.",
+        }
     except error.HTTPError as exc:
         return {
             "ok": False,
             "error_class": "DISCORD_HTTP_ERROR",
-            "http_code": int(exc.code),
+            "status_code": int(exc.code),
             "source": source,
+            "message": str(exc) or f"Discord webhook returned HTTP {int(exc.code)}.",
         }
     except error.URLError as exc:
         reason = getattr(exc, "reason", None)
         return {
             "ok": False,
             "error_class": "DISCORD_URL_ERROR",
-            "reason_type": type(reason).__name__ if reason is not None else "unknown",
             "source": source,
+            "status_code": None,
+            "message": str(reason or exc) or "Discord webhook URL request failed.",
+        }
+    except TimeoutError as exc:
+        return {
+            "ok": False,
+            "error_class": "DISCORD_TIMEOUT",
+            "source": source,
+            "status_code": None,
+            "message": str(exc) or "Discord webhook request timed out.",
         }
     except Exception as exc:  # noqa: BLE001
         return {
             "ok": False,
-            "error_class": "DISCORD_POST_EXCEPTION",
-            "exception_type": type(exc).__name__,
+            "error_class": "DISCORD_UNKNOWN",
             "source": source,
+            "status_code": None,
+            "message": str(exc) or type(exc).__name__,
         }

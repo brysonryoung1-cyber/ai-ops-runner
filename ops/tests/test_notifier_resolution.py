@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from urllib import error
 from pathlib import Path
 
 from ops.lib import notifier
@@ -60,3 +61,32 @@ def test_resolve_discord_webhook_url_uses_config_file_fallback(
 
     assert resolved == "https://discord.example/config-webhook"
     assert source == "file"
+
+
+def test_send_discord_webhook_alert_invalid_url_returns_structured_error(monkeypatch) -> None:
+    _clear_webhook_env(monkeypatch)
+    monkeypatch.setenv("OPENCLAW_DISCORD_WEBHOOK_URL", "not-a-url")
+
+    result = notifier.send_discord_webhook_alert(content="hello")
+
+    assert result["ok"] is False
+    assert result["error_class"] == "DISCORD_WEBHOOK_INVALID"
+    assert result["status_code"] is None
+    assert "invalid" in result["message"].lower()
+
+
+def test_send_discord_webhook_alert_http_error_returns_structured_error(monkeypatch) -> None:
+    _clear_webhook_env(monkeypatch)
+    monkeypatch.setenv("OPENCLAW_DISCORD_WEBHOOK_URL", "https://discord.example/hook")
+
+    def _boom(req, timeout=10):  # noqa: ANN001,ARG001
+        raise error.HTTPError(req.full_url, 429, "rate limited", hdrs=None, fp=None)
+
+    monkeypatch.setattr(notifier.request, "urlopen", _boom)
+
+    result = notifier.send_discord_webhook_alert(content="hello")
+
+    assert result["ok"] is False
+    assert result["error_class"] == "DISCORD_HTTP_ERROR"
+    assert result["status_code"] == 429
+    assert "429" in result["message"]

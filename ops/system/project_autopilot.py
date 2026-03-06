@@ -36,6 +36,7 @@ from ops.lib.aiops_remote_helpers import (
 from ops.lib.artifacts_root import get_artifacts_root
 from ops.lib.exec_trigger import TriggerResult, hq_request, trigger_exec
 from ops.lib.notifier import (
+    _is_valid_webhook_url,
     build_alert_hash,
     resolve_discord_webhook_url,
     send_discord_webhook_alert,
@@ -681,20 +682,20 @@ def _read_pointer_payload(artifacts_root: Path) -> dict[str, Any] | None:
 
 def build_webhook_preflight() -> dict[str, Any]:
     webhook_url, source = resolve_discord_webhook_url()
-    if webhook_url:
+    if _is_valid_webhook_url(webhook_url):
         return {
             "ok": True,
             "source": source,
             "error_class": None,
+            "status_code": None,
+            "message": "",
         }
-    error_class = "DISCORD_WEBHOOK_MISSING" if source == "missing" else sanitize_error_class(
-        f"DISCORD_WEBHOOK_{source}",
-        default="DISCORD_WEBHOOK_UNAVAILABLE",
-    )
     return {
         "ok": False,
         "source": source,
-        "error_class": error_class,
+        "error_class": "DISCORD_WEBHOOK_INVALID",
+        "status_code": None,
+        "message": "Discord webhook URL is missing or invalid.",
     }
 
 
@@ -1009,59 +1010,81 @@ def send_terminal_alert(
     state: dict[str, Any],
     webhook_preflight: dict[str, Any],
 ) -> dict[str, Any]:
-    terminal = terminal_status.upper()
-    if terminal not in {TERMINAL_WAITING, TERMINAL_FAIL}:
-        return {
+    try:
+        terminal = terminal_status.upper()
+        base = {
+            "status": "SKIPPED",
             "needed": False,
             "sent": False,
             "deduped": False,
             "hash": "",
+            "terminal_error_class": error_class,
             "error_class": "",
+            "message": "",
             "notify": webhook_preflight if not webhook_preflight.get("ok") else {},
         }
-    alert_hash = build_autopilot_alert_hash(
-        project=project,
-        terminal_status=terminal,
-        error_class=error_class,
-        run_id=remote_run_id,
-    )
-    seen = state.get("seen_alert_hashes")
-    if not isinstance(seen, list):
-        seen = []
-    if alert_hash in seen:
+        if terminal not in {TERMINAL_WAITING, TERMINAL_FAIL}:
+            return base
+        alert_hash = build_autopilot_alert_hash(
+            project=project,
+            terminal_status=terminal,
+            error_class=error_class,
+            run_id=remote_run_id,
+        )
+        seen = state.get("seen_alert_hashes")
+        if not isinstance(seen, list):
+            seen = []
+        if alert_hash in seen:
+            return {
+                **base,
+                "status": "DEDUPED",
+                "needed": True,
+                "deduped": True,
+                "hash": alert_hash,
+            }
+        message = format_alert_message(
+            project=project,
+            action=action,
+            terminal_status=terminal,
+            run_id=remote_run_id,
+            error_class=error_class,
+            proof_path=proof_path,
+            novnc_url=novnc_url,
+        )
+        if not webhook_preflight.get("ok"):
+            notify = dict(webhook_preflight)
+        else:
+            notify = send_discord_webhook_alert(content=message)
+        sent = bool(notify.get("ok"))
+        if sent:
+            seen = [*seen, alert_hash][-SEEN_ALERTS_MAX:]
+            state["seen_alert_hashes"] = seen
         return {
+            **base,
+            "status": "SENT" if sent else "ERROR",
+            "needed": True,
+            "sent": sent,
+            "hash": alert_hash,
+            "error_class": str(notify.get("error_class") or ""),
+            "message": str(notify.get("message") or ""),
+            "notify": notify,
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "status": "ERROR",
             "needed": True,
             "sent": False,
-            "deduped": True,
-            "hash": alert_hash,
-            "error_class": error_class,
-            "notify": webhook_preflight if not webhook_preflight.get("ok") else {},
+            "deduped": False,
+            "hash": "",
+            "terminal_error_class": error_class,
+            "error_class": "DISCORD_UNKNOWN",
+            "message": f"send_terminal_alert raised {type(exc).__name__}: {str(exc)[:240]}",
+            "notify": {
+                "ok": False,
+                "error_class": "DISCORD_UNKNOWN",
+                "message": f"send_terminal_alert raised {type(exc).__name__}: {str(exc)[:240]}",
+            },
         }
-    message = format_alert_message(
-        project=project,
-        action=action,
-        terminal_status=terminal,
-        run_id=remote_run_id,
-        error_class=error_class,
-        proof_path=proof_path,
-        novnc_url=novnc_url,
-    )
-    if not webhook_preflight.get("ok"):
-        notify = dict(webhook_preflight)
-    else:
-        notify = send_discord_webhook_alert(content=message)
-    sent = bool(notify.get("ok"))
-    if sent:
-        seen = [*seen, alert_hash][-SEEN_ALERTS_MAX:]
-        state["seen_alert_hashes"] = seen
-    return {
-        "needed": True,
-        "sent": sent,
-        "deduped": False,
-        "hash": alert_hash,
-        "error_class": error_class,
-        "notify": notify,
-    }
 
 
 def format_warning_entry(item: Any) -> str:
@@ -1106,11 +1129,16 @@ def build_summary(result: dict[str, Any]) -> str:
     if alert:
         lines.extend(
             [
+                f"- Alert status: `{alert.get('status')}`",
                 f"- Alert needed: `{alert.get('needed')}`",
                 f"- Alert sent: `{alert.get('sent')}`",
                 f"- Alert deduped: `{alert.get('deduped')}`",
             ]
         )
+        if alert.get("error_class"):
+            lines.append(f"- Alert error_class: `{alert.get('error_class')}`")
+        if alert.get("message"):
+            lines.append(f"- Alert message: `{alert.get('message')}`")
     validators = result.get("validators")
     if isinstance(validators, list) and validators:
         lines.extend(["", "## Validators"])
@@ -1154,6 +1182,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--mock-error-class", default="MOCK_FAIL")
     parser.add_argument("--mock-hq-file", default="")
     parser.add_argument("--mock-validator-status", choices=("SKIP", "PASS", "FAIL"), default="SKIP")
+    parser.add_argument("--exit-nonzero-on-terminal-fail", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -1206,11 +1235,14 @@ def main(argv: list[str] | None = None) -> int:
         "poll": {},
         "links": {},
         "alert": {
+            "status": "SKIPPED",
             "needed": False,
             "sent": False,
             "deduped": False,
             "hash": "",
+            "terminal_error_class": "",
             "error_class": "",
+            "message": "",
             "notify": webhook_preflight if not webhook_preflight.get("ok") else {},
         },
         "validators": [],
@@ -1227,17 +1259,22 @@ def main(argv: list[str] | None = None) -> int:
 
     def finalize(exit_code: int) -> int:
         result["finished_at"] = now_utc()
-        atomic_write_json(bundle_dir / "RESULT.json", result)
-        atomic_write_text(bundle_dir / "SUMMARY.md", build_summary(result))
-        state["last_result"] = {
-            "run_id": run_id,
-            "status": result.get("status"),
-            "error_class": result.get("error_class"),
-            "remote_run_id": result.get("remote_run_id"),
-            "finished_at": result.get("finished_at"),
-        }
-        atomic_write_json(state_path, state)
-        return exit_code
+        try:
+            atomic_write_json(bundle_dir / "RESULT.json", result)
+            atomic_write_text(bundle_dir / "SUMMARY.md", build_summary(result))
+            state["last_result"] = {
+                "run_id": run_id,
+                "status": result.get("status"),
+                "error_class": result.get("error_class"),
+                "remote_run_id": result.get("remote_run_id"),
+                "finished_at": result.get("finished_at"),
+            }
+            atomic_write_json(state_path, state)
+            return exit_code
+        except OSError as exc:
+            result["warnings"].append(f"FINALIZE_WRITE_FAILED:{type(exc).__name__}")
+            result["finalize_error"] = f"{type(exc).__name__}: {str(exc)[:240]}"
+            return 1
 
     try:
         doctor_payload = run_doctor_core(
@@ -1268,7 +1305,7 @@ def main(argv: list[str] | None = None) -> int:
                 state=state,
                 webhook_preflight=webhook_preflight,
             )
-            return finalize(1)
+            return finalize(0)
 
         trigger = client.trigger(args.project, args.action)
         result["trigger"] = {
@@ -1296,7 +1333,7 @@ def main(argv: list[str] | None = None) -> int:
                 state=state,
                 webhook_preflight=webhook_preflight,
             )
-            return finalize(1)
+            return finalize(0)
 
         remote_run_id = (trigger.run_id or "").strip()
         if trigger.state == "ALREADY_RUNNING" and not remote_run_id:
@@ -1314,7 +1351,7 @@ def main(argv: list[str] | None = None) -> int:
                 state=state,
                 webhook_preflight=webhook_preflight,
             )
-            return finalize(1)
+            return finalize(0)
         if not remote_run_id:
             result["status"] = TERMINAL_FAIL
             result["error_class"] = "RUN_ID_MISSING"
@@ -1330,7 +1367,7 @@ def main(argv: list[str] | None = None) -> int:
                 state=state,
                 webhook_preflight=webhook_preflight,
             )
-            return finalize(1)
+            return finalize(0)
 
         result["remote_run_id"] = remote_run_id
 
@@ -1413,7 +1450,7 @@ def main(argv: list[str] | None = None) -> int:
                 state=state,
                 webhook_preflight=webhook_preflight,
             )
-            return finalize(1)
+            return finalize(1 if args.exit_nonzero_on_terminal_fail else 0)
 
         # SUCCESS path: optional deterministic validators if configured in registry.
         action_ids = load_action_ids(repo_root)
@@ -1510,11 +1547,14 @@ def main(argv: list[str] | None = None) -> int:
         result["status"] = TERMINAL_SUCCESS
         result["error_class"] = None
         result["alert"] = {
+            "status": "SKIPPED",
             "needed": False,
             "sent": False,
             "deduped": False,
             "hash": "",
+            "terminal_error_class": "",
             "error_class": "",
+            "message": "",
             "notify": webhook_preflight if not webhook_preflight.get("ok") else {},
         }
         return finalize(0)
@@ -1534,7 +1574,7 @@ def main(argv: list[str] | None = None) -> int:
             state=state,
             webhook_preflight=webhook_preflight,
         )
-        return finalize(1)
+        return finalize(0)
 
 
 if __name__ == "__main__":

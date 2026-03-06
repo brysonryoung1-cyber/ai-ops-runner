@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib import error
 
 from ops.system.project_autopilot import main
 
@@ -159,11 +160,12 @@ def test_mock_doctor_fail_exits_nonzero_and_writes_result(tmp_path: Path, monkey
             str(artifacts_root),
         ]
     )
-    assert rc == 1
+    assert rc == 0
     result = _load_result(artifacts_root, "ap_doctor_fail")
     assert result["status"] == "FAIL"
     assert result["error_class"] == "DOCTOR_MATRIX_FAIL"
     assert result["doctor"]["status"] == "FAIL"
+    assert result["alert"]["status"] in {"SENT", "ERROR", "SKIPPED", "DEDUPED"}
 
 
 def test_mock_success_writes_proof_bundle(tmp_path: Path, monkeypatch) -> None:
@@ -462,13 +464,173 @@ def test_webhook_missing_is_recorded_but_not_fatal(tmp_path: Path) -> None:
     assert rc == 0
     result = _load_result(artifacts_root, "ap_webhook_missing")
     assert result["status"] == "SUCCESS"
+    assert result["alert"]["status"] == "SKIPPED"
     assert result["alert"]["needed"] is False
     assert result["alert"]["sent"] is False
-    assert result["alert"]["notify"]["error_class"] == "DISCORD_WEBHOOK_MISSING"
+    assert result["alert"]["notify"]["error_class"] == "DISCORD_WEBHOOK_INVALID"
     assert {
         "warning": "DISCORD_WEBHOOK_UNAVAILABLE",
-        "error_class": "DISCORD_WEBHOOK_MISSING",
+        "error_class": "DISCORD_WEBHOOK_INVALID",
     } in result["warnings"]
+
+
+def test_terminal_fail_alert_http_error_is_nonfatal_and_structured(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    state_root = tmp_path / "state"
+    remote_run_id = "20260305125600-fail1"
+    _write_run_to_done_bundle(
+        artifacts_root,
+        "run_to_done_20260305T125600Z_fail5555",
+        proof_payload={
+            "status": "FAIL",
+            "console_run_id": remote_run_id,
+            "error_class": "NOVNC_BACKEND_UNAVAILABLE",
+        },
+    )
+
+    def _http_error(*, content: str, timeout_sec: int = 10):  # noqa: ARG001
+        return {
+            "ok": False,
+            "error_class": "DISCORD_HTTP_ERROR",
+            "status_code": 429,
+            "message": "HTTP Error 429: rate limited",
+            "source": "env",
+        }
+
+    monkeypatch.setattr("ops.system.project_autopilot.send_discord_webhook_alert", _http_error)
+    monkeypatch.setenv("OPENCLAW_DISCORD_WEBHOOK_URL", "https://discord.example/webhook")
+
+    rc = main(
+        [
+            "--project",
+            "soma_kajabi",
+            "--action",
+            "soma_run_to_done",
+            "--mock",
+            "--mock-terminal-status",
+            "FAIL",
+            "--mock-run-id",
+            remote_run_id,
+            "--run-id",
+            "ap_fail_http_error",
+            "--state-root",
+            str(state_root),
+            "--artifacts-root",
+            str(artifacts_root),
+            "--validator-actions",
+            "",
+        ]
+    )
+
+    assert rc == 0
+    result = _load_result(artifacts_root, "ap_fail_http_error")
+    assert result["status"] == "FAIL"
+    assert result["error_class"] == "NOVNC_BACKEND_UNAVAILABLE"
+    assert result["alert"]["status"] == "ERROR"
+    assert result["alert"]["error_class"] == "DISCORD_HTTP_ERROR"
+    assert "429" in result["alert"]["message"]
+    assert result["alert"]["sent"] is False
+
+
+def test_terminal_fail_alert_sender_exception_is_nonfatal_and_structured(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    state_root = tmp_path / "state"
+    remote_run_id = "20260305125700-fail2"
+    _write_run_to_done_bundle(
+        artifacts_root,
+        "run_to_done_20260305T125700Z_fail6666",
+        proof_payload={
+            "status": "FAIL",
+            "console_run_id": remote_run_id,
+            "error_class": "NOVNC_BACKEND_UNAVAILABLE",
+        },
+    )
+
+    def _raise(*, content: str, timeout_sec: int = 10):  # noqa: ARG001
+        raise error.HTTPError("https://discord.example/webhook", 500, "boom", hdrs=None, fp=None)
+
+    monkeypatch.setattr("ops.system.project_autopilot.send_discord_webhook_alert", _raise)
+    monkeypatch.setenv("OPENCLAW_DISCORD_WEBHOOK_URL", "https://discord.example/webhook")
+
+    rc = main(
+        [
+            "--project",
+            "soma_kajabi",
+            "--action",
+            "soma_run_to_done",
+            "--mock",
+            "--mock-terminal-status",
+            "FAIL",
+            "--mock-run-id",
+            remote_run_id,
+            "--run-id",
+            "ap_fail_raise",
+            "--state-root",
+            str(state_root),
+            "--artifacts-root",
+            str(artifacts_root),
+            "--validator-actions",
+            "",
+        ]
+    )
+
+    assert rc == 0
+    result = _load_result(artifacts_root, "ap_fail_raise")
+    assert result["status"] == "FAIL"
+    assert result["error_class"] == "NOVNC_BACKEND_UNAVAILABLE"
+    assert result["alert"]["status"] == "ERROR"
+    assert result["alert"]["error_class"] == "DISCORD_UNKNOWN"
+    assert "HTTPError" in result["alert"]["message"]
+    assert result["alert"]["sent"] is False
+
+
+def test_terminal_fail_can_exit_nonzero_when_flag_enabled(tmp_path: Path) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    state_root = tmp_path / "state"
+    remote_run_id = "20260305125800-fail3"
+    _write_run_to_done_bundle(
+        artifacts_root,
+        "run_to_done_20260305T125800Z_fail7777",
+        proof_payload={
+            "status": "FAIL",
+            "console_run_id": remote_run_id,
+            "error_class": "NOVNC_BACKEND_UNAVAILABLE",
+        },
+    )
+
+    rc = main(
+        [
+            "--project",
+            "soma_kajabi",
+            "--action",
+            "soma_run_to_done",
+            "--mock",
+            "--mock-terminal-status",
+            "FAIL",
+            "--mock-run-id",
+            remote_run_id,
+            "--run-id",
+            "ap_fail_nonzero_flag",
+            "--state-root",
+            str(state_root),
+            "--artifacts-root",
+            str(artifacts_root),
+            "--validator-actions",
+            "",
+            "--exit-nonzero-on-terminal-fail",
+        ]
+    )
+
+    assert rc == 1
+    result = _load_result(artifacts_root, "ap_fail_nonzero_flag")
+    assert result["status"] == "FAIL"
+    assert result["error_class"] == "NOVNC_BACKEND_UNAVAILABLE"
 
 
 def test_mock_waiting_alert_uses_webhook_resolution_env_and_file(tmp_path: Path, monkeypatch) -> None:
