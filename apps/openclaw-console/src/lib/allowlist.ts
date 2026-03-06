@@ -31,6 +31,7 @@ export type ActionName =
   | "soma_kajabi_phase0"
   | "soma_kajabi_snapshot_debug"
   | "soma_kajabi_discover"
+  | "soma_kajabi_discover_interactive"
   | "soma_kajabi_capture_interactive"
   | "soma_kajabi_unblock_and_run"
   | "soma_zane_finish_plan"
@@ -253,6 +254,15 @@ export const ALLOWLIST: Record<ActionName, AllowedAction> = {
     remoteCommand:
       "cd /opt/ai-ops-runner && /opt/ai-ops-runner/.venv-hostd/bin/python ./ops/scripts/kajabi_discover.py",
     timeoutSec: 180,
+  },
+  soma_kajabi_discover_interactive: {
+    name: "soma_kajabi_discover_interactive",
+    label: "Kajabi Discover (Interactive Profile)",
+    description:
+      "Reuse the authenticated noVNC Kajabi profile to capture memberships/community/privacy/terms after human auth. If the profile is busy, returns HUMAN_ONLY with the noVNC close-browser instruction.",
+    remoteCommand:
+      "cd /opt/ai-ops-runner && /opt/ai-ops-runner/.venv-hostd/bin/python ./ops/scripts/kajabi_discover.py --mode interactive",
+    timeoutSec: 300,
   },
   soma_kajabi_capture_interactive: {
     name: "soma_kajabi_capture_interactive",

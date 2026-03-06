@@ -106,6 +106,13 @@
       "cmd_template": "cd ${ROOT_DIR} && ./ops/with_exit_node.sh -- ${ROOT_DIR}/.venv-hostd/bin/python ./ops/scripts/kajabi_discover.py"
     },
     {
+      "id": "soma_kajabi_discover_interactive",
+      "label": "Kajabi Discover (Interactive Profile)",
+      "project_id": "soma_kajabi",
+      "timeout_sec": 300,
+      "cmd_template": "cd ${ROOT_DIR} && ${ROOT_DIR}/.venv-hostd/bin/python ./ops/scripts/kajabi_discover.py --mode interactive"
+    },
+    {
       "id": "soma_kajabi_capture_interactive",
       "label": "Kajabi Interactive Capture (Cloudflare Unblock)",
       "project_id": "soma_kajabi",

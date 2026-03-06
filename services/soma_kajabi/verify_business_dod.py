@@ -86,9 +86,11 @@ def _repo_root() -> Path:
 
 def _make_check(passed: bool, details: str = "",
                 evidence_paths: list[str] | None = None,
-                reason: str = "") -> dict[str, Any]:
+                reason: str = "",
+                status: str | None = None) -> dict[str, Any]:
     return {
         "pass": passed,
+        "status": status or ("PASS" if passed else "FAIL"),
         "details": details,
         "evidence_paths": evidence_paths or [],
         "reason": reason,
@@ -138,6 +140,75 @@ def _iter_snapshot_candidates(artifacts_root: Path) -> list[Path]:
             if d.is_dir() and candidate.is_file():
                 candidates.append(candidate)
     return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def _read_json_dict(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _discover_base(artifacts_root: Path) -> Path:
+    return artifacts_root / "soma_kajabi" / "discover"
+
+
+def _latest_discover_pointer(artifacts_root: Path) -> dict[str, Any] | None:
+    return _read_json_dict(_discover_base(artifacts_root) / "LATEST.json")
+
+
+def _discover_candidate_dirs(artifacts_root: Path) -> tuple[list[Path], dict[str, Any] | None]:
+    discover_base = _discover_base(artifacts_root)
+    pointer = _latest_discover_pointer(artifacts_root)
+    dirs: list[Path] = []
+    seen: set[Path] = set()
+
+    if isinstance(pointer, dict):
+        raw_dir = pointer.get("artifact_dir")
+        if isinstance(raw_dir, str) and raw_dir.strip():
+            preferred = Path(raw_dir.strip())
+            if preferred.exists():
+                dirs.append(preferred)
+                seen.add(preferred.resolve())
+
+    if discover_base.is_dir():
+        recent = sorted(
+            (d for d in discover_base.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        for candidate in recent:
+            resolved = candidate.resolve()
+            if resolved in seen:
+                continue
+            dirs.append(candidate)
+            seen.add(resolved)
+
+    return dirs, pointer
+
+
+def _discover_human_gate_warning(
+    *,
+    pointer: dict[str, Any] | None,
+    detail: str,
+) -> dict[str, Any] | None:
+    if not isinstance(pointer, dict):
+        return None
+    status = str(pointer.get("status") or "").upper()
+    if status != "HUMAN_ONLY":
+        return None
+    evidence_paths = []
+    artifact_dir = pointer.get("artifact_dir")
+    if isinstance(artifact_dir, str) and artifact_dir.strip():
+        evidence_paths.append(artifact_dir.strip())
+    return _make_check(
+        False,
+        reason="DISCOVER_HUMAN_GATE_REQUIRED",
+        status="WARN",
+        details=detail,
+        evidence_paths=evidence_paths,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -305,16 +376,19 @@ def check_offer_urls(
 ) -> dict[str, Any]:
     """PASS if required offer URLs appear in memberships page HTML."""
     required_urls = required_urls or REQUIRED_OFFER_URLS
-    discover_base = artifacts_root / "soma_kajabi" / "discover"
+    discover_base = _discover_base(artifacts_root)
 
     if not discover_base.is_dir():
         return _make_check(False, reason="DISCOVER_ARTIFACTS_MISSING",
                            details="No discover artifacts directory")
 
-    dirs = sorted(
-        (d for d in discover_base.iterdir() if d.is_dir()),
-        key=lambda d: d.stat().st_mtime, reverse=True,
+    dirs, pointer = _discover_candidate_dirs(artifacts_root)
+    warning = _discover_human_gate_warning(
+        pointer=pointer,
+        detail="discover is HUMAN_ONLY; memberships_page.html will be captured after interactive auth completes",
     )
+    if warning is not None and not dirs:
+        return warning
     for d in dirs[:3]:
         memberships_html = d / "memberships_page.html"
         if memberships_html.is_file():
@@ -332,6 +406,11 @@ def check_offer_urls(
                 details=f"All {len(required_urls)} offer URLs present (age: {age_days:.1f}d)",
                 evidence_paths=[str(memberships_html)],
             )
+
+        if warning is not None and isinstance(pointer, dict):
+            pointer_dir = str(pointer.get("artifact_dir") or "").strip()
+            if pointer_dir and Path(pointer_dir) == d:
+                return warning
 
     return _make_check(False, reason="MEMBERSHIPS_PAGE_MISSING",
                        details="memberships_page.html not found in recent discover runs")
@@ -421,15 +500,18 @@ def check_community_groups(
     """PASS if community artifacts show expected community + groups."""
     expected_groups = expected_groups or EXPECTED_GROUPS
 
-    discover_base = artifacts_root / "soma_kajabi" / "discover"
+    discover_base = _discover_base(artifacts_root)
     if not discover_base.is_dir():
         return _make_check(False, reason="DISCOVER_ARTIFACTS_MISSING",
                            details="No discover artifacts for community check")
 
-    dirs = sorted(
-        (d for d in discover_base.iterdir() if d.is_dir()),
-        key=lambda d: d.stat().st_mtime, reverse=True,
+    dirs, pointer = _discover_candidate_dirs(artifacts_root)
+    warning = _discover_human_gate_warning(
+        pointer=pointer,
+        detail="discover is HUMAN_ONLY; community artifacts will be captured after interactive auth completes",
     )
+    if warning is not None and not dirs:
+        return warning
     for d in dirs[:3]:
         community_json = d / "community.json"
         if community_json.is_file():
@@ -477,6 +559,11 @@ def check_community_groups(
                 )
             except Exception:
                 continue
+
+        if warning is not None and isinstance(pointer, dict):
+            pointer_dir = str(pointer.get("artifact_dir") or "").strip()
+            if pointer_dir and Path(pointer_dir) == d:
+                return warning
 
     return _make_check(False, reason="COMMUNITY_ARTIFACTS_MISSING",
                        details="No community.json or community.html in recent discover runs")
@@ -609,11 +696,12 @@ def verify_business_dod(
     checks["community_groups_exist"] = check_community_groups(artifacts_root)
     checks["manifest_dedupe"] = check_manifest_dedupe(artifacts_root, manifest_path)
 
-    all_pass = all(c["pass"] for c in checks.values())
+    all_pass = all(c.get("status", "PASS") != "FAIL" for c in checks.values())
     warnings: list[str] = []
     for name, c in checks.items():
-        if not c["pass"]:
-            warnings.append(f"{name}: {c.get('reason', 'FAIL')} — {c.get('details', '')[:120]}")
+        status = str(c.get("status") or ("PASS" if c.get("pass") else "FAIL"))
+        if status != "PASS":
+            warnings.append(f"{name}: {status} {c.get('reason', 'FAIL')} — {c.get('details', '')[:120]}")
 
     result = {
         "pass": all_pass,
@@ -622,7 +710,8 @@ def verify_business_dod(
         "created_at": _now_iso(),
         "checks": checks,
         "warnings": warnings,
-        "checks_passed": sum(1 for c in checks.values() if c["pass"]),
+        "checks_passed": sum(1 for c in checks.values() if c.get("status") == "PASS"),
+        "checks_warned": sum(1 for c in checks.values() if c.get("status") == "WARN"),
         "checks_total": len(checks),
         "artifact_dir": str(out_dir),
         "business_dod_artifact_dir": str(out_dir),
@@ -643,7 +732,7 @@ def verify_business_dod(
         "|---|-------|--------|---------|",
     ]
     for i, (name, c) in enumerate(checks.items(), 1):
-        status = "PASS" if c["pass"] else "FAIL"
+        status = str(c.get("status") or ("PASS" if c.get("pass") else "FAIL"))
         detail_short = (c.get("details") or "")[:80].replace("|", "\\|")
         summary_lines.append(f"| {i} | {name} | {status} | {detail_short} |")
 

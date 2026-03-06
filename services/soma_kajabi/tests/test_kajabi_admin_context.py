@@ -89,3 +89,20 @@ def test_cloudflare_not_login():
     assert _is_cloudflare_blocked("Sorry, you have been blocked", title="Cloudflare") is True
     assert _is_cloudflare_blocked("normal page", title="Kajabi Admin") is False
     assert _is_login_page("https://app.kajabi.com/login", cf_content) is False
+
+
+def test_cloudflare_detected_from_response_headers():
+    from services.soma_kajabi.kajabi_admin_context import _is_cloudflare_blocked
+
+    assert _is_cloudflare_blocked(
+        "<html>forbidden</html>",
+        title="Kajabi Admin",
+        response_status=403,
+        response_headers={"cf-ray": "abc123"},
+    ) is True
+    assert _is_cloudflare_blocked(
+        "<html>retry later</html>",
+        title="Kajabi Admin",
+        response_status=503,
+        response_headers={"cf-chl-bypass": "1"},
+    ) is True

@@ -59,15 +59,33 @@ class BootstrapResult:
     artifact_path: str | None = None
 
 
-def _is_cloudflare_blocked(content: str, title: str | None = None) -> bool:
+def _is_cloudflare_blocked(
+    content: str,
+    title: str | None = None,
+    *,
+    response_status: int | None = None,
+    response_headers: dict[str, Any] | None = None,
+) -> bool:
     """Detect Cloudflare block (not session expiry).
 
     Matches: 'Attention Required! | Cloudflare', 'Sorry, you have been blocked'.
     """
     combined = ((title or "") + " " + (content or "")).lower()[:8192]
-    return "cloudflare" in combined and (
+    if "cloudflare" in combined and (
         "blocked" in combined or "attention required" in combined
-    )
+    ):
+        return True
+
+    headers = {str(k).lower(): str(v).lower() for k, v in (response_headers or {}).items()}
+    if response_status in {403, 503}:
+        if "cf-ray" in headers:
+            return True
+        if any(key.startswith("cf-chl") for key in headers):
+            return True
+        server = headers.get("server", "")
+        if "cloudflare" in server:
+            return True
+    return False
 
 
 def _is_login_page(url: str, content: str) -> bool:
@@ -146,8 +164,33 @@ def _try_navigate(page: Any, url: str, timeout: int = 30000) -> tuple[str, str, 
         final_url = page.url
         title = page.title() or ""
         content = page.content()[:4096] if hasattr(page, "content") else ""
+        headers: dict[str, Any] = {}
+        if resp is not None:
+            for attr in ("all_headers", "headers"):
+                value = getattr(resp, attr, None)
+                try:
+                    headers = value() if callable(value) else value
+                except Exception:
+                    continue
+                if isinstance(headers, dict):
+                    break
+        status = None
+        if resp is not None:
+            try:
+                raw_status = getattr(resp, "status", None)
+                status = int(raw_status() if callable(raw_status) else raw_status)
+            except Exception:
+                status = None
 
-        admin_404 = (resp is not None and resp.status == 404) or _is_404_page(title, content)
+        if _is_cloudflare_blocked(
+            content,
+            title=title,
+            response_status=status,
+            response_headers=headers if isinstance(headers, dict) else None,
+        ):
+            return final_url, title, False, False
+
+        admin_404 = (status == 404) or _is_404_page(title, content)
         login_detected = _is_login_page(final_url, content)
         return final_url, title, admin_404, login_detected
     except Exception:
