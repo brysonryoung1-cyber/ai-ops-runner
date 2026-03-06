@@ -1547,15 +1547,22 @@ def main(argv: list[str] | None = None) -> int:
             "run_id": doctor_payload.get("run_id"),
             "bundle_dir": doctor_payload.get("bundle_dir"),
             "failed_checks": doctor_payload.get("failed_checks") or [],
+            "error_class": doctor_payload.get("error_class"),
+            "rc": doctor_payload.get("rc"),
+            "stdout_len": doctor_payload.get("stdout_len"),
+            "stderr_tail": doctor_payload.get("stderr_tail") or [],
+            "cmd": doctor_payload.get("cmd"),
         }
+        if doctor_payload.get("parse_error"):
+            result["doctor"]["parse_error"] = doctor_payload.get("parse_error")
         if doctor_status != "PASS":
             result["status"] = TERMINAL_FAIL
-            result["error_class"] = "DOCTOR_MATRIX_FAIL"
+            result["error_class"] = "DOCTOR_FAILED"
             proof_for_alert = rel_path(bundle_dir / "RESULT.json", repo_root)
             result["alert"] = maybe_send_terminal_alert(
                 terminal_status=TERMINAL_FAIL,
                 remote_run_id=run_id,
-                error_class="DOCTOR_MATRIX_FAIL",
+                error_class="DOCTOR_FAILED",
                 proof_path=proof_for_alert,
                 novnc_url=None,
             )
