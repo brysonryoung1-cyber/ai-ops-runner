@@ -113,13 +113,15 @@ def test_video_manifest_spec_columns(tmp_path):
         fieldnames = reader.fieldnames
         rows = list(reader)
 
-    assert fieldnames == ["subject", "timestamp", "filename", "mapped_lesson", "status"]
+    assert fieldnames == ["subject", "timestamp", "filename", "mapped_lesson", "status", "content_sha256"]
     assert len(rows) == 2
     assert rows[0]["subject"] == "Breathwork Session 1"
     assert rows[0]["filename"] == "breathwork1.mp4"
     assert rows[0]["mapped_lesson"] == "Intro to Breathwork"
     assert rows[0]["status"] == "raw_needs_review"
+    assert rows[0]["content_sha256"]
     assert rows[1]["status"] == "attached"
+    assert rows[1]["content_sha256"]
 
 
 def test_video_manifest_status_normalization(tmp_path):
@@ -132,6 +134,36 @@ def test_video_manifest_status_normalization(tmp_path):
     assert _normalize_manifest_status("raw_needs_review") == "raw_needs_review"
     assert _normalize_manifest_status("") == "raw_needs_review"
     assert _normalize_manifest_status("ATTACHED") == "attached"
+
+
+def test_video_manifest_content_sha256_is_deterministic(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    phase0_dir = root / "artifacts" / "soma_kajabi" / "phase0" / "phase0_test"
+    phase0_dir.mkdir(parents=True)
+    snap = {
+        "home": {"modules": ["M1"], "lessons": []},
+        "practitioner": {"modules": ["M1"], "lessons": []},
+    }
+    (phase0_dir / "kajabi_library_snapshot.json").write_text(json.dumps(snap))
+    manifest_csv = (
+        "email_id,subject,file_name,sha256,rough_topic,proposed_module,proposed_lesson_title,proposed_description,status,datetime,size_bytes\n"
+        "abc123,Breathwork Session 1,breathwork1.mp4,deadbeef,,Module 1,Intro to Breathwork,,unmapped,2026-03-01T00:00:00Z,1234\n"
+    )
+    (phase0_dir / "video_manifest.csv").write_text(manifest_csv)
+
+    from services.soma_kajabi.acceptance_artifacts import write_acceptance_artifacts
+
+    accept_dir_a, _ = write_acceptance_artifacts(root, "test_run_a", phase0_dir)
+    accept_dir_b, _ = write_acceptance_artifacts(root, "test_run_b", phase0_dir)
+
+    with (accept_dir_a / "video_manifest.csv").open(newline="", encoding="utf-8") as f:
+        row_a = next(csv.DictReader(f))
+    with (accept_dir_b / "video_manifest.csv").open(newline="", encoding="utf-8") as f:
+        row_b = next(csv.DictReader(f))
+
+    assert row_a["content_sha256"]
+    assert row_a["content_sha256"] == row_b["content_sha256"]
 
 
 def test_mirror_report_schema(tmp_path):

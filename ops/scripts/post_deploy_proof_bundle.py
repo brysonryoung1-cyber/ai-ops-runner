@@ -120,6 +120,22 @@ def find_latest_with_file(base: Path, filename: str) -> Path | None:
     return dirs[0] if dirs else None
 
 
+def _resolve_dir_from_latest_pointer(base: Path, required_file: str) -> Path | None:
+    """Resolve run dir via base/LATEST.json pointer, falling back to newest dir scan."""
+    latest_path = base / "LATEST.json"
+    if latest_path.is_file():
+        try:
+            payload = json.loads(latest_path.read_text())
+            run_id = str(payload.get("run_id", "")).strip()
+            if run_id:
+                candidate = base / run_id
+                if candidate.is_dir() and (candidate / required_file).is_file():
+                    return candidate
+        except Exception:
+            pass
+    return find_latest_with_file(base, required_file)
+
+
 # ---------------------------------------------------------------------------
 # Pointer resolution
 # ---------------------------------------------------------------------------
@@ -151,12 +167,16 @@ def resolve_pointers() -> dict[str, Any]:
         pointers["canary_proof"] = str(canary_dir / "PROOF.md")
         pointers["canary_dir"] = str(canary_dir)
 
-    bdod_dir = find_latest_with_file(
-        ARTIFACTS_ROOT / "soma_kajabi" / "business_dod", "business_dod_checks.json"
-    )
+    bdod_base = ARTIFACTS_ROOT / "soma_kajabi" / "business_dod"
+    bdod_dir = _resolve_dir_from_latest_pointer(bdod_base, "business_dod_checks.json")
     if bdod_dir:
         pointers["business_dod"] = str(bdod_dir / "business_dod_checks.json")
         pointers["business_dod_dir"] = str(bdod_dir)
+
+    discover_base = ARTIFACTS_ROOT / "soma_kajabi" / "discover"
+    discover_dir = _resolve_dir_from_latest_pointer(discover_base, "debug.json")
+    if discover_dir:
+        pointers["discover_dir"] = str(discover_dir)
 
     return pointers
 
@@ -285,6 +305,7 @@ def generate_bundle(
         },
         "business_dod_pass": business_dod_pass if business_dod_pass is not None else "UNKNOWN",
         "business_dod_path": business_dod_path,
+        "business_dod_artifact_dir": business_dod_path,
         "business_dod_failed_checks": business_dod_failed_checks,
         "failures": failures,
         "warnings": warnings,

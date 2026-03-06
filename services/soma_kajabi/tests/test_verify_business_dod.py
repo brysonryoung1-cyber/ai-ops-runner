@@ -77,7 +77,7 @@ def _write_manifest(artifacts_root: Path, rows: list[dict], fieldnames: list[str
     accept_dir = artifacts_root / "soma_kajabi" / "acceptance" / "run_001"
     accept_dir.mkdir(parents=True, exist_ok=True)
     if fieldnames is None:
-        fieldnames = ["subject", "timestamp", "filename", "mapped_lesson", "status", "sha256"]
+        fieldnames = ["subject", "timestamp", "filename", "mapped_lesson", "status", "content_sha256"]
     path = accept_dir / "video_manifest.csv"
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
@@ -124,10 +124,26 @@ class TestRawModulePresent:
     def test_snapshot_not_found(self, artifacts_root):
         result = check_raw_module_present(artifacts_root, Path("/nonexistent/path.json"))
         assert result["pass"] is False
-        assert result["reason"] == "SNAPSHOT_NOT_FOUND"
+        assert result["reason"] == "SNAPSHOT_MISSING"
+
+    def test_snapshot_missing_auto_resolve(self, artifacts_root):
+        result = check_raw_module_present(artifacts_root)
+        assert result["pass"] is False
+        assert result["reason"] == "SNAPSHOT_MISSING"
 
     def test_auto_resolve_snapshot(self, artifacts_root):
         _write_snapshot(artifacts_root, ["RAW"])
+        result = check_raw_module_present(artifacts_root)
+        assert result["pass"] is True
+
+    def test_auto_resolve_snapshot_from_phase0(self, artifacts_root):
+        phase0_dir = artifacts_root / "soma_kajabi" / "phase0" / "phase0_001"
+        phase0_dir.mkdir(parents=True, exist_ok=True)
+        snap = {
+            "home": {"modules": ["RAW"], "lessons": []},
+            "practitioner": {"modules": [], "lessons": []},
+        }
+        (phase0_dir / "kajabi_library_snapshot.json").write_text(json.dumps(snap))
         result = check_raw_module_present(artifacts_root)
         assert result["pass"] is True
 
@@ -319,8 +335,8 @@ class TestCommunityGroups:
 class TestManifestDedupe:
     def test_no_duplicates(self, artifacts_root):
         rows = [
-            {"subject": "S1", "filename": "f1.mp4", "sha256": "aaa111", "status": "attached"},
-            {"subject": "S2", "filename": "f2.mp4", "sha256": "bbb222", "status": "attached"},
+            {"subject": "S1", "filename": "f1.mp4", "content_sha256": "aaa111", "status": "attached"},
+            {"subject": "S2", "filename": "f2.mp4", "content_sha256": "bbb222", "status": "attached"},
         ]
         path = _write_manifest(artifacts_root, rows)
         result = check_manifest_dedupe(artifacts_root, path)
@@ -328,8 +344,8 @@ class TestManifestDedupe:
 
     def test_duplicates_found(self, artifacts_root):
         rows = [
-            {"subject": "S1", "filename": "f1.mp4", "sha256": "aaa111", "status": "attached"},
-            {"subject": "S2", "filename": "f2.mp4", "sha256": "aaa111", "status": "attached"},
+            {"subject": "S1", "filename": "f1.mp4", "content_sha256": "aaa111", "status": "attached"},
+            {"subject": "S2", "filename": "f2.mp4", "content_sha256": "aaa111", "status": "attached"},
         ]
         path = _write_manifest(artifacts_root, rows)
         result = check_manifest_dedupe(artifacts_root, path)
@@ -338,10 +354,10 @@ class TestManifestDedupe:
 
     def test_duplicates_marked_deduped(self, artifacts_root):
         rows = [
-            {"subject": "S1", "filename": "f1.mp4", "sha256": "aaa111", "status": "attached", "deduped": "true"},
-            {"subject": "S2", "filename": "f2.mp4", "sha256": "aaa111", "status": "deduped", "deduped": ""},
+            {"subject": "S1", "filename": "f1.mp4", "content_sha256": "aaa111", "status": "attached", "deduped": "true"},
+            {"subject": "S2", "filename": "f2.mp4", "content_sha256": "aaa111", "status": "deduped", "deduped": ""},
         ]
-        fieldnames = ["subject", "timestamp", "filename", "mapped_lesson", "status", "sha256", "deduped"]
+        fieldnames = ["subject", "timestamp", "filename", "mapped_lesson", "status", "content_sha256", "deduped"]
         path = _write_manifest(artifacts_root, rows, fieldnames=fieldnames)
         result = check_manifest_dedupe(artifacts_root, path)
         assert result["pass"] is True
@@ -363,7 +379,7 @@ class TestManifestDedupe:
 
     def test_auto_resolve_manifest(self, artifacts_root):
         rows = [
-            {"subject": "S1", "filename": "f1.mp4", "sha256": "unique1", "status": "attached"},
+            {"subject": "S1", "filename": "f1.mp4", "content_sha256": "unique1", "status": "attached"},
         ]
         _write_manifest(artifacts_root, rows)
         result = check_manifest_dedupe(artifacts_root)
@@ -384,7 +400,7 @@ class TestVerifyBusinessDod:
         )
         _write_community_json(artifacts_root, "Soma Community", ["Home Users", "Practitioners"])
         manifest_path = _write_manifest(artifacts_root, [
-            {"subject": "S1", "filename": "f1.mp4", "sha256": "unique1", "status": "attached"},
+            {"subject": "S1", "filename": "f1.mp4", "content_sha256": "unique1", "status": "attached"},
         ])
 
         result = verify_business_dod(
@@ -401,6 +417,11 @@ class TestVerifyBusinessDod:
         out_dir = Path(result["artifact_dir"])
         assert (out_dir / "business_dod_checks.json").is_file()
         assert (out_dir / "SUMMARY.md").is_file()
+        latest = artifacts_root / "soma_kajabi" / "business_dod" / "LATEST.json"
+        assert latest.is_file()
+        latest_doc = json.loads(latest.read_text())
+        assert latest_doc["run_id"] == result["run_id"]
+        assert latest_doc["artifact_dir"] == result["artifact_dir"]
 
     def test_partial_fail(self, artifacts_root):
         snap_path = _write_snapshot(artifacts_root, ["Module 1"])
@@ -411,7 +432,7 @@ class TestVerifyBusinessDod:
         )
         _write_community_json(artifacts_root, "Soma Community", ["Home Users", "Practitioners"])
         manifest_path = _write_manifest(artifacts_root, [
-            {"subject": "S1", "filename": "f1.mp4", "sha256": "unique1", "status": "attached"},
+            {"subject": "S1", "filename": "f1.mp4", "content_sha256": "unique1", "status": "attached"},
         ])
 
         result = verify_business_dod(
@@ -460,6 +481,7 @@ class TestPostDeployBundleIncludesBusinessDod:
 
         assert result["business_dod_pass"] is True
         assert result["business_dod_path"] == str(bdod_dir)
+        assert result["business_dod_artifact_dir"] == str(bdod_dir)
         assert result["business_dod_failed_checks"] == []
 
         proof_md = (out / "PROOF_BLOCK.md").read_text()

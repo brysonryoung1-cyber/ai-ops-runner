@@ -7,8 +7,8 @@ No secrets. Used by soma_kajabi_auto_finish.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -105,10 +105,52 @@ def _normalize_manifest_status(raw_status: str) -> str:
     return "raw_needs_review"
 
 
-def _transform_to_spec_manifest(rows: list[dict]) -> list[dict]:
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _sha256_text(data: str) -> str:
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
+def _compute_manifest_content_sha256(row: dict[str, Any], phase0_dir: Path) -> str:
+    """Deterministic manifest row hash.
+
+    Preferred: hash file bytes when a local attachment path exists.
+    Fallback: hash stable metadata tuple.
+    """
+    candidate_paths = [
+        row.get("attachment_path", ""),
+        row.get("file_path", ""),
+        row.get("local_path", ""),
+        row.get("path", ""),
+    ]
+    for raw_path in candidate_paths:
+        path_str = str(raw_path or "").strip()
+        if not path_str:
+            continue
+        candidate = Path(path_str)
+        if not candidate.is_absolute():
+            candidate = phase0_dir / path_str
+        if candidate.is_file():
+            try:
+                return _sha256_bytes(candidate.read_bytes())
+            except Exception:
+                continue
+
+    metadata = {
+        "timestamp": str(row.get("datetime", row.get("timestamp", "")) or ""),
+        "filename": str(row.get("file_name", row.get("filename", "")) or ""),
+        "size": str(row.get("size_bytes", row.get("file_size", row.get("attachment_size", ""))) or ""),
+        "mapped_lesson": str(row.get("proposed_lesson_title", row.get("mapped_lesson", "")) or ""),
+    }
+    return _sha256_text(json.dumps(metadata, sort_keys=True, separators=(",", ":")))
+
+
+def _transform_to_spec_manifest(rows: list[dict], phase0_dir: Path) -> list[dict]:
     """Transform Phase0 internal manifest rows to SOMA_LOCKED_SPEC §6 columns.
 
-    Spec columns: subject, timestamp, filename, mapped_lesson, status
+    Spec columns: subject, timestamp, filename, mapped_lesson, status, content_sha256
     """
     out: list[dict] = []
     for r in rows:
@@ -118,6 +160,7 @@ def _transform_to_spec_manifest(rows: list[dict]) -> list[dict]:
             "filename": r.get("file_name", r.get("filename", "")),
             "mapped_lesson": r.get("proposed_lesson_title", r.get("mapped_lesson", "")),
             "status": _normalize_manifest_status(r.get("status", "")),
+            "content_sha256": _compute_manifest_content_sha256(r, phase0_dir),
         })
     return out
 
@@ -126,9 +169,9 @@ def _write_video_manifest_artifact(accept_dir: Path, manifest_rows: list[dict], 
     """Video Manifest: one row per Zane email video, spec-compliant columns.
 
     Reads Phase0 manifest (internal schema), transforms to SOMA_LOCKED_SPEC §6 columns:
-    subject, timestamp, filename, mapped_lesson, status (attached | raw_needs_review).
+    subject, timestamp, filename, mapped_lesson, status, content_sha256.
     """
-    fieldnames = ["subject", "timestamp", "filename", "mapped_lesson", "status"]
+    fieldnames = ["subject", "timestamp", "filename", "mapped_lesson", "status", "content_sha256"]
 
     src = phase0_dir / "video_manifest.csv"
     if src.exists():
@@ -136,7 +179,7 @@ def _write_video_manifest_artifact(accept_dir: Path, manifest_rows: list[dict], 
     else:
         raw_rows = manifest_rows
 
-    spec_rows = _transform_to_spec_manifest(raw_rows)
+    spec_rows = _transform_to_spec_manifest(raw_rows, phase0_dir)
 
     path = accept_dir / "video_manifest.csv"
     with path.open("w", newline="", encoding="utf-8") as f:

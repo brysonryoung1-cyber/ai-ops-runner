@@ -95,6 +95,51 @@ def _make_check(passed: bool, details: str = "",
     }
 
 
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{_random_hex(8)}.tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _write_latest_pointer(
+    artifacts_root: Path,
+    project_id: str,
+    *,
+    run_id: str,
+    out_dir: Path,
+    passed: bool,
+) -> None:
+    pointer_path = artifacts_root / project_id / "business_dod" / "LATEST.json"
+    payload = {
+        "run_id": run_id,
+        "artifact_dir": str(out_dir),
+        "status": "PASS" if passed else "FAIL",
+        "updated_at": _now_iso(),
+    }
+    try:
+        _atomic_write_json(pointer_path, payload)
+    except Exception:
+        pass
+
+
+def _iter_snapshot_candidates(artifacts_root: Path) -> list[Path]:
+    candidates: list[Path] = []
+    accept_base = artifacts_root / "soma_kajabi" / "acceptance"
+    if accept_base.is_dir():
+        for d in accept_base.iterdir():
+            candidate = d / "final_library_snapshot.json"
+            if d.is_dir() and candidate.is_file():
+                candidates.append(candidate)
+    phase0_base = artifacts_root / "soma_kajabi" / "phase0"
+    if phase0_base.is_dir():
+        for d in phase0_base.iterdir():
+            candidate = d / "kajabi_library_snapshot.json"
+            if d.is_dir() and candidate.is_file():
+                candidates.append(candidate)
+    return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
 # ---------------------------------------------------------------------------
 # Check 1: RAW module present
 # ---------------------------------------------------------------------------
@@ -103,30 +148,34 @@ def check_raw_module_present(
     artifacts_root: Path,
     snapshot_path: Path | None = None,
 ) -> dict[str, Any]:
-    """PASS if final_library_snapshot.json contains a RAW module."""
+    """PASS if latest library snapshot contains a RAW module."""
     if snapshot_path is None:
-        accept_base = artifacts_root / "soma_kajabi" / "acceptance"
-        if accept_base.is_dir():
-            dirs = sorted(
-                (d for d in accept_base.iterdir() if d.is_dir()),
-                key=lambda d: d.stat().st_mtime, reverse=True,
-            )
-            for d in dirs[:5]:
-                candidate = d / "final_library_snapshot.json"
-                if candidate.is_file():
-                    snapshot_path = candidate
-                    break
+        candidates = _iter_snapshot_candidates(artifacts_root)
+        if candidates:
+            snapshot_path = candidates[0]
 
     if not snapshot_path or not snapshot_path.is_file():
-        return _make_check(False, reason="SNAPSHOT_NOT_FOUND",
-                           details="final_library_snapshot.json not found in acceptance artifacts")
+        return _make_check(
+            False,
+            reason="SNAPSHOT_MISSING",
+            details="No library snapshot found (expected acceptance/final_library_snapshot.json or phase0/kajabi_library_snapshot.json)",
+        )
 
     try:
         data = json.loads(snapshot_path.read_text())
     except Exception as e:
         return _make_check(False, reason="SNAPSHOT_PARSE_ERROR", details=str(e)[:200])
 
-    home_modules = data.get("home", {}).get("modules", [])
+    home = data.get("home", {}) if isinstance(data, dict) else {}
+    home_modules = home.get("modules", []) if isinstance(home, dict) else []
+    if not isinstance(home_modules, list):
+        return _make_check(
+            False,
+            reason="SNAPSHOT_INVALID",
+            details=f"Snapshot missing home.modules list: {snapshot_path}",
+            evidence_paths=[str(snapshot_path)],
+        )
+
     matched = []
     for m in home_modules:
         name = m if isinstance(m, str) else (m.get("name", "") if isinstance(m, dict) else str(m))
@@ -468,14 +517,17 @@ def check_manifest_dedupe(
         return _make_check(False, reason="MANIFEST_PARSE_ERROR", details=str(e)[:200])
 
     hash_col = None
-    for candidate_col in ["sha256", "hash", "file_hash", "attachment_id"]:
+    for candidate_col in ["content_sha256", "manifest_hash", "manifest_id"]:
         if candidate_col in fieldnames:
             hash_col = candidate_col
             break
 
     if hash_col is None:
-        return _make_check(False, reason="MANIFEST_NO_HASH_COLUMN",
-                           details=f"No hash/id column in manifest columns: {fieldnames}")
+        return _make_check(
+            False,
+            reason="MANIFEST_NO_HASH_COLUMN",
+            details=f"Missing required manifest hash column (expected content_sha256/manifest_hash/manifest_id). Columns: {fieldnames}",
+        )
 
     seen: dict[str, list[int]] = {}
     for idx, row in enumerate(rows):
@@ -573,6 +625,7 @@ def verify_business_dod(
         "checks_passed": sum(1 for c in checks.values() if c["pass"]),
         "checks_total": len(checks),
         "artifact_dir": str(out_dir),
+        "business_dod_artifact_dir": str(out_dir),
     }
 
     (out_dir / "business_dod_checks.json").write_text(json.dumps(result, indent=2, default=str))
@@ -601,6 +654,13 @@ def verify_business_dod(
 
     summary_lines.append("")
     (out_dir / "SUMMARY.md").write_text("\n".join(summary_lines))
+    _write_latest_pointer(
+        artifacts_root,
+        project_id,
+        run_id=run_id,
+        out_dir=out_dir,
+        passed=all_pass,
+    )
 
     return result
 
@@ -617,6 +677,7 @@ def main() -> int:
         "checks_passed": result["checks_passed"],
         "checks_total": result["checks_total"],
         "artifact_dir": result["artifact_dir"],
+        "business_dod_artifact_dir": result["business_dod_artifact_dir"],
     }, indent=2))
     return 0 if result["pass"] else 1
 

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import ops.scripts.post_deploy_proof_bundle as proof_bundle
 from ops.scripts.post_deploy_proof_bundle import generate_bundle
 
 
@@ -114,6 +115,7 @@ class TestBundlePass:
         assert result["soma_kajabi"]["acceptance_path"] is not None
         assert result["soma_kajabi"]["mirror_pass"] is True
         assert result["soma_kajabi"]["exceptions_count"] == 0
+        assert "business_dod_artifact_dir" in result
 
     def test_artifacts_written(self, tmp_path, health_public_ok, soma_status_ok, pointers_ok):
         out = tmp_path / "proof_written"
@@ -292,3 +294,21 @@ class TestIdempotency:
                              ssh_verify=(True, "PASS"), pointers=pointers_ok, deploy_run_id="d1", origin_sha="sha1")
         assert r1["overall"] == r2["overall"] == "PASS"
         assert (out / "RESULT.json").is_file()
+
+
+class TestPointerResolution:
+    def test_business_dod_prefers_latest_pointer(self, tmp_path, monkeypatch):
+        base = tmp_path / "soma_kajabi" / "business_dod"
+        run_pointer = base / "bdod_pointer"
+        run_latest = base / "bdod_latest"
+        run_pointer.mkdir(parents=True)
+        (run_pointer / "business_dod_checks.json").write_text(json.dumps({"pass": True}))
+        run_latest.mkdir(parents=True)
+        (run_latest / "business_dod_checks.json").write_text(json.dumps({"pass": False}))
+        (base / "LATEST.json").write_text(
+            json.dumps({"run_id": "bdod_pointer", "artifact_dir": str(run_pointer), "status": "PASS"})
+        )
+
+        monkeypatch.setattr(proof_bundle, "ARTIFACTS_ROOT", tmp_path)
+        pointers = proof_bundle.resolve_pointers()
+        assert pointers["business_dod_dir"] == str(run_pointer)
