@@ -216,7 +216,7 @@ def run_doctor_core(
         atomic_write_text(raw_dir / "doctor_matrix_stderr.txt", "")
         return payload
 
-    cmd = [sys.executable, str(REPO_ROOT / "ops" / "system" / "doctor_matrix.py"), "--mode", "core"]
+    cmd = [sys.executable, "-m", "system.doctor_matrix", "--mode", "core"]
     env = dict(os.environ)
     env["PYTHONPATH"] = str(REPO_ROOT)
     env["OPENCLAW_REPO_ROOT"] = str(REPO_ROOT)
