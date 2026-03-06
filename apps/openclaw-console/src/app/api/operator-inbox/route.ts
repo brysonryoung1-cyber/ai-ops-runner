@@ -102,7 +102,7 @@ export async function GET() {
     });
   }
 
-  // --- degraded: canary status !== PASS ---
+  // --- degraded: canary CORE status only (OPTIONAL warnings are non-blocking) ---
   const canaryBase = join(artifactsRoot, "system", "canary");
   if (existsSync(canaryBase)) {
     const dirs = readdirSync(canaryBase)
@@ -113,17 +113,31 @@ export async function GET() {
       try {
         const r = JSON.parse(readFileSync(join(canaryBase, latest, "result.json"), "utf-8"));
         const status = r.status ?? null;
+        const coreStatus = String(r.core_status ?? "").toUpperCase();
+        const optionalStatus = String(r.optional_status ?? "").toUpperCase();
+        const coreFailedChecks: string[] = Array.isArray(r.core_failed_checks)
+          ? r.core_failed_checks.map((v: unknown) => String(v || "")).filter(Boolean)
+          : [];
+        const optionalFailedChecks: string[] = Array.isArray(r.optional_failed_checks)
+          ? r.optional_failed_checks.map((v: unknown) => String(v || "")).filter(Boolean)
+          : [];
         const proofRel = r.proof
           ? r.proof.replace(/^.*\/artifacts\//, "").replace(/^artifacts\//, "").replace(/^\//, "")
           : `system/canary/${latest}`;
+        const displayStatus = coreStatus === "FAIL"
+          ? "DEGRADED"
+          : optionalStatus === "WARN"
+            ? "WARN"
+            : (status ?? "PASS");
         last_canary = {
-          status,
+          status: displayStatus,
           run_id: latest,
           proof_link: toArtifactUrl(proofRel),
           timestamp: null,
         };
-        if (status && status !== "PASS") {
-          const failingChecks: string[] = r.failed_invariant ? [r.failed_invariant] : [status];
+        if (coreStatus === "FAIL" || coreFailedChecks.length > 0) {
+          const fallback = r.failed_invariant ? [String(r.failed_invariant)] : [];
+          const failingChecks: string[] = coreFailedChecks.length > 0 ? coreFailedChecks : fallback;
           degraded.push({
             subsystem: "canary",
             run_id: latest,
@@ -131,6 +145,11 @@ export async function GET() {
             proof_link: last_canary.proof_link,
             incident_link: r.incident_id ? toArtifactUrl(`incidents/${r.incident_id}`) : null,
           });
+        } else if (optionalStatus === "WARN" && optionalFailedChecks.length > 0) {
+          last_canary = {
+            ...last_canary,
+            status: `WARN (${optionalFailedChecks.join(",")})`,
+          };
         }
       } catch {
         last_canary.run_id = latest;

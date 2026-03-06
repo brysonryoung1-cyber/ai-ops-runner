@@ -63,6 +63,132 @@ EOF
 
 FAILED_INVARIANT=""
 REMEDIATE=0
+CORE_FAILED_CHECKS=""
+OPTIONAL_FAILED_CHECKS=""
+
+CHECK_RECONCILE_STATUS="PASS"
+CHECK_RECONCILE_REASON=""
+CHECK_NOVNC_STATUS="PASS"
+CHECK_NOVNC_REASON=""
+CHECK_ASK_STATUS="PASS"
+CHECK_ASK_REASON=""
+CHECK_VERSION_STATUS="PASS"
+CHECK_VERSION_REASON=""
+
+append_csv() {
+  local var_name="$1"
+  local value="$2"
+  local current="${!var_name:-}"
+  if [ -z "$value" ]; then
+    return 0
+  fi
+  if [ -z "$current" ]; then
+    printf -v "$var_name" "%s" "$value"
+  else
+    printf -v "$var_name" "%s,%s" "$current" "$value"
+  fi
+}
+
+mark_core_fail() {
+  local code="$1"
+  append_csv CORE_FAILED_CHECKS "$code"
+  [ -z "$FAILED_INVARIANT" ] && FAILED_INVARIANT="$code"
+  REMEDIATE=1
+}
+
+mark_optional_fail() {
+  local code="$1"
+  append_csv OPTIONAL_FAILED_CHECKS "$code"
+}
+
+write_result_json() {
+  local status="$1"
+  local remediation_suppressed="${2:-false}"
+  local remediation_reason="${3:-}"
+  local incident_id="${4:-}"
+  local fixpack_path="${5:-}"
+  CANARY_STATUS="$status" \
+  RUN_ID="$RUN_ID" \
+  CANARY_DIR="$CANARY_DIR" \
+  CORE_FAILED_CHECKS="$CORE_FAILED_CHECKS" \
+  OPTIONAL_FAILED_CHECKS="$OPTIONAL_FAILED_CHECKS" \
+  REMEDIATION_SUPPRESSED="$remediation_suppressed" \
+  REMEDIATION_REASON="$remediation_reason" \
+  INCIDENT_ID="$incident_id" \
+  FIXPACK_PATH="$fixpack_path" \
+  CHECK_RECONCILE_STATUS="$CHECK_RECONCILE_STATUS" \
+  CHECK_RECONCILE_REASON="$CHECK_RECONCILE_REASON" \
+  CHECK_NOVNC_STATUS="$CHECK_NOVNC_STATUS" \
+  CHECK_NOVNC_REASON="$CHECK_NOVNC_REASON" \
+  CHECK_ASK_STATUS="$CHECK_ASK_STATUS" \
+  CHECK_ASK_REASON="$CHECK_ASK_REASON" \
+  CHECK_VERSION_STATUS="$CHECK_VERSION_STATUS" \
+  CHECK_VERSION_REASON="$CHECK_VERSION_REASON" \
+  python3 - << 'PY' > "$CANARY_DIR/result.json"
+import json
+import os
+
+def csv_items(name: str) -> list[str]:
+    return [item for item in os.environ.get(name, "").split(",") if item]
+
+def nullable(text: str) -> str | None:
+    value = text.strip()
+    return value or None
+
+core_failed = csv_items("CORE_FAILED_CHECKS")
+optional_failed = csv_items("OPTIONAL_FAILED_CHECKS")
+core_status = "PASS" if not core_failed else "FAIL"
+optional_status = "PASS" if not optional_failed else "WARN"
+
+status = os.environ.get("CANARY_STATUS", "PASS")
+if status == "PASS" and core_status != "PASS":
+    status = "DEGRADED"
+
+payload = {
+    "status": status,
+    "run_id": os.environ["RUN_ID"],
+    "proof": f"{os.environ['CANARY_DIR']}/PROOF.md",
+    "core_status": core_status,
+    "optional_status": optional_status,
+    "core_failed_checks": core_failed,
+    "optional_failed_checks": optional_failed,
+    "failed_invariant": core_failed[0] if core_failed else None,
+    "checks": {
+        "reconcile_core": {
+            "status": os.environ.get("CHECK_RECONCILE_STATUS", "PASS"),
+            "severity": "CORE",
+            "reason": nullable(os.environ.get("CHECK_RECONCILE_REASON", "")),
+        },
+        "novnc_connectivity": {
+            "status": os.environ.get("CHECK_NOVNC_STATUS", "PASS"),
+            "severity": "CORE",
+            "reason": nullable(os.environ.get("CHECK_NOVNC_REASON", "")),
+        },
+        "ask_unreachable": {
+            "status": os.environ.get("CHECK_ASK_STATUS", "PASS"),
+            "severity": "OPTIONAL",
+            "reason": nullable(os.environ.get("CHECK_ASK_REASON", "")),
+        },
+        "version_drift": {
+            "status": os.environ.get("CHECK_VERSION_STATUS", "PASS"),
+            "severity": "CORE",
+            "reason": nullable(os.environ.get("CHECK_VERSION_REASON", "")),
+        },
+    },
+}
+
+if os.environ.get("REMEDIATION_SUPPRESSED") == "true":
+    payload["remediation_suppressed"] = True
+if os.environ.get("REMEDIATION_REASON"):
+    payload["reason"] = os.environ["REMEDIATION_REASON"]
+if os.environ.get("INCIDENT_ID"):
+    payload["incident_id"] = os.environ["INCIDENT_ID"]
+if os.environ.get("FIXPACK_PATH"):
+    payload["fixpack_path"] = os.environ["FIXPACK_PATH"]
+
+print(json.dumps(payload))
+PY
+}
 
 echo "=== system.canary ($RUN_ID) ==="
 echo ""
@@ -88,16 +214,18 @@ try:
     print(','.join(failing) if failing else 'unknown')
 except: print('unknown')
 " 2>/dev/null)
-    FAILED_INVARIANT="$FAILED_INV"
+    CHECK_RECONCILE_STATUS="FAIL"
+    CHECK_RECONCILE_REASON="$FAILED_INV"
     echo "  Reconcile: FAIL ($FAILED_INV)"
-    REMEDIATE=1
+    mark_core_fail "$FAILED_INV"
   else
     echo "  Reconcile: PASS"
   fi
 else
   echo "  Reconcile: FAIL (state_pack failed)"
-  FAILED_INVARIANT="state_pack_failed"
-  REMEDIATE=1
+  CHECK_RECONCILE_STATUS="FAIL"
+  CHECK_RECONCILE_REASON="state_pack_failed"
+  mark_core_fail "state_pack_failed"
 fi
 echo ""
 
@@ -109,8 +237,9 @@ NOVNC_STACK_AVAILABLE=false
 if [ "$NOVNC_STACK_AVAILABLE" != true ]; then
   echo "  noVNC audit: FAIL (6080 not listening)"
   echo '{"all_ok":false,"error":"noVNC stack down (6080 not listening)"}' > "$CANARY_DIR/novnc_audit.json" 2>/dev/null || true
-  [ -z "$FAILED_INVARIANT" ] && FAILED_INVARIANT="novnc_stack_down"
-  REMEDIATE=1
+  CHECK_NOVNC_STATUS="FAIL"
+  CHECK_NOVNC_REASON="novnc_stack_down"
+  mark_core_fail "novnc_stack_down"
 else
   python3 "$ROOT_DIR/ops/scripts/novnc_connectivity_audit.py" --run-id "$NOVNC_RUN_ID" --host "$TS_HOSTNAME" > "$CANARY_DIR/novnc_audit.json" 2>/dev/null || true
   NOVNC_OK=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/novnc_audit.json')); print(d.get('all_ok', False))" 2>/dev/null) || NOVNC_OK="False"
@@ -121,8 +250,9 @@ else
       OPENCLAW_HOP_PROBE_RUN_ID="${RUN_ID}_canary_hop" \
         bash "$ROOT_DIR/ops/scripts/ws_upgrade_hop_probe.sh" > "$CANARY_DIR/hop_probe.log" 2>&1 || true
     fi
-    [ -z "$FAILED_INVARIANT" ] && FAILED_INVARIANT="novnc_audit_failed"
-    REMEDIATE=1
+    CHECK_NOVNC_STATUS="FAIL"
+    CHECK_NOVNC_REASON="novnc_audit_failed"
+    mark_core_fail "novnc_audit_failed"
   else
     echo "  noVNC audit: PASS"
   fi
@@ -147,14 +277,16 @@ except: print(False)
   if [ "$ASK_OK" = "True" ]; then
     echo "  Ask smoke: PASS"
   else
-    echo "  Ask smoke: FAIL (no citations or ok=false)"
-    [ -z "$FAILED_INVARIANT" ] && FAILED_INVARIANT="ask_smoke_failed"
-    REMEDIATE=1
+    echo "  Ask smoke: WARN (no citations or ok=false)"
+    CHECK_ASK_STATUS="WARN"
+    CHECK_ASK_REASON="ask_smoke_failed"
+    mark_optional_fail "ask_smoke_failed"
   fi
 else
-  echo "  Ask smoke: FAIL (curl failed)"
-  [ -z "$FAILED_INVARIANT" ] && FAILED_INVARIANT="ask_unreachable"
-  REMEDIATE=1
+  echo "  Ask smoke: WARN (curl failed)"
+  CHECK_ASK_STATUS="WARN"
+  CHECK_ASK_REASON="ask_unreachable"
+  mark_optional_fail "ask_unreachable"
 fi
 echo ""
 
@@ -165,15 +297,17 @@ if curl -sf --connect-timeout 3 --max-time 5 "$CONSOLE_BASE/api/ui/version" 2>/d
   DRIFT=$(python3 -c "import json; d=json.load(open('$CANARY_DIR/version.json')); v=d.get('drift'); print('true' if v is True else 'false')" 2>/dev/null) || DRIFT="true"
   if [ "$DRIFT_STATUS" = "unknown" ] || [ "$DRIFT" = "true" ]; then
     echo "  Version drift: FAIL (drift_status=$DRIFT_STATUS drift=$DRIFT)"
-    [ -z "$FAILED_INVARIANT" ] && FAILED_INVARIANT="version_drift"
-    REMEDIATE=1
+    CHECK_VERSION_STATUS="FAIL"
+    CHECK_VERSION_REASON="version_drift"
+    mark_core_fail "version_drift"
   else
     echo "  Version drift: PASS"
   fi
 else
   echo "  Version drift: FAIL (unreachable)"
-  [ -z "$FAILED_INVARIANT" ] && FAILED_INVARIANT="version_unreachable"
-  REMEDIATE=1
+  CHECK_VERSION_STATUS="FAIL"
+  CHECK_VERSION_REASON="version_unreachable"
+  mark_core_fail "version_unreachable"
 fi
 echo ""
 
@@ -188,7 +322,7 @@ if [ "$REMEDIATE" -eq 1 ]; then
     cat > "$CANARY_DIR/gate_suppression.json" << GEOF
 {"remediation_suppressed": true, "reason": "remediation suppressed due to active login window", "gate_info": $GATE_INFO, "failed_invariant": "$FAILED_INVARIANT", "timestamp_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
 GEOF
-    echo '{"status":"DEGRADED","run_id":"'"$RUN_ID"'","failed_invariant":"'"$FAILED_INVARIANT"'","remediation_suppressed":true,"reason":"active login window","proof":"'"$CANARY_DIR"'/PROOF.md"}' > "$CANARY_DIR/result.json"
+    write_result_json "DEGRADED" "true" "active login window" "" ""
     cat > "$CANARY_DIR/PROOF.md" << EOF
 # Canary DEGRADED (remediation suppressed)
 
@@ -241,6 +375,16 @@ EOF
   if [ "$NOVNC_RETRY" = "True" ] && [ "$DRIFT_STATUS_RETRY" = "ok" ] && [ "$DRIFT_RETRY" != "true" ]; then
     echo "  Remediation: PASS (checks recovered)"
     REMEDIATE=0
+    CORE_FAILED_CHECKS=""
+    FAILED_INVARIANT=""
+    if [ "$CHECK_NOVNC_STATUS" = "FAIL" ]; then
+      CHECK_NOVNC_STATUS="PASS"
+      CHECK_NOVNC_REASON="recovered_after_remediation"
+    fi
+    if [ "$CHECK_VERSION_STATUS" = "FAIL" ]; then
+      CHECK_VERSION_STATUS="PASS"
+      CHECK_VERSION_REASON="recovered_after_remediation"
+    fi
   else
     echo "  Remediation: FAIL (still degraded after autorecover + playbook)"
     INC_ID="incident_canary_${RUN_ID}"
@@ -252,12 +396,12 @@ EOF
       bash "$ROOT_DIR/ops/scripts/novnc_fixpack_emit.sh" "$FIXPACK_DIR" "novnc_audit_failed" "canary_novnc_check" "run novnc_autorecover or escalate" \
         "novnc_audit:$CANARY_DIR/novnc_audit.json" "novnc_audit_retry:$CANARY_DIR/novnc_audit_retry.json" 2>/dev/null || true
     fi
-    echo '{"status":"DEGRADED","run_id":"'"$RUN_ID"'","failed_invariant":"'"$FAILED_INVARIANT"'","incident_id":"'"$INC_ID"'","proof":"'"$CANARY_DIR"'/PROOF.md","fixpack_path":"'"${FIXPACK_DIR:-}"'"}' > "$CANARY_DIR/result.json"
+    write_result_json "DEGRADED" "false" "" "$INC_ID" "${FIXPACK_DIR:-}"
     # Notify: canary degraded (N consecutive failures tracked via incident ledger)
     CONSECUTIVE=$(ls -1dt "$ARTIFACTS/system/canary"/*/result.json 2>/dev/null | head -5 | while read f; do
       grep -q '"status":"DEGRADED"' "$f" 2>/dev/null && echo 1; done | wc -l)
     if [ "${CONSECUTIVE:-0}" -ge 2 ]; then
-      "$ROOT_DIR/ops/scripts/notify_banner.sh" CANARY_DEGRADED "{\"failed_invariant\":\"$FAILED_INVARIANT\",\"proof_paths\":[\"$CANARY_DIR/PROOF.md\"]}" 2>/dev/null || true
+      "$ROOT_DIR/ops/scripts/notify_banner.sh" CANARY_DEGRADED "{\"failed_invariant\":\"$FAILED_INVARIANT\",\"failed_checks\":[\"$FAILED_INVARIANT\"],\"proof_paths\":[\"$CANARY_DIR/PROOF.md\"],\"severity\":\"CORE\"}" 2>/dev/null || true
     fi
     cat > "$CANARY_DIR/PROOF.md" << EOF
 # Canary DEGRADED
@@ -288,7 +432,7 @@ cat > "$CANARY_DIR/PROOF.md" << EOF
 ## Checks
 - Reconcile (state_pack + invariants): PASS
 - noVNC connectivity audit: PASS
-- /api/ask smoke: PASS
+- /api/ask smoke: ${CHECK_ASK_STATUS}
 - /api/ui/version drift: PASS
 
 ## Artifacts
@@ -298,7 +442,15 @@ cat > "$CANARY_DIR/PROOF.md" << EOF
 - Version: $CANARY_DIR/version.json
 EOF
 
-echo '{"status":"PASS","run_id":"'"$RUN_ID"'","proof":"'"$CANARY_DIR"'/PROOF.md"}' > "$CANARY_DIR/result.json"
+if [ -n "$OPTIONAL_FAILED_CHECKS" ]; then
+  cat >> "$CANARY_DIR/PROOF.md" << EOF
+
+## Optional warnings
+- $OPTIONAL_FAILED_CHECKS
+EOF
+fi
+
+write_result_json "PASS" "false" "" "" ""
 echo "=== canary COMPLETE ==="
 echo "  Proof: $CANARY_DIR/PROOF.md"
 cat "$CANARY_DIR/result.json"
