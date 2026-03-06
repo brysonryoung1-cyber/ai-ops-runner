@@ -63,6 +63,10 @@ jobs:
     argv: ["python3", "./ops/scripts/kajabi_discover.py"]
     timeout_sec: 180
 
+  soma_kajabi_discover_interactive:
+    argv: ["python3", "./ops/scripts/kajabi_discover.py", "--mode", "interactive"]
+    timeout_sec: 300
+
   soma_kajabi_capture_interactive:
     argv: ["python3", "./ops/scripts/kajabi_capture_interactive.py"]
     timeout_sec: 1320

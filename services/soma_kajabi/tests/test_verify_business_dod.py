@@ -56,6 +56,23 @@ def _write_memberships_html(artifacts_root: Path, content: str) -> Path:
     return path
 
 
+def _write_discover_latest(artifacts_root: Path, run_name: str, *, status: str) -> Path:
+    discover_base = artifacts_root / "soma_kajabi" / "discover"
+    discover_dir = discover_base / run_name
+    discover_dir.mkdir(parents=True, exist_ok=True)
+    (discover_base / "LATEST.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_name,
+                "artifact_dir": str(discover_dir),
+                "status": status,
+                "updated_at": "2026-03-06T10:00:00+00:00",
+            }
+        )
+    )
+    return discover_dir
+
+
 def _write_community_json(artifacts_root: Path, name: str, groups: list[str]) -> Path:
     discover_dir = artifacts_root / "soma_kajabi" / "discover" / "run_001"
     discover_dir.mkdir(parents=True, exist_ok=True)
@@ -232,6 +249,13 @@ class TestOfferUrls:
         result = check_offer_urls(artifacts_root)
         assert result["pass"] is False
         assert result["reason"] == "MEMBERSHIPS_PAGE_MISSING"
+
+    def test_human_only_latest_pointer_warns_instead_of_failing_missing_artifact(self, artifacts_root):
+        _write_discover_latest(artifacts_root, "run_human", status="HUMAN_ONLY")
+        result = check_offer_urls(artifacts_root)
+        assert result["pass"] is False
+        assert result["status"] == "WARN"
+        assert result["reason"] == "DISCOVER_HUMAN_GATE_REQUIRED"
 
 
 # ---------------------------------------------------------------------------
@@ -445,6 +469,27 @@ class TestVerifyBusinessDod:
         assert result["pass"] is False
         assert result["checks"]["raw_module_present"]["pass"] is False
         assert len(result["warnings"]) >= 1
+
+    def test_human_only_discover_downgrades_missing_memberships_and_community_to_warn(self, artifacts_root):
+        snap_path = _write_snapshot(artifacts_root, ["RAW", "Module 2"])
+        _write_discover_latest(artifacts_root, "run_human", status="HUMAN_ONLY")
+        manifest_path = _write_manifest(
+            artifacts_root,
+            [{"subject": "S1", "filename": "f1.mp4", "content_sha256": "unique1", "status": "attached"}],
+        )
+
+        result = verify_business_dod(
+            artifacts_root=artifacts_root,
+            snapshot_path=snap_path,
+            manifest_path=manifest_path,
+            skip_network_checks=True,
+        )
+
+        assert result["pass"] is True
+        assert result["checks"]["offer_urls_present"]["status"] == "WARN"
+        assert result["checks"]["offer_urls_present"]["reason"] == "DISCOVER_HUMAN_GATE_REQUIRED"
+        assert result["checks"]["community_groups_exist"]["status"] == "WARN"
+        assert result["checks_warned"] == 2
 
 
 # ---------------------------------------------------------------------------
