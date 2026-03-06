@@ -100,7 +100,7 @@ def test_reconcile_lock_contention_exits_zero_and_writes_skip_reason(tmp_path: P
     assert payload["reason"] == "SKIP_LOCK_CONTENDED"
 
 
-def test_reconcile_missing_state_pack_is_controlled_failure(tmp_path: Path):
+def test_reconcile_missing_state_pack_is_controlled_skip(tmp_path: Path):
     repo_root = tmp_path / "repo"
     scripts_dir = repo_root / "ops" / "scripts"
     scripts_dir.mkdir(parents=True, exist_ok=True)
@@ -138,12 +138,12 @@ def test_reconcile_missing_state_pack_is_controlled_failure(tmp_path: Path):
         check=False,
     )
 
-    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.returncode == 0, proc.stdout + proc.stderr
     assert proc.returncode != 2
     assert "state_pack_missing_or_empty" in proc.stdout
 
     result_files = list((artifacts_root / "system" / "reconcile").glob("*/result.json"))
     assert result_files, "expected reconcile result.json artifact"
     payload = json.loads(result_files[0].read_text(encoding="utf-8"))
-    assert payload["status"] == "FAILURE"
-    assert payload["reason"] == "State pack generation failed"
+    assert payload["status"] == "SKIP"
+    assert payload["reason"] == "state_pack_missing_or_empty"

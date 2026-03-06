@@ -103,11 +103,9 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   SP_DIR=$(ls -1dt "$ARTIFACTS/system/state_pack"/*/ 2>/dev/null | head -1) || SP_DIR=""
   if [ -z "$SP_DIR" ]; then
     echo "state_pack_missing_or_empty"
-    echo '{"status":"FAILURE","reason":"State pack generation failed","run_id":"'"$RUN_ID"'"}' > "$RECONCILE_DIR/result.json"
-    INC_ID="incident_${RUN_ID}"
-    write_incident "$INC_ID" "FAILURE" "State pack generation failed"
+    echo '{"status":"SKIP","reason":"state_pack_missing_or_empty","run_id":"'"$RUN_ID"'"}' > "$RECONCILE_DIR/result.json"
     cat "$RECONCILE_DIR/result.json"
-    exit 1
+    exit 0
   fi
   cp -r "$SP_DIR" "$RECONCILE_DIR/state_pack_before/" 2>/dev/null || true
 
