@@ -42,9 +42,15 @@ STATE_PACK_INTEGRITY_DETAILS_JSON="$STATE_PACK_INTEGRITY_DIR/details.json"
 STATE_PACK_INTEGRITY_STATUS="FAIL"
 STATE_PACK_INTEGRITY_REASON="NOT_RUN"
 STATE_PACK_INTEGRITY_LATEST_PATH=""
+NOVNC_BACKEND_VNC_DIR="$DOCTOR_JSON_DIR/novnc_backend_vnc_5900"
+NOVNC_BACKEND_VNC_STATUS_JSON="$NOVNC_BACKEND_VNC_DIR/status.json"
+NOVNC_BACKEND_VNC_DETAILS_JSON="$NOVNC_BACKEND_VNC_DIR/details.json"
+NOVNC_BACKEND_VNC_STATUS="FAIL"
+NOVNC_BACKEND_VNC_SUMMARY="NOT_RUN"
 mkdir -p "$SYSTEMD_FAILED_DIR" 2>/dev/null || true
 mkdir -p "$STATE_PACK_FRESHNESS_DIR" 2>/dev/null || true
 mkdir -p "$STATE_PACK_INTEGRITY_DIR" 2>/dev/null || true
+mkdir -p "$NOVNC_BACKEND_VNC_DIR" 2>/dev/null || true
 
 pass() { CHECKS=$((CHECKS + 1)); echo "  PASS: $1"; }
 fail() { CHECKS=$((CHECKS + 1)); FAILURES=$((FAILURES + 1)); echo "  FAIL: $1" >&2; }
@@ -192,6 +198,44 @@ except Exception:
   fi
 else
   fail "frontdoor_ws_upgrade_probe.py not found"
+fi
+
+# --- 3c. State Pack Freshness ---
+echo "--- noVNC backend VNC (127.0.0.1:5900) ---"
+if [ -f "$ROOT_DIR/ops/scripts/novnc_backend_vnc_probe.py" ]; then
+  NOVNC_BACKEND_VNC_STDOUT="$(
+    python3 "$ROOT_DIR/ops/scripts/novnc_backend_vnc_probe.py" \
+      --host 127.0.0.1 \
+      --port 5900 \
+      --timeout-sec 1 \
+      --artifact-dir "$NOVNC_BACKEND_VNC_DIR" 2>/dev/null
+  )" || NOVNC_BACKEND_VNC_RC=$?
+  NOVNC_BACKEND_VNC_RC="${NOVNC_BACKEND_VNC_RC:-0}"
+  if [ -n "${NOVNC_BACKEND_VNC_STDOUT:-}" ]; then
+    NOVNC_BACKEND_VNC_SUMMARY="$(python3 -c "
+import json, sys
+try:
+    payload = json.loads(sys.stdin.read())
+    if payload.get('ok'):
+        print('backend_vnc_5900_accepting_tcp')
+    else:
+        print(payload.get('error') or 'backend_vnc_5900_unreachable')
+except Exception:
+    print('probe_parse_error')
+" <<<"$NOVNC_BACKEND_VNC_STDOUT" 2>/dev/null || echo "probe_parse_error")"
+  else
+    NOVNC_BACKEND_VNC_SUMMARY="probe_no_output"
+  fi
+  if [ "$NOVNC_BACKEND_VNC_RC" -eq 0 ]; then
+    NOVNC_BACKEND_VNC_STATUS="PASS"
+    pass "noVNC backend VNC 5900 accepting TCP"
+  else
+    NOVNC_BACKEND_VNC_STATUS="FAIL"
+    fail "noVNC backend VNC 5900 FAILED ($NOVNC_BACKEND_VNC_SUMMARY)"
+  fi
+else
+  NOVNC_BACKEND_VNC_SUMMARY="probe_missing"
+  fail "novnc_backend_vnc_probe.py not found"
 fi
 
 # --- 3c. State Pack Freshness ---
@@ -1051,7 +1095,7 @@ else
 fi
 
 # --- JSON Output ---
-python3 - "$DOCTOR_JSON_DIR/doctor.json" "$CHECKS" "$FAILURES" "$(hostname 2>/dev/null || echo unknown)" "$FRONTDOOR_WS_STATUS" "$FRONTDOOR_WS_SUMMARY" "$FRONTDOOR_WS_PROBE_JSON" "$SYSTEMD_FAILED_STATUS" "$SYSTEMD_FAILED_COUNT" "$SYSTEMD_FAILED_TXT" "$SYSTEMD_FAILED_DIR/status.json" "$STATE_PACK_FRESHNESS_STATUS" "$STATE_PACK_FRESHNESS_REASON" "$STATE_PACK_FRESHNESS_LATEST_PATH" "$STATE_PACK_FRESHNESS_AGE_SEC" "$STATE_PACK_FRESHNESS_THRESHOLD_SEC" "$STATE_PACK_FRESHNESS_JSON" "$STATE_PACK_INTEGRITY_STATUS" "$STATE_PACK_INTEGRITY_REASON" "$STATE_PACK_INTEGRITY_LATEST_PATH" "$STATE_PACK_INTEGRITY_STATUS_JSON" "$STATE_PACK_INTEGRITY_DETAILS_JSON" <<'PYEOF'
+python3 - "$DOCTOR_JSON_DIR/doctor.json" "$CHECKS" "$FAILURES" "$(hostname 2>/dev/null || echo unknown)" "$FRONTDOOR_WS_STATUS" "$FRONTDOOR_WS_SUMMARY" "$FRONTDOOR_WS_PROBE_JSON" "$SYSTEMD_FAILED_STATUS" "$SYSTEMD_FAILED_COUNT" "$SYSTEMD_FAILED_TXT" "$SYSTEMD_FAILED_DIR/status.json" "$STATE_PACK_FRESHNESS_STATUS" "$STATE_PACK_FRESHNESS_REASON" "$STATE_PACK_FRESHNESS_LATEST_PATH" "$STATE_PACK_FRESHNESS_AGE_SEC" "$STATE_PACK_FRESHNESS_THRESHOLD_SEC" "$STATE_PACK_FRESHNESS_JSON" "$STATE_PACK_INTEGRITY_STATUS" "$STATE_PACK_INTEGRITY_REASON" "$STATE_PACK_INTEGRITY_LATEST_PATH" "$STATE_PACK_INTEGRITY_STATUS_JSON" "$STATE_PACK_INTEGRITY_DETAILS_JSON" "$NOVNC_BACKEND_VNC_STATUS" "$NOVNC_BACKEND_VNC_SUMMARY" "$NOVNC_BACKEND_VNC_STATUS_JSON" "$NOVNC_BACKEND_VNC_DETAILS_JSON" <<'PYEOF'
 import json, sys
 from datetime import datetime, timezone
 out_file = sys.argv[1]
@@ -1076,6 +1120,10 @@ state_pack_integrity_reason = sys.argv[19]
 state_pack_integrity_latest_path = sys.argv[20]
 state_pack_integrity_status_json = sys.argv[21]
 state_pack_integrity_details_json = sys.argv[22]
+novnc_backend_vnc_status = sys.argv[23]
+novnc_backend_vnc_summary = sys.argv[24]
+novnc_backend_vnc_status_json = sys.argv[25]
+novnc_backend_vnc_details_json = sys.argv[26]
 result = {
     "timestamp": datetime.now(timezone.utc).isoformat(),
     "hostname": hostname,
@@ -1108,6 +1156,12 @@ result = {
         "latest_path": state_pack_integrity_latest_path,
         "status_json": state_pack_integrity_status_json,
         "details_json": state_pack_integrity_details_json,
+    },
+    "novnc_backend_vnc_5900": {
+        "status": novnc_backend_vnc_status,
+        "summary": novnc_backend_vnc_summary,
+        "status_json": novnc_backend_vnc_status_json,
+        "details_json": novnc_backend_vnc_details_json,
     },
 }
 with open(out_file, "w") as f:

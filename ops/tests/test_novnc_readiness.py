@@ -1,6 +1,8 @@
 """State-machine tests for convergent noVNC readiness."""
 from __future__ import annotations
 
+import json
+
 from ops.lib import novnc_readiness as nr
 
 
@@ -90,3 +92,111 @@ def test_state_machine_skips_recovery_on_first_pass() -> None:
     assert out["attempts"] == 1
     assert recover_calls == []
     assert clock.sleeps == []
+
+
+def _snapshot(*, ready: bool, backend_ok: bool, ws_ok: bool, err: str) -> dict:
+    return {
+        "ready": ready,
+        "error_class": None if ready else err,
+        "checks": {
+            "systemd": {"ok": True},
+            "http_novnc": {"required_path_ok": True},
+            "tcp_websockify": {"ok": True},
+            "tcp_backend_vnc": {"ok": backend_ok},
+            "ws_local": {"ok": ws_ok},
+            "ws_tailnet": {"performed": False, "ok": True},
+        },
+        "novnc_url": "https://test.ts.net/novnc/vnc.html?autoconnect=1&path=/websockify",
+        "ws_stability_local": "verified" if ws_ok else "failed",
+        "ws_stability_tailnet": "verified",
+    }
+
+
+def test_backend_selfheal_triggers_only_on_tcp_backend_failure(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "repo"
+    (root / "config").mkdir(parents=True)
+    (root / "config" / "project_state.json").write_text("{}\n", encoding="utf-8")
+
+    probes = iter(
+        [
+            _snapshot(ready=False, backend_ok=False, ws_ok=True, err="NOVNC_BACKEND_UNAVAILABLE"),
+            _snapshot(ready=True, backend_ok=True, ws_ok=True, err=""),
+        ]
+    )
+    restart_calls: list[int] = []
+
+    monkeypatch.setattr(nr, "_repo_root", lambda: root)
+    monkeypatch.setattr(nr, "_is_gate_active", lambda _root: False)
+    monkeypatch.setattr(nr, "_capture_runtime_bundle", lambda *args, **kwargs: None)
+    monkeypatch.setattr(nr, "_collect_probe_snapshot", lambda **kwargs: next(probes))
+    monkeypatch.setattr(
+        nr,
+        "_run_backend_selfheal_restart",
+        lambda _root: restart_calls.append(1) or {"method": "mock", "rc": 0, "ok": True},
+    )
+    monkeypatch.setattr(nr.time, "sleep", lambda _s: None)
+
+    out = nr.ensure_novnc_ready(run_id="rate_limit_run", emit_artifacts=True)
+    assert out.ok is True
+    assert out.attempts == 2
+    assert len(restart_calls) == 1
+    attempt = root / "artifacts" / "novnc_readiness" / "rate_limit_run" / "novnc_backend_selfheal" / "attempt.json"
+    assert attempt.exists()
+    payload = json.loads(attempt.read_text(encoding="utf-8"))
+    assert payload["attempted"] is True
+
+
+def test_backend_selfheal_not_triggered_for_ws_only_failure(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "repo"
+    (root / "config").mkdir(parents=True)
+    (root / "config" / "project_state.json").write_text("{}\n", encoding="utf-8")
+    restart_calls: list[int] = []
+
+    monkeypatch.setattr(nr, "_repo_root", lambda: root)
+    monkeypatch.setattr(nr, "_is_gate_active", lambda _root: False)
+    monkeypatch.setattr(nr, "_capture_runtime_bundle", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        nr,
+        "_collect_probe_snapshot",
+        lambda **kwargs: _snapshot(ready=False, backend_ok=True, ws_ok=False, err="NOVNC_WS_LOCAL_FAILED"),
+    )
+    monkeypatch.setattr(
+        nr,
+        "_run_backend_selfheal_restart",
+        lambda _root: restart_calls.append(1) or {"method": "mock", "rc": 0, "ok": True},
+    )
+
+    out = nr.ensure_novnc_ready(run_id="ws_only_fail", emit_artifacts=True)
+    assert out.ok is False
+    assert out.error_class == "NOVNC_WS_LOCAL_FAILED"
+    assert len(restart_calls) == 0
+    attempt = root / "artifacts" / "novnc_readiness" / "ws_only_fail" / "novnc_backend_selfheal" / "attempt.json"
+    assert not attempt.exists()
+
+
+def test_backend_selfheal_is_rate_limited_to_one_attempt_per_run(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "repo"
+    (root / "config").mkdir(parents=True)
+    (root / "config" / "project_state.json").write_text("{}\n", encoding="utf-8")
+    restart_calls: list[int] = []
+
+    monkeypatch.setattr(nr, "_repo_root", lambda: root)
+    monkeypatch.setattr(nr, "_is_gate_active", lambda _root: False)
+    monkeypatch.setattr(nr, "_capture_runtime_bundle", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        nr,
+        "_collect_probe_snapshot",
+        lambda **kwargs: _snapshot(ready=False, backend_ok=False, ws_ok=True, err="NOVNC_BACKEND_UNAVAILABLE"),
+    )
+    monkeypatch.setattr(
+        nr,
+        "_run_backend_selfheal_restart",
+        lambda _root: restart_calls.append(1) or {"method": "mock", "rc": 1, "ok": False},
+    )
+    monkeypatch.setattr(nr.time, "sleep", lambda _s: None)
+
+    first = nr.ensure_novnc_ready(run_id="same_run_id", emit_artifacts=True)
+    second = nr.ensure_novnc_ready(run_id="same_run_id", emit_artifacts=True)
+    assert first.ok is False
+    assert second.ok is False
+    assert len(restart_calls) == 1
