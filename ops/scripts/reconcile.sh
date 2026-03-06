@@ -100,8 +100,9 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   # 1. State Pack
   SP_RUN_ID="reconcile_${RUN_ID}_sp${attempt}"
   OPENCLAW_RUN_ID="$SP_RUN_ID" "$ROOT_DIR/ops/scripts/state_pack.sh" 2>/dev/null | tail -1 > "$RECONCILE_DIR/state_pack_result.json" || true
-  SP_DIR=$(ls -1dt "$ARTIFACTS/system/state_pack"/*/ 2>/dev/null | head -1)
+  SP_DIR=$(ls -1dt "$ARTIFACTS/system/state_pack"/*/ 2>/dev/null | head -1) || SP_DIR=""
   if [ -z "$SP_DIR" ]; then
+    echo "state_pack_missing_or_empty"
     echo '{"status":"FAILURE","reason":"State pack generation failed","run_id":"'"$RUN_ID"'"}' > "$RECONCILE_DIR/result.json"
     INC_ID="incident_${RUN_ID}"
     write_incident "$INC_ID" "FAILURE" "State pack generation failed"
