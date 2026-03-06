@@ -54,6 +54,12 @@ const SOMA_ACTIONS: SomaActionDef[] = [
     description: "Show latest Soma artifact runs and overall health",
     variant: "secondary",
   },
+  {
+    action: "soma_business_dod_fixer",
+    label: "Business DoD Fixer (Executor)",
+    description: "Verify Business DoD, execute authenticated privacy/RAW UI fixes, and re-run verification",
+    variant: "secondary",
+  },
 ];
 
 function GmailDeviceAuthInfo({ result, onComplete }: { result: ExecResult; onComplete: () => void }) {
