@@ -244,6 +244,14 @@
       "description": "Run deterministic Business DoD validators (8 checks). Writes artifacts to artifacts/soma_kajabi/business_dod/<run_id>/."
     },
     {
+      "id": "soma_business_dod_fixer",
+      "label": "Business DoD Fixer (Executor)",
+      "project_id": "soma_kajabi",
+      "timeout_sec": 1200,
+      "cmd_template": "cd ${ROOT_DIR} && ${ROOT_DIR}/.venv-hostd/bin/python ./ops/scripts/soma_business_dod_fixer.py",
+      "description": "Run Business DoD and execute targeted authenticated Kajabi UI fixes for privacy-policy + RAW category, then re-verify with proof artifacts."
+    },
+    {
       "id": "soma_kajabi_bootstrap_start",
       "label": "Kajabi Bootstrap Start",
       "project_id": "soma_kajabi",
