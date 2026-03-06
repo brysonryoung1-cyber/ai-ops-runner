@@ -633,6 +633,148 @@ def test_terminal_fail_can_exit_nonzero_when_flag_enabled(tmp_path: Path) -> Non
     assert result["error_class"] == "NOVNC_BACKEND_UNAVAILABLE"
 
 
+def test_doctor_subprocess_cwd_and_pythonpath(tmp_path: Path, monkeypatch) -> None:
+    """Ensure doctor subprocess is invoked with cwd=REPO_ROOT and PYTHONPATH=REPO_ROOT."""
+    import subprocess
+    from ops.system.project_autopilot import REPO_ROOT, run_doctor_core
+
+    bundle_dir = tmp_path / "bundle"
+    raw_dir = bundle_dir / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    captured_calls: list[dict] = []
+
+    original_run = subprocess.run
+
+    def _subprocess_run_capture(cmd, **kwargs):
+        if cmd and "doctor_matrix.py" in str(cmd):
+            captured_calls.append({
+                "cmd": cmd,
+                "cwd": kwargs.get("cwd"),
+                "env": kwargs.get("env"),
+            })
+
+            class FakeProc:
+                stdout = '{"status": "PASS", "ok": true, "run_id": "test", "bundle_dir": "/tmp/test", "failed_checks": []}'
+                stderr = ""
+                returncode = 0
+
+            return FakeProc()
+        return original_run(cmd, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", _subprocess_run_capture)
+
+    result = run_doctor_core(
+        bundle_dir=bundle_dir,
+        hq_base="http://127.0.0.1:8787",
+        mock=False,
+        mock_status="PASS",
+    )
+
+    assert len(captured_calls) == 1, "doctor subprocess should have been called once"
+    call = captured_calls[0]
+    assert call["cwd"] == str(REPO_ROOT), f"cwd should be REPO_ROOT, got {call['cwd']}"
+    assert call["env"] is not None, "env should be passed"
+    assert call["env"].get("PYTHONPATH") == str(REPO_ROOT), f"PYTHONPATH should be REPO_ROOT"
+    assert call["env"].get("OPENCLAW_REPO_ROOT") == str(REPO_ROOT), f"OPENCLAW_REPO_ROOT should be REPO_ROOT"
+    assert result["status"] == "PASS"
+
+
+def test_doctor_empty_output_produces_structured_error(tmp_path: Path, monkeypatch) -> None:
+    """When doctor subprocess returns empty stdout, result should have structured error_class."""
+    from ops.system import project_autopilot
+
+    artifacts_root = tmp_path / "artifacts"
+    state_root = tmp_path / "state"
+
+    def _empty_run_doctor_core(*, bundle_dir, hq_base, mock, mock_status):
+        raw_dir = bundle_dir / "raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        project_autopilot.atomic_write_text(raw_dir / "doctor_matrix_stdout.txt", "")
+        project_autopilot.atomic_write_text(raw_dir / "doctor_matrix_stderr.txt", "ImportError: circular import")
+        return {
+            "ok": False,
+            "status": "FAIL",
+            "error_class": "DOCTOR_EMPTY_OUTPUT",
+            "rc": 1,
+            "stdout_len": 0,
+            "stderr_tail": ["ImportError: circular import"],
+            "cmd": ["python", "doctor_matrix.py"],
+        }
+
+    monkeypatch.setattr(project_autopilot, "run_doctor_core", _empty_run_doctor_core)
+
+    rc = main(
+        [
+            "--project",
+            "non_soma_project",
+            "--action",
+            "some_action",
+            "--run-id",
+            "ap_doctor_empty_test",
+            "--state-root",
+            str(state_root),
+            "--artifacts-root",
+            str(artifacts_root),
+            "--validator-actions",
+            "",
+        ]
+    )
+
+    assert rc == 0
+    result = _load_result(artifacts_root, "ap_doctor_empty_test")
+    assert result["status"] == "FAIL"
+    assert result["error_class"] == "DOCTOR_MATRIX_FAIL"
+    assert result["doctor"]["status"] == "FAIL"
+
+
+def test_doctor_nonzero_exit_produces_structured_error(tmp_path: Path, monkeypatch) -> None:
+    """When doctor subprocess returns rc!=0, result should have structured error."""
+    from ops.system import project_autopilot
+
+    artifacts_root = tmp_path / "artifacts"
+    state_root = tmp_path / "state"
+
+    def _failing_run_doctor_core(*, bundle_dir, hq_base, mock, mock_status):
+        raw_dir = bundle_dir / "raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        project_autopilot.atomic_write_text(raw_dir / "doctor_matrix_stdout.txt", "some garbage")
+        project_autopilot.atomic_write_text(raw_dir / "doctor_matrix_stderr.txt", "Error: something went wrong")
+        return {
+            "ok": False,
+            "status": "FAIL",
+            "error_class": "DOCTOR_SUBPROCESS_FAILED",
+            "rc": 1,
+            "stdout_len": 12,
+            "stderr_tail": ["Error: something went wrong"],
+            "cmd": ["python", "doctor_matrix.py"],
+        }
+
+    monkeypatch.setattr(project_autopilot, "run_doctor_core", _failing_run_doctor_core)
+
+    rc = main(
+        [
+            "--project",
+            "non_soma_project",
+            "--action",
+            "some_action",
+            "--run-id",
+            "ap_doctor_nonzero_test",
+            "--state-root",
+            str(state_root),
+            "--artifacts-root",
+            str(artifacts_root),
+            "--validator-actions",
+            "",
+        ]
+    )
+
+    assert rc == 0
+    result = _load_result(artifacts_root, "ap_doctor_nonzero_test")
+    assert result["status"] == "FAIL"
+    assert result["error_class"] == "DOCTOR_MATRIX_FAIL"
+    assert result["doctor"]["status"] == "FAIL"
+
+
 def test_mock_waiting_alert_uses_webhook_resolution_env_and_file(tmp_path: Path, monkeypatch) -> None:
     urls: list[str] = []
     env_run_id = "20260305130000-env1"

@@ -217,22 +217,58 @@ def run_doctor_core(
         return payload
 
     cmd = [sys.executable, str(REPO_ROOT / "ops" / "system" / "doctor_matrix.py"), "--mode", "core"]
-    with temporary_env(
-        {
-            "OPENCLAW_REPO_ROOT": str(REPO_ROOT),
-            "OPENCLAW_HQ_BASE": hq_base,
-        }
-    ):
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(REPO_ROOT)
+    env["OPENCLAW_REPO_ROOT"] = str(REPO_ROOT)
+    env["OPENCLAW_HQ_BASE"] = hq_base
+    try:
         proc = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=DOCTOR_TIMEOUT_SEC,
             check=False,
+            cwd=str(REPO_ROOT),
+            env=env,
         )
+    except subprocess.TimeoutExpired as exc:
+        atomic_write_text(raw_dir / "doctor_matrix_stdout.txt", str(exc.stdout or ""))
+        atomic_write_text(raw_dir / "doctor_matrix_stderr.txt", str(exc.stderr or ""))
+        return {
+            "ok": False,
+            "status": "FAIL",
+            "error_class": "DOCTOR_SUBPROCESS_TIMEOUT",
+            "rc": -1,
+            "stdout_len": len(str(exc.stdout or "")),
+            "stderr_tail": str(exc.stderr or "")[-2048:].splitlines()[-30:],
+            "cmd": cmd,
+        }
     atomic_write_text(raw_dir / "doctor_matrix_stdout.txt", proc.stdout or "")
     atomic_write_text(raw_dir / "doctor_matrix_stderr.txt", proc.stderr or "")
-    payload = parse_json_object(proc.stdout or "")
+    if proc.returncode != 0 or not (proc.stdout or "").strip():
+        stderr_text = proc.stderr or ""
+        return {
+            "ok": False,
+            "status": "FAIL",
+            "error_class": "DOCTOR_EMPTY_OUTPUT" if not (proc.stdout or "").strip() else "DOCTOR_SUBPROCESS_FAILED",
+            "rc": proc.returncode,
+            "stdout_len": len(proc.stdout or ""),
+            "stderr_tail": stderr_text[-2048:].splitlines()[-30:],
+            "cmd": cmd,
+        }
+    try:
+        payload = parse_json_object(proc.stdout or "")
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "status": "FAIL",
+            "error_class": "DOCTOR_PARSE_FAILED",
+            "rc": proc.returncode,
+            "stdout_len": len(proc.stdout or ""),
+            "stderr_tail": (proc.stderr or "")[-2048:].splitlines()[-30:],
+            "parse_error": str(exc)[:240],
+            "cmd": cmd,
+        }
     payload["subprocess_exit_code"] = proc.returncode
     return payload
 
