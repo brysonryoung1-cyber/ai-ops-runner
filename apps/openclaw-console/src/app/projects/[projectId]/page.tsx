@@ -91,40 +91,24 @@ export default function ProjectDetailsPage() {
   useEffect(() => {
     if (!projectId) return;
     startTransition(() => {
-      load()
+      void load()
         .catch((error) => setMessage(error instanceof Error ? error.message : "Failed to load project"))
         .finally(() => setLoading(false));
     });
   }, [projectId, token]);
 
-  const extraPlaybooks = useMemo(() => {
+  const visiblePlaybooks = useMemo(() => {
     if (!project) return [];
-    return project.playbooks
-      .filter((playbook) => playbook.id !== project.recommended_playbook?.id && !playbook.id.endsWith(".review_approvals"))
-      .slice(0, 3);
+    const recommendedId = project.recommended_playbook?.id;
+    return project.playbooks.filter((playbook) => playbook.id !== recommendedId).slice(0, 4);
   }, [project]);
 
-  const mutateAutonomy = async (mode: "ON" | "OFF") => {
-    setBusy(`autonomy-${mode}`);
-    setMessage(null);
-    try {
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers["X-OpenClaw-Token"] = token;
-      const res = await fetch("/api/ui/autonomy_mode", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ mode }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to update autonomy mode");
-      await load();
-      setMessage(`Autonomy mode ${data.mode}.`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Failed to update autonomy mode");
-    } finally {
-      setBusy(null);
-    }
-  };
+  const advancedPlaybooks = useMemo(() => {
+    if (!project) return [];
+    const recommendedId = project.recommended_playbook?.id;
+    const visibleIds = new Set(visiblePlaybooks.map((playbook) => playbook.id));
+    return project.playbooks.filter((playbook) => playbook.id !== recommendedId && !visibleIds.has(playbook.id));
+  }, [project, visiblePlaybooks]);
 
   const runPlaybook = async (playbookId: string, confirmPhrase?: string) => {
     setBusy(playbookId);
@@ -169,8 +153,8 @@ export default function ProjectDetailsPage() {
   if (loading && !project) {
     return (
       <div className="glass-surface rounded-2xl p-12 text-center">
-        <div className="inline-block w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-        <p className="text-sm text-white/60 mt-3">Loading project…</p>
+        <div className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-blue-400 border-t-transparent" />
+        <p className="mt-3 text-sm text-white/60">Loading project…</p>
       </div>
     );
   }
@@ -195,8 +179,8 @@ export default function ProjectDetailsPage() {
           <Link href="/projects" className="text-xs text-blue-300 hover:text-blue-200">
             ← Projects
           </Link>
-          <h2 className="text-2xl font-bold text-white/95 tracking-tight mt-2">{project.name}</h2>
-          <p className="text-sm text-white/60 mt-1">{project.description}</p>
+          <h2 className="mt-2 text-2xl font-bold tracking-tight text-white/95">{project.name}</h2>
+          <p className="mt-1 text-sm text-white/60">{project.description}</p>
         </div>
         <div className="text-right">
           <p className={`text-sm font-semibold ${tone.className}`}>{tone.label}</p>
@@ -220,58 +204,88 @@ export default function ProjectDetailsPage() {
       {project.core_status === "FAIL" && (
         <GlassCard data-testid="project-core-degraded-banner" className="border border-red-500/30 bg-red-500/10 p-4">
           <p className="text-sm font-semibold text-red-200">Core degraded</p>
-          <p className="text-sm text-red-100/80 mt-1">
+          <p className="mt-1 text-sm text-red-100/80">
             Optional warnings stay amber; only core failures raise the red banner.
           </p>
         </GlassCard>
       )}
 
       <GlassCard className="p-5" data-testid="project-primary-actions">
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/45">Autonomous Mode</p>
-              <div className="mt-3" data-testid="project-default-buttons">
+        <div className="space-y-4" data-testid="project-default-action-buttons">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-white/55">
+            <span className="rounded-full bg-white/5 px-2 py-1">Autonomy {summary?.autonomy_mode.mode ?? "—"}</span>
+            {project.approvals_pending > 0 && (
+              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">
+                {project.approvals_pending} approval {project.approvals_pending === 1 ? "item" : "items"} pending
+              </span>
+            )}
+            {project.needs_human && (
+              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">
+                HUMAN_ONLY gate open
+              </span>
+            )}
+          </div>
+
+          {project.recommended_playbook && (
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-white/90">{project.recommended_playbook.title}</p>
+                  <p className="mt-1 text-sm text-white/65">{project.recommended_playbook.rationale}</p>
+                </div>
                 <button
                   type="button"
-                  className={`rounded-xl px-3 py-2 text-xs font-semibold ${
-                    summary?.autonomy_mode.mode === "ON"
-                      ? "bg-emerald-500/20 text-emerald-200"
-                      : "bg-red-500/20 text-red-200"
-                  }`}
-                  onClick={() => mutateAutonomy(summary?.autonomy_mode.mode === "ON" ? "OFF" : "ON")}
+                  className="rounded-xl bg-blue-500/20 px-3 py-2 text-sm font-medium text-blue-200 hover:bg-blue-500/30 disabled:opacity-60"
+                  onClick={() => runPlaybook(project.recommended_playbook!.id)}
                   disabled={busy !== null}
                 >
-                  {summary?.autonomy_mode.mode === "ON" ? "Autonomy ON" : "Autonomy OFF"}
+                  Run Next
                 </button>
               </div>
             </div>
-            {project.recommended_playbook && (
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                  <div>
-                    <p className="text-sm font-semibold text-white/90">{project.recommended_playbook.title}</p>
-                    <p className="text-sm text-white/65 mt-1">{project.recommended_playbook.rationale}</p>
-                  </div>
-                  <button
-                    type="button"
-                    className="rounded-xl bg-blue-500/20 px-3 py-2 text-sm font-medium text-blue-200 hover:bg-blue-500/30 disabled:opacity-60"
-                    onClick={() => runPlaybook(project.recommended_playbook!.id)}
-                    disabled={busy !== null}
-                  >
-                    Run Next
-                  </button>
+          )}
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {visiblePlaybooks.map((playbook) => (
+              <button
+                key={playbook.id}
+                type="button"
+                className="rounded-2xl border border-white/10 bg-white/5 p-4 text-left hover:bg-white/10 disabled:opacity-60"
+                onClick={() => runPlaybook(playbook.id)}
+                disabled={busy !== null}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-white/90">{playbook.title}</p>
+                  <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-white/55">
+                    {playbook.policy_preview}
+                  </span>
                 </div>
-              </div>
-            )}
-            {project.approvals_pending > 0 && (
-              <p className="text-sm text-amber-200">
-                {project.approvals_pending} approval {project.approvals_pending === 1 ? "item" : "items"} pending.
-                <Link href="/inbox" className="ml-2 text-blue-300 hover:text-blue-200">
-                  Open Inbox
-                </Link>
-              </p>
-            )}
+                <p className="mt-2 text-sm text-white/60">{playbook.description}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+      </GlassCard>
+
+      <GlassCard className="p-5">
+        <div className="mb-4">
+          <p className="text-sm font-semibold text-white/90">Advanced</p>
+          <p className="mt-1 text-sm text-white/60">
+            Default controls stay capped. Proofs, gates, and the rest of the catalog are hidden until you open this panel.
+          </p>
+        </div>
+        <details className="rounded-2xl border border-white/10 bg-white/5 p-4" data-testid="project-advanced-panel">
+          <summary className="cursor-pointer text-sm font-semibold text-white/80">Advanced</summary>
+          <div className="mt-4 space-y-5">
+            <div className="space-y-1 text-sm text-white/60">
+              <p>Last run: {project.last_run.run_id ?? "—"}</p>
+              <p>Action: {project.last_run.action ?? "—"}</p>
+              <p>Status: {project.last_run.status ?? "—"}</p>
+              {project.business_dod_pass != null && (
+                <p>Business DoD: {project.business_dod_pass ? "PASS" : "FAIL"}</p>
+              )}
+            </div>
+
             {project.needs_human && project.human_gate && (
               <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100/90">
                 <p className="font-semibold text-amber-200">Human gate open</p>
@@ -298,72 +312,53 @@ export default function ProjectDetailsPage() {
                 </div>
               </div>
             )}
-          </div>
 
-          <div className="lg:max-w-md lg:w-full">
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/45">Proofs</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {project.proof_links.length > 0 ? (
-                project.proof_links.map((proof) => (
-                  <a
-                    key={`${project.project_id}-${proof.href}`}
-                    href={proof.href}
-                    className="inline-flex rounded-lg bg-white/5 px-3 py-2 text-xs font-medium text-white/75 hover:bg-white/10"
-                  >
-                    {proof.label}
-                  </a>
-                ))
-              ) : (
-                <span className="text-sm text-white/45">No proof links available yet.</span>
-              )}
-            </div>
-            <div className="mt-4 text-sm text-white/60 space-y-1">
-              <p>Last run: {project.last_run.run_id ?? "—"}</p>
-              <p>Action: {project.last_run.action ?? "—"}</p>
-              <p>Status: {project.last_run.status ?? "—"}</p>
-              {project.business_dod_pass != null && (
-                <p>Business DoD: {project.business_dod_pass ? "PASS" : "FAIL"}</p>
-              )}
-            </div>
-          </div>
-        </div>
-      </GlassCard>
-
-      <GlassCard className="p-5">
-        <div className="flex items-center justify-between gap-4 mb-4">
-          <div>
-            <p className="text-sm font-semibold text-white/90">Playbooks</p>
-            <p className="text-sm text-white/60 mt-1">Raw actions stay in Advanced. This page only shows the primary playbook surface.</p>
-          </div>
-          <Link href={`/advanced/catalog?project=${encodeURIComponent(project.project_id)}`} className="text-sm text-blue-300 hover:text-blue-200">
-            Open Catalog
-          </Link>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3" data-testid="project-playbook-buttons">
-          {extraPlaybooks.map((playbook) => (
-            <button
-              key={playbook.id}
-              type="button"
-              className="rounded-2xl border border-white/10 bg-white/5 p-4 text-left hover:bg-white/10 disabled:opacity-60"
-              onClick={() => runPlaybook(playbook.id)}
-              disabled={busy !== null}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-white/90">{playbook.title}</p>
-                <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-white/55">
-                  {playbook.policy_preview}
-                </span>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/45">Proofs</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {project.proof_links.length > 0 ? (
+                  project.proof_links.map((proof) => (
+                    <a
+                      key={`${project.project_id}-${proof.href}`}
+                      href={proof.href}
+                      className="inline-flex rounded-lg bg-white/5 px-3 py-2 text-xs font-medium text-white/75 hover:bg-white/10"
+                    >
+                      {proof.label}
+                    </a>
+                  ))
+                ) : (
+                  <span className="text-sm text-white/45">No proof links available yet.</span>
+                )}
               </div>
-              <p className="text-sm text-white/60 mt-2">{playbook.description}</p>
-            </button>
-          ))}
-        </div>
-        <details className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
-          <summary className="cursor-pointer text-sm font-semibold text-white/80">Advanced</summary>
-          <div className="mt-3 space-y-2 text-sm text-white/60">
-            <p>Catalog includes raw executor actions, search, tags, and risk badges.</p>
-            <Link href={`/advanced/catalog?project=${encodeURIComponent(project.project_id)}`} className="text-blue-300 hover:text-blue-200">
-              Go to Advanced Catalog
+            </div>
+
+            {advancedPlaybooks.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/45">More Playbooks</p>
+                <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {advancedPlaybooks.map((playbook) => (
+                    <button
+                      key={playbook.id}
+                      type="button"
+                      className="rounded-2xl border border-white/10 bg-[#0f1727] p-4 text-left hover:bg-[#152033] disabled:opacity-60"
+                      onClick={() => runPlaybook(playbook.id)}
+                      disabled={busy !== null}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-white/90">{playbook.title}</p>
+                        <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-white/55">
+                          {playbook.policy_preview}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm text-white/60">{playbook.description}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <Link href={`/advanced/catalog?project=${encodeURIComponent(project.project_id)}`} className="inline-flex text-blue-300 hover:text-blue-200">
+              Open Advanced Catalog
             </Link>
           </div>
         </details>

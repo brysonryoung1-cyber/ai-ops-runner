@@ -25,9 +25,7 @@ test.describe("Project autonomy surface", () => {
       timeout: 10_000,
     });
 
-    const totalButtons = await page.locator(
-      '[data-testid="project-primary-actions"] button:visible, [data-testid="project-playbook-buttons"] button:visible'
-    ).count();
+    const totalButtons = await page.locator('[data-testid="project-default-action-buttons"] button:visible').count();
     expect(totalButtons).toBeLessThanOrEqual(5);
   });
 

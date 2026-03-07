@@ -76,6 +76,17 @@ export interface InboxSummaryResponse {
   };
   canary_core_status: "PASS" | "FAIL" | "UNKNOWN";
   canary_optional_status: "PASS" | "WARN" | "UNKNOWN";
+  scheduler_tick: {
+    run_id: string | null;
+    started_at: string | null;
+    finished_at: string | null;
+    observe_only: boolean | null;
+    decisions_written: number | null;
+    executed_written: number | null;
+    mutating_candidates_blocked: number | null;
+    tick_summary_url: string | null;
+    proof_url: string | null;
+  } | null;
   projects: ProjectInboxSummary[];
 }
 
@@ -131,6 +142,42 @@ function loadBusinessDodStatus(): { pass: boolean | null; href: string | null } 
   return { pass: null, href: null };
 }
 
+function loadLatestSchedulerTick(): InboxSummaryResponse["scheduler_tick"] {
+  const schedulerRoot = join(getArtifactsRoot(), "system", "autonomy_scheduler");
+  const latestSummary = readJsonFile<Record<string, unknown>>(join(schedulerRoot, "LATEST_tick_summary.json"));
+  const latestDirs = listChildDirectories(schedulerRoot);
+  const runId =
+    typeof latestSummary?.run_id === "string" && latestSummary.run_id.trim().length > 0
+      ? latestSummary.run_id
+      : latestDirs[0] ?? null;
+
+  if (!latestSummary && !runId) {
+    return null;
+  }
+
+  const tickSummaryPath = runId
+    ? `artifacts/system/autonomy_scheduler/${runId}/tick_summary.json`
+    : "artifacts/system/autonomy_scheduler/LATEST_tick_summary.json";
+  const proofPath = runId ? `artifacts/system/autonomy_scheduler/${runId}` : tickSummaryPath;
+
+  return {
+    run_id: runId,
+    started_at: typeof latestSummary?.started_at === "string" ? latestSummary.started_at : null,
+    finished_at: typeof latestSummary?.finished_at === "string" ? latestSummary.finished_at : null,
+    observe_only: typeof latestSummary?.observe_only === "boolean" ? latestSummary.observe_only : null,
+    decisions_written:
+      typeof latestSummary?.decisions_written === "number" ? latestSummary.decisions_written : null,
+    executed_written:
+      typeof latestSummary?.executed_written === "number" ? latestSummary.executed_written : null,
+    mutating_candidates_blocked:
+      typeof latestSummary?.mutating_candidates_blocked === "number"
+        ? latestSummary.mutating_candidates_blocked
+        : null,
+    tick_summary_url: toArtifactUrl(tickSummaryPath),
+    proof_url: toArtifactUrl(proofPath),
+  };
+}
+
 function makeProofLinks(projectId: string, canaryHref: string | null): Array<{ label: string; href: string }> {
   const links: Array<{ label: string; href: string }> = [];
   const lastRun = getLastRunForProject(projectId);
@@ -164,6 +211,7 @@ export function buildInboxSummary(projectFilter?: string): InboxSummaryResponse 
   const registry = loadProjectRegistrySafe();
   const autonomy = readAutonomyMode();
   const canary = loadLatestCanary();
+  const schedulerTick = loadLatestSchedulerTick();
   const approvals = listApprovals({ status: "PENDING", limit: 200 });
   const projects = (registry?.projects ?? []).filter((project) => !projectFilter || project.id === projectFilter);
 
@@ -319,6 +367,7 @@ export function buildInboxSummary(projectFilter?: string): InboxSummaryResponse 
     },
     canary_core_status: canary.core_status,
     canary_optional_status: canary.optional_status,
+    scheduler_tick: schedulerTick,
     projects: summaries,
   };
 }
