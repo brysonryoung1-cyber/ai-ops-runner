@@ -9,6 +9,7 @@ test.describe("Navigation Smoke", () => {
   test("sidebar links navigate to correct pages", async ({ page }) => {
     await page.goto("/");
     await expect(page).toHaveTitle(/OpenClaw HQ/);
+    await page.waitForURL(/\/inbox/, { timeout: 10_000 });
 
     // Click Projects
     const projectsLink = page.locator('nav[aria-label="Main navigation"] a[href="/projects"]');
@@ -29,16 +30,22 @@ test.describe("Navigation Smoke", () => {
     await expect(page).toHaveURL(/\/artifacts/);
     await expect(page.getByRole("heading", { name: /Artifacts/i })).toBeVisible();
 
+    // Click Catalog
+    const catalogLink = page.locator('nav[aria-label="Main navigation"] a[href="/advanced/catalog"]');
+    await catalogLink.click();
+    await expect(page).toHaveURL(/\/advanced\/catalog/);
+    await expect(page.getByRole("heading", { name: /^Catalog$/i })).toBeVisible();
+
     // Click Settings
     const settingsLink = page.locator('nav[aria-label="Main navigation"] a[href="/settings"]');
     await settingsLink.click();
     await expect(page).toHaveURL(/\/settings/);
     await expect(page.getByRole("heading", { name: /Settings/i })).toBeVisible();
 
-    // Click Overview (back to root)
-    const overviewLink = page.locator('nav[aria-label="Main navigation"] a[href="/"]');
+    // Click Overview
+    const overviewLink = page.locator('nav[aria-label="Main navigation"] a[href="/overview"]');
     await overviewLink.click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).toHaveURL(/\/overview/);
   });
 
   test("sidebar links are real anchor tags with href", async ({ page }) => {
@@ -65,6 +72,7 @@ test.describe("Navigation Smoke", () => {
 
   test("hydration badge shows Client: Active", async ({ page }) => {
     await page.goto("/");
+    await page.waitForURL(/\/inbox/, { timeout: 10_000 });
     const badge = page.locator('[data-testid="hydration-badge"]');
     await expect(badge).toContainText("Client: Active", { timeout: 5_000 });
   });

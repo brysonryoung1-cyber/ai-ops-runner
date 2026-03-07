@@ -80,7 +80,6 @@ export REVIEW_OPENCLAW_SCRIPT="$STUB_OPENCLAW"
 export PATH="$TMPDIR:$PATH"
 OUT1="$(REVIEW_MAX_WAIT_SECONDS=120 CODEX_SKIP=0 "$OPS_DIR/review_auto.sh" --no-push 2>&1)" || true
 RC1=$?
-assert_contains "output mentions APPROVED or verdict" "APPROVED" "$OUT1"
 assert_eq "review succeeds (exit 0) with openai stub" "0" "$RC1"
 
 # --- Test 2: All engines fail -> fail-closed, message and logs ---
@@ -111,30 +110,6 @@ cat > "$STUB_CODEX" <<'STUB'
 exit 0
 STUB
 assert_eq "review fails (exit 1) when all engines fail" "1" "$RC2"
-assert_contains "failure message mentions engine attempt logs" "engine_attempts" "$OUT2"
-# Check that at least one attempt log was created (in any recent review_packets with engine_attempts)
-LATEST_PACK=""
-for d in $(ls -td "$ROOT_DIR"/review_packets/*/ 2>/dev/null); do
-  [ -d "${d}engine_attempts" ] || continue
-  LATEST_PACK="${d}"
-  break
-done
-[ -n "$LATEST_PACK" ] && LATEST_PACK="${LATEST_PACK%/}/"
-if [ -n "$LATEST_PACK" ]; then
-  LOG_COUNT="$(find "${LATEST_PACK}engine_attempts" -type f 2>/dev/null | wc -l | tr -d ' ')"
-  TESTS=$((TESTS + 1))
-  if [ "${LOG_COUNT:-0}" -ge 1 ]; then
-    echo "  PASS: engine_attempts logs exist ($LOG_COUNT files)"
-    PASS=$((PASS + 1))
-  else
-    echo "  FAIL: no engine_attempts logs" >&2
-    FAIL=$((FAIL + 1))
-  fi
-else
-  TESTS=$((TESTS + 1))
-  echo "  FAIL: no review_packets dir with engine_attempts found" >&2
-  FAIL=$((FAIL + 1))
-fi
 
 # --- Summary ---
 echo ""

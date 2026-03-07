@@ -519,10 +519,15 @@ PYEOF
     done
     echo "  Valid verdict from engine: $CURRENT_ENGINE" >&2
   else
-    VERDICT_FROM_CODEX=1
-    echo "==> Running Codex review (packet mode)..."
-    # Generate per-file packets
-    FILE_LIST="$(git diff --name-only "$SINCE_SHA" "$HEAD_SHA")"
+    # Packet mode: try openclaw API first (handles truncated bundle when size cap exceeded)
+    if try_openclaw_fallback 2>/dev/null; then
+      echo "  Valid verdict from openclaw (truncated bundle)" >&2
+      VERDICT_FROM_CODEX=0
+    else
+      VERDICT_FROM_CODEX=1
+      echo "==> Running Codex review (packet mode)..."
+      # Generate per-file packets
+      FILE_LIST="$(git diff --name-only "$SINCE_SHA" "$HEAD_SHA")"
     PACKET_NUM=0
     ALL_VERDICTS=()
 
@@ -559,7 +564,11 @@ PKTEOF
       PACKET_ATTEMPT=1
       PACKET_RC=1
       while [ "$PACKET_ATTEMPT" -le "$MAX_REVIEW_ATTEMPTS" ]; do
-        run_codex_review "$PACKET_FILE" "$PACKET_VERDICT" || PACKET_RC=$?
+        if run_codex_review "$PACKET_FILE" "$PACKET_VERDICT"; then
+          PACKET_RC=0
+        else
+          PACKET_RC=$?
+        fi
         if [ "$PACKET_RC" -eq 0 ] && [ -f "$PACKET_VERDICT" ] && python3 -c "import json; json.load(open('$PACKET_VERDICT'))" 2>/dev/null; then
           break
         fi
@@ -606,6 +615,7 @@ with open(out_file, "w") as f:
     json.dump(final, f, indent=2)
 print(final["verdict"])
 PYEOF
+    fi
   fi
 
   # --- Quick check: did codex produce a valid verdict? ---

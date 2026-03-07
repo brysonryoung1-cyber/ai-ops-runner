@@ -20,7 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from ops.lib.notifier import build_alert_hash, send_discord_webhook_alert
+from ops.lib.autonomy_mode import read_autonomy_mode
+from ops.lib.notification_router import build_state_hash, send_transition_notification
 
 DEFAULT_STATE_ROOT = Path("/opt/ai-ops-runner/state/brain_loop")
 DEFAULT_ARTIFACTS_ROOT = Path("/opt/ai-ops-runner/artifacts")
@@ -325,6 +326,7 @@ def execute(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     }
 
     try:
+        result["autonomy_mode"] = read_autonomy_mode()
         alert_on_first_fail = parse_bool_env("BRAIN_LOOP_ALERT_ON_FIRST_FAIL", True)
         previous_state = read_json(state_root / "last_state.json")
         if previous_state is None and (state_root / "last_state.json").exists():
@@ -371,32 +373,47 @@ def execute(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         alert_deduped = False
 
         if alert_needed and event_type:
-            alert_hash = build_alert_hash(
-                event_type=event_type,
-                matrix_status=matrix_status,
-                failed_checks=failed_checks,
+            router_event = (
+                "CORE_RECOVERED"
+                if event_type == "FAIL_TO_PASS"
+                else "CORE_DEGRADED"
             )
-            if prior_hash and alert_hash == prior_hash:
+            alert_hash = build_state_hash(
+                {
+                    "matrix_status": matrix_status,
+                    "failed_checks": failed_checks,
+                }
+            )
+            stored_hash = f"{router_event}:{alert_hash}"
+            if prior_hash and stored_hash == prior_hash:
                 alert_deduped = True
             else:
                 message = format_alert_message(
-                    event_type=event_type,
+                    event_type=router_event,
                     matrix_status=matrix_status,
                     failed_checks=failed_checks,
                     brain_bundle_dir=bundle_dir,
                     doctor_bundle_dir=doctor_bundle_dir,
                 )
-                notify = send_discord_webhook_alert(content=message)
+                notify = send_transition_notification(
+                    project_id="infra_openclaw",
+                    event_type=router_event,
+                    state_hash=alert_hash,
+                    summary=message,
+                    proof_path=str(bundle_dir),
+                    hq_path="/inbox",
+                )
                 alert_sent = bool(notify.get("ok"))
-                if not alert_sent:
+                alert_deduped = bool(notify.get("deduped"))
+                if not alert_sent and not alert_deduped:
                     result["warnings"].append(str(notify.get("error_class") or "DISCORD_ALERT_FAILED"))
 
         result["alert_sent"] = alert_sent
         result["alert_deduped"] = alert_deduped
 
         last_alert_hash = prior_hash
-        if alert_sent and alert_hash:
-            last_alert_hash = alert_hash
+        if alert_hash and (alert_sent or alert_deduped):
+            last_alert_hash = f"{'CORE_RECOVERED' if event_type == 'FAIL_TO_PASS' else 'CORE_DEGRADED'}:{alert_hash}"
 
         new_state = {
             "updated_at": now_utc(),
@@ -460,4 +477,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-

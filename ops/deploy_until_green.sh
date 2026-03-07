@@ -13,6 +13,45 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
+read_autonomy_mode() {
+  python3 - "$ROOT_DIR" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+candidates = []
+explicit = os.environ.get("OPENCLAW_AUTONOMY_MODE_PATH", "").strip()
+if explicit:
+    candidates.append(Path(explicit).expanduser())
+if str(root) == "/opt/ai-ops-runner" or str(root).startswith("/opt/ai-ops-runner/"):
+    candidates.append(Path("/opt/ai-ops-runner/artifacts/system/autonomy_mode.json"))
+candidates.append(root / "artifacts" / "system" / "autonomy_mode.json")
+seen = set()
+for candidate in candidates:
+    key = str(candidate)
+    if key in seen:
+        continue
+    seen.add(key)
+    if not candidate.exists():
+        continue
+    try:
+        data = json.loads(candidate.read_text(encoding="utf-8"))
+    except Exception:
+        continue
+    if isinstance(data, dict) and str(data.get("mode", "")).upper() == "OFF":
+        print("OFF")
+        raise SystemExit(0)
+print("ON")
+PY
+}
+
+if [ "$(read_autonomy_mode || echo ON)" = "OFF" ]; then
+  echo "SKIP_AUTONOMY_OFF: deploy_until_green disabled while autonomy mode is OFF"
+  exit 0
+fi
+
 # --- Already-green short-circuit via state gate ---
 CSR_STATE_GATE_THRESHOLD_MIN="${CSR_STATE_GATE_THRESHOLD_MIN:-15}"
 CSR_ARTIFACTS_ROOT="${CSR_ARTIFACTS_ROOT:-$ROOT_DIR/artifacts}"

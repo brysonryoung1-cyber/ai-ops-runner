@@ -34,13 +34,10 @@ from ops.lib.aiops_remote_helpers import (
     parse_run_poll_response,
 )
 from ops.lib.artifacts_root import get_artifacts_root
+from ops.lib.autonomy_mode import decide_action_policy, read_autonomy_mode
 from ops.lib.exec_trigger import TriggerResult, hq_request, trigger_exec
-from ops.lib.notifier import (
-    _is_valid_webhook_url,
-    build_alert_hash,
-    resolve_discord_webhook_url,
-    send_discord_webhook_alert,
-)
+from ops.lib.notification_router import build_state_hash, send_transition_notification
+from ops.lib.notifier import _is_valid_webhook_url, resolve_discord_webhook_url
 from ops.system.soma_preflight import run_soma_preflight
 
 DEFAULT_MAX_SECONDS = 2100
@@ -311,10 +308,13 @@ def build_autopilot_alert_hash(
     error_class: str,
     run_id: str,
 ) -> str:
-    return build_alert_hash(
-        event_type=f"{project}:{terminal_status}",
-        matrix_status=error_class,
-        failed_checks=[run_id],
+    return build_state_hash(
+        {
+            "project": project,
+            "terminal_status": terminal_status,
+            "error_class": error_class,
+            "run_id": run_id,
+        }
     )
 
 
@@ -403,21 +403,24 @@ def send_preflight_transition_alert(
     prev = previous_status or ""
     curr = current_status.upper()
 
-    should_notify = False
-    if prev:
-        should_notify = (prev, curr) in PREFLIGHT_TRANSITIONS_NOTIFY
-    elif curr in {"HUMAN_ONLY", "NO_GO"}:
-        should_notify = True
-    if not should_notify:
+    event_type = ""
+    if curr == "HUMAN_ONLY":
+        event_type = "HUMAN_ONLY_OPEN"
+    elif prev == "HUMAN_ONLY" and curr == "GO":
+        event_type = "HUMAN_ONLY_CLEARED"
+    if not event_type:
         return base
 
-    alert_hash = build_alert_hash(
-        event_type=f"preflight:{prev or 'NONE'}->{curr}",
-        matrix_status=curr,
-        failed_checks=reasons,
+    alert_hash = build_state_hash(
+        {
+            "event_type": event_type,
+            "previous_status": prev or "NONE",
+            "current_status": curr,
+            "reasons": reasons,
+        }
     )
     prior_hash = str(state.get("preflight_last_alert_hash") or "")
-    if prior_hash and prior_hash == alert_hash:
+    if prior_hash and prior_hash == f"{event_type}:{alert_hash}":
         return {
             **base,
             "status": "DEDUPED",
@@ -436,15 +439,24 @@ def send_preflight_transition_alert(
     if not webhook_preflight.get("ok"):
         notify = dict(webhook_preflight)
     else:
-        notify = send_discord_webhook_alert(content=message)
+        notify = send_transition_notification(
+            project_id="soma_kajabi",
+            event_type=event_type,
+            state_hash=alert_hash,
+            summary=message,
+            proof_path=proof_path,
+            hq_path="/inbox",
+        )
     sent = bool(notify.get("ok"))
-    if sent:
-        state["preflight_last_alert_hash"] = alert_hash
+    deduped = bool(notify.get("deduped"))
+    if sent or deduped:
+        state["preflight_last_alert_hash"] = f"{event_type}:{alert_hash}"
     return {
         **base,
-        "status": "SENT" if sent else "ERROR",
+        "status": "DEDUPED" if deduped else ("SENT" if sent else "ERROR"),
         "needed": True,
         "sent": sent,
+        "deduped": deduped,
         "hash": alert_hash,
         "error_class": str(notify.get("error_class") or ""),
         "message": str(notify.get("message") or ""),
@@ -1175,7 +1187,12 @@ def send_terminal_alert(
             "message": "",
             "notify": webhook_preflight if not webhook_preflight.get("ok") else {},
         }
-        if terminal not in {TERMINAL_WAITING, TERMINAL_FAIL}:
+        event_type = {
+            TERMINAL_WAITING: "HUMAN_ONLY_OPEN",
+            TERMINAL_FAIL: "PLAYBOOK_RUN_FAIL",
+            TERMINAL_SUCCESS: "PLAYBOOK_RUN_PASS",
+        }.get(terminal, "")
+        if not event_type:
             return base
         alert_hash = build_autopilot_alert_hash(
             project=project,
@@ -1186,7 +1203,8 @@ def send_terminal_alert(
         seen = state.get("seen_alert_hashes")
         if not isinstance(seen, list):
             seen = []
-        if alert_hash in seen:
+        seen_key = f"{event_type}:{alert_hash}"
+        if seen_key in seen:
             return {
                 **base,
                 "status": "DEDUPED",
@@ -1206,16 +1224,25 @@ def send_terminal_alert(
         if not webhook_preflight.get("ok"):
             notify = dict(webhook_preflight)
         else:
-            notify = send_discord_webhook_alert(content=message)
+            notify = send_transition_notification(
+                project_id=project,
+                event_type=event_type,
+                state_hash=alert_hash,
+                summary=message,
+                proof_path=proof_path,
+                hq_path="/inbox",
+            )
         sent = bool(notify.get("ok"))
-        if sent:
-            seen = [*seen, alert_hash][-SEEN_ALERTS_MAX:]
+        deduped = bool(notify.get("deduped"))
+        if sent or deduped:
+            seen = [*seen, seen_key][-SEEN_ALERTS_MAX:]
             state["seen_alert_hashes"] = seen
         return {
             **base,
-            "status": "SENT" if sent else "ERROR",
+            "status": "DEDUPED" if deduped else ("SENT" if sent else "ERROR"),
             "needed": True,
             "sent": sent,
+            "deduped": deduped,
             "hash": alert_hash,
             "error_class": str(notify.get("error_class") or ""),
             "message": str(notify.get("message") or ""),
@@ -1277,6 +1304,13 @@ def build_summary(result: dict[str, Any]) -> str:
                 f"- Preflight proof: `{preflight.get('result_path')}`",
             ]
         )
+    autonomy = result.get("autonomy_mode") if isinstance(result.get("autonomy_mode"), dict) else {}
+    if autonomy:
+        lines.append(f"- Autonomy mode: `{autonomy.get('mode')}`")
+    policy = result.get("policy") if isinstance(result.get("policy"), dict) else {}
+    if policy:
+        lines.append(f"- Policy decision: `{policy.get('decision')}`")
+        lines.append(f"- Policy allowed: `{policy.get('allowed')}`")
     links = result.get("links") if isinstance(result.get("links"), dict) else {}
     if links:
         lines.extend(
@@ -1403,6 +1437,8 @@ def main(argv: list[str] | None = None) -> int:
         "warnings": [],
         "bundle_dir": rel_path(bundle_dir, repo_root),
     }
+    autonomy_state = read_autonomy_mode()
+    result["autonomy_mode"] = autonomy_state
     if not webhook_preflight.get("ok"):
         result["warnings"].append(
             {
@@ -1565,6 +1601,24 @@ def main(argv: list[str] | None = None) -> int:
                 error_class="DOCTOR_FAILED",
                 proof_path=proof_for_alert,
                 novnc_url=None,
+            )
+            return finalize(0)
+
+        policy = decide_action_policy(
+            action=args.action,
+            autonomy_mode=str(autonomy_state.get("mode") or "ON"),
+            source="autopilot",
+            mutates_external=True,
+        )
+        result["policy"] = policy
+        if not bool(policy.get("allowed")):
+            result["status"] = "SKIP_AUTONOMY_OFF"
+            result["error_class"] = "SKIP_AUTONOMY_OFF"
+            result["warnings"].append(
+                {
+                    "warning": "AUTONOMY_MODE_OFF",
+                    "error_class": "SKIP_AUTONOMY_OFF",
+                }
             )
             return finalize(0)
 
@@ -1787,17 +1841,14 @@ def main(argv: list[str] | None = None) -> int:
         result["validators"] = validators
         result["status"] = TERMINAL_SUCCESS
         result["error_class"] = None
-        result["alert"] = {
-            "status": "SKIPPED",
-            "needed": False,
-            "sent": False,
-            "deduped": False,
-            "hash": "",
-            "terminal_error_class": "",
-            "error_class": "",
-            "message": "",
-            "notify": webhook_preflight if not webhook_preflight.get("ok") else {},
-        }
+        proof_for_alert = poll_result.proof_path or rel_path(bundle_dir / "RESULT.json", repo_root)
+        result["alert"] = maybe_send_terminal_alert(
+            terminal_status=TERMINAL_SUCCESS,
+            remote_run_id=remote_run_id,
+            error_class="SUCCESS",
+            proof_path=proof_for_alert,
+            novnc_url=None,
+        )
         return finalize(0)
     except Exception as exc:  # noqa: BLE001
         result["status"] = TERMINAL_FAIL

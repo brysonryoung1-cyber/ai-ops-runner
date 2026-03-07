@@ -77,7 +77,7 @@ const UI_ROUTES = [
   "/projects",
   "/runs",
   "/artifacts",
-  "/actions",
+  "/advanced/catalog",
   "/settings",
   "/soma",
 ];

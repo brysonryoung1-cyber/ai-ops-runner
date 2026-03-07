@@ -684,7 +684,7 @@ export default function OverviewPage() {
           </div>
           <div className="p-5">
             <p className="text-xs text-white/60 mb-3">
-              Fully agentic audit: API, hostd, docker, systemd, noVNC. Self-heal loop (3 retries). Use HQ → Actions → Run HQ Audit.
+              Fully agentic audit: API, hostd, docker, systemd, noVNC. Self-heal loop (3 retries). Use HQ → Catalog → HQ Audit.
             </p>
             <div className="flex flex-wrap items-center gap-3">
               <GlassButton
@@ -827,8 +827,8 @@ export default function OverviewPage() {
                   PROOF.md
                 </Link>
               )}
-              <Link href="/actions" className="text-xs text-blue-300 hover:text-blue-200">
-                Run Soma to DONE
+              <Link href="/advanced/catalog?project=soma_kajabi" className="text-xs text-blue-300 hover:text-blue-200">
+                Open Catalog
               </Link>
             </div>
           </div>

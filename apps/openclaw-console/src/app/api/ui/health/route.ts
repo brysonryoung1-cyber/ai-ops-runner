@@ -27,7 +27,7 @@ const CONSOLE_ROUTES = [
   "/runs",
   "/artifacts",
   "/artifacts/[...path]",
-  "/actions",
+  "/advanced/catalog",
   "/logs",
   "/settings",
   "/soma",
