@@ -4,9 +4,12 @@ const PORT = process.env.OPENCLAW_CONSOLE_PORT || process.env.PORT || "8787";
 const baseURL = `http://127.0.0.1:${PORT}`;
 const hostdMock = process.env.OPENCLAW_HOSTD_MOCK === "1";
 const uiStub = process.env.OPENCLAW_UI_STUB ?? (hostdMock ? "0" : "1");
+const repoRootEnv = 'OPENCLAW_REPO_ROOT="$PWD/../.."';
+const artifactsRootEnv = 'OPENCLAW_ARTIFACTS_ROOT="$PWD/.tmp-playwright-artifacts"';
+const autonomyModeEnv = 'OPENCLAW_AUTONOMY_MODE_PATH="$PWD/.tmp-playwright-artifacts/system/autonomy_mode.json"';
 const serverEnv = hostdMock
-  ? `OPENCLAW_HOSTD_MOCK=1 OPENCLAW_UI_STUB=${uiStub}`
-  : `OPENCLAW_UI_STUB=${uiStub}`;
+  ? `${repoRootEnv} ${artifactsRootEnv} ${autonomyModeEnv} OPENCLAW_HOSTD_MOCK=1 OPENCLAW_UI_STUB=${uiStub}`
+  : `${repoRootEnv} ${artifactsRootEnv} ${autonomyModeEnv} OPENCLAW_UI_STUB=${uiStub}`;
 
 /**
  * Playwright e2e for OpenClaw console.

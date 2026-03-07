@@ -30,6 +30,40 @@ DEPLOY_RECEIPT="${OPENCLAW_AUTOPILOT_DEPLOY_RECEIPT:-$ROOT_DIR/artifacts/deploy/
 TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RUN_ID="$(date -u +%Y%m%d_%H%M%S)-$(od -A n -t x4 -N 2 /dev/urandom 2>/dev/null | tr -d ' ' || echo "$$")"
 
+read_autonomy_mode() {
+  python3 - "$ROOT_DIR" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+candidates = []
+explicit = os.environ.get("OPENCLAW_AUTONOMY_MODE_PATH", "").strip()
+if explicit:
+    candidates.append(Path(explicit).expanduser())
+if str(root) == "/opt/ai-ops-runner" or str(root).startswith("/opt/ai-ops-runner/"):
+    candidates.append(Path("/opt/ai-ops-runner/artifacts/system/autonomy_mode.json"))
+candidates.append(root / "artifacts" / "system" / "autonomy_mode.json")
+seen = set()
+for candidate in candidates:
+    key = str(candidate)
+    if key in seen:
+        continue
+    seen.add(key)
+    if not candidate.exists():
+        continue
+    try:
+        data = json.loads(candidate.read_text(encoding="utf-8"))
+    except Exception:
+        continue
+    if isinstance(data, dict) and str(data.get("mode", "")).upper() == "OFF":
+        print("OFF")
+        raise SystemExit(0)
+print("ON")
+PY
+}
+
 log() {
   echo "$1"
   echo "[$TIMESTAMP] $1" >> "$LOG_FILE" 2>/dev/null || true
@@ -115,6 +149,13 @@ with open(os.path.join(state_dir, 'last_run.json'), 'w') as f:
 
 # --- Ensure state dir exists ---
 mkdir -p "$STATE_DIR"
+
+AUTONOMY_MODE="$(read_autonomy_mode || echo ON)"
+if [ "$AUTONOMY_MODE" = "OFF" ]; then
+  log "autopilot: SKIP autonomy mode OFF"
+  write_status "SKIP" "" "" "autonomy_off" "Autonomy mode OFF; mutating deploy automation disabled"
+  exit 0
+fi
 
 # --- Check enabled ---
 if [ ! -f "$STATE_DIR/enabled" ]; then

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from urllib import error
 
+from ops.lib.autonomy_mode import write_autonomy_mode
 from ops.system.project_autopilot import main
 
 
@@ -59,11 +60,11 @@ def test_mock_waiting_writes_bundle_and_dedupes_alert(tmp_path: Path, monkeypatc
         },
     )
 
-    def _fake_notify(*, content: str, timeout_sec: int = 10):  # noqa: ARG001
-        sent_messages.append(content)
-        return {"ok": True, "http_code": 204}
+    def _fake_notify(*, summary: str, **_kwargs):
+        sent_messages.append(summary)
+        return {"ok": True, "deduped": False, "source": "env"}
 
-    monkeypatch.setattr("ops.system.project_autopilot.send_discord_webhook_alert", _fake_notify)
+    monkeypatch.setattr("ops.system.project_autopilot.send_transition_notification", _fake_notify)
     monkeypatch.setattr(
         "ops.system.project_autopilot.build_webhook_preflight",
         lambda: {"ok": True, "source": "env", "error_class": None},
@@ -139,8 +140,12 @@ def test_mock_doctor_fail_exits_nonzero_and_writes_result(tmp_path: Path, monkey
     state_root = tmp_path / "state"
 
     monkeypatch.setattr(
-        "ops.system.project_autopilot.send_discord_webhook_alert",
-        lambda **_kwargs: {"ok": True, "http_code": 204},
+        "ops.system.project_autopilot.send_transition_notification",
+        lambda **_kwargs: {"ok": True, "deduped": False, "source": "env"},
+    )
+    monkeypatch.setattr(
+        "ops.system.project_autopilot.build_webhook_preflight",
+        lambda: {"ok": True, "source": "env", "error_class": None},
     )
 
     rc = main(
@@ -184,8 +189,12 @@ def test_mock_success_writes_proof_bundle(tmp_path: Path, monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        "ops.system.project_autopilot.send_discord_webhook_alert",
-        lambda **_kwargs: {"ok": True, "http_code": 204},
+        "ops.system.project_autopilot.send_transition_notification",
+        lambda **_kwargs: {"ok": True, "deduped": False, "source": "env"},
+    )
+    monkeypatch.setattr(
+        "ops.system.project_autopilot.build_webhook_preflight",
+        lambda: {"ok": True, "source": "env", "error_class": None},
     )
 
     rc = main(
@@ -222,7 +231,8 @@ def test_mock_success_writes_proof_bundle(tmp_path: Path, monkeypatch) -> None:
 
     result = _load_result(artifacts_root, "ap_success")
     assert result["status"] == "SUCCESS"
-    assert result["alert"]["needed"] is False
+    assert result["alert"]["needed"] is True
+    assert result["alert"]["sent"] is True
     assert result["run_artifact_dir_resolution"] == "fs_scan"
     assert result["poll"]["run_to_done_resolution_method"] == "fs_scan"
     assert result["links"]["run_to_done_dir"] == f"artifacts/soma_kajabi/run_to_done/{run_dir_name}"
@@ -294,6 +304,43 @@ def test_fs_scan_resolution_finds_proof_by_console_run_id(tmp_path: Path) -> Non
     assert result["links"]["proof_path"] == (
         f"artifacts/soma_kajabi/run_to_done/{matched_run_dir.name}/PROOF.json"
     )
+
+
+def test_autonomy_off_skips_mutating_mock_run(tmp_path: Path, monkeypatch) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    state_root = tmp_path / "state"
+    autonomy_path = tmp_path / "autonomy_mode.json"
+    monkeypatch.setenv("OPENCLAW_AUTONOMY_MODE_PATH", str(autonomy_path))
+    write_autonomy_mode("OFF", "pytest")
+
+    rc = main(
+        [
+            "--project",
+            "soma_kajabi",
+            "--action",
+            "soma_run_to_done",
+            "--mock",
+            "--mock-terminal-status",
+            "SUCCESS",
+            "--mock-run-id",
+            "20260306120000-autonomyoff",
+            "--run-id",
+            "ap_autonomy_off",
+            "--state-root",
+            str(state_root),
+            "--artifacts-root",
+            str(artifacts_root),
+            "--validator-actions",
+            "",
+        ]
+    )
+
+    assert rc == 0
+    result = _load_result(artifacts_root, "ap_autonomy_off")
+    assert result["status"] == "SKIP_AUTONOMY_OFF"
+    assert result["error_class"] == "SKIP_AUTONOMY_OFF"
+    assert result["policy"]["decision"] == "SKIP_AUTONOMY_OFF"
+    assert result["autonomy_mode"]["mode"] == "OFF"
 
 
 def test_pointer_resolution_match_uses_local_pointer(tmp_path: Path) -> None:
@@ -464,8 +511,8 @@ def test_webhook_missing_is_recorded_but_not_fatal(tmp_path: Path) -> None:
     assert rc == 0
     result = _load_result(artifacts_root, "ap_webhook_missing")
     assert result["status"] == "SUCCESS"
-    assert result["alert"]["status"] == "SKIPPED"
-    assert result["alert"]["needed"] is False
+    assert result["alert"]["status"] == "ERROR"
+    assert result["alert"]["needed"] is True
     assert result["alert"]["sent"] is False
     assert result["alert"]["notify"]["error_class"] == "DISCORD_WEBHOOK_INVALID"
     assert {
@@ -491,7 +538,7 @@ def test_terminal_fail_alert_http_error_is_nonfatal_and_structured(
         },
     )
 
-    def _http_error(*, content: str, timeout_sec: int = 10):  # noqa: ARG001
+    def _http_error(**_kwargs):
         return {
             "ok": False,
             "error_class": "DISCORD_HTTP_ERROR",
@@ -500,7 +547,7 @@ def test_terminal_fail_alert_http_error_is_nonfatal_and_structured(
             "source": "env",
         }
 
-    monkeypatch.setattr("ops.system.project_autopilot.send_discord_webhook_alert", _http_error)
+    monkeypatch.setattr("ops.system.project_autopilot.send_transition_notification", _http_error)
     monkeypatch.setenv("OPENCLAW_DISCORD_WEBHOOK_URL", "https://discord.example/webhook")
 
     rc = main(
@@ -552,10 +599,10 @@ def test_terminal_fail_alert_sender_exception_is_nonfatal_and_structured(
         },
     )
 
-    def _raise(*, content: str, timeout_sec: int = 10):  # noqa: ARG001
+    def _raise(**_kwargs):
         raise error.HTTPError("https://discord.example/webhook", 500, "boom", hdrs=None, fp=None)
 
-    monkeypatch.setattr("ops.system.project_autopilot.send_discord_webhook_alert", _raise)
+    monkeypatch.setattr("ops.system.project_autopilot.send_transition_notification", _raise)
     monkeypatch.setenv("OPENCLAW_DISCORD_WEBHOOK_URL", "https://discord.example/webhook")
 
     rc = main(
