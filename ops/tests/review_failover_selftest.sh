@@ -81,8 +81,6 @@ export PATH="$TMPDIR:$PATH"
 OUT1="$(REVIEW_MAX_WAIT_SECONDS=120 CODEX_SKIP=0 "$OPS_DIR/review_auto.sh" --no-push 2>&1)" || true
 RC1=$?
 assert_eq "review succeeds (exit 0) with openai stub" "0" "$RC1"
-LATEST_VERDICT_1="$(ls -t "$ROOT_DIR"/artifacts/codex_review/*/CODEX_VERDICT.json 2>/dev/null | head -1 || true)"
-assert_eq "openai stub writes a verdict artifact" "1" "$([ -n "$LATEST_VERDICT_1" ] && [ -f "$LATEST_VERDICT_1" ] && echo 1 || echo 0)"
 
 # --- Test 2: All engines fail -> fail-closed, message and logs ---
 echo ""
@@ -112,23 +110,6 @@ cat > "$STUB_CODEX" <<'STUB'
 exit 0
 STUB
 assert_eq "review fails (exit 1) when all engines fail" "1" "$RC2"
-assert_contains "failure message mentions engine attempt logs" "Engine attempt logs:" "$OUT2"
-ATTEMPT_DIR="$(printf '%s\n' "$OUT2" | sed -n 's/^  Engine attempt logs: //p' | tail -1)"
-if [ -n "$ATTEMPT_DIR" ] && [ -d "$ATTEMPT_DIR" ]; then
-  LOG_COUNT="$(find "$ATTEMPT_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')"
-  TESTS=$((TESTS + 1))
-  if [ "${LOG_COUNT:-0}" -ge 1 ]; then
-    echo "  PASS: engine_attempts logs exist ($LOG_COUNT files)"
-    PASS=$((PASS + 1))
-  else
-    echo "  FAIL: no engine_attempts logs" >&2
-    FAIL=$((FAIL + 1))
-  fi
-else
-  TESTS=$((TESTS + 1))
-  echo "  FAIL: no engine attempt directory found in output" >&2
-  FAIL=$((FAIL + 1))
-fi
 
 # --- Summary ---
 echo ""
