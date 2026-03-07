@@ -34,6 +34,9 @@ apps/openclaw-console/.env.local
 apps/openclaw-console/artifacts/
 apps/openclaw-console/data/
 apps/openclaw-console/test-results/
+# Playwright transient artifacts (clean-tree gate)
+apps/openclaw-console/.tmp-playwright-artifacts/
+**/.tmp-playwright-*/
 logs/
 test-results/
 
