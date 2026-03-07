@@ -301,16 +301,16 @@ else
   fail "runs page missing"
 fi
 
-# Test 28: Sidebar has all required nav items
-if grep -q 'Overview' "$REPO_ROOT/apps/openclaw-console/src/components/Sidebar.tsx" && \
-   grep -q 'Projects' "$REPO_ROOT/apps/openclaw-console/src/components/Sidebar.tsx" && \
-   grep -q 'Runs' "$REPO_ROOT/apps/openclaw-console/src/components/Sidebar.tsx" && \
-   grep -q 'Logs' "$REPO_ROOT/apps/openclaw-console/src/components/Sidebar.tsx" && \
-   grep -q 'Artifacts' "$REPO_ROOT/apps/openclaw-console/src/components/Sidebar.tsx" && \
-   grep -q 'Actions' "$REPO_ROOT/apps/openclaw-console/src/components/Sidebar.tsx"; then
-  pass "sidebar has all 6 required nav items"
+# Test 28: Primary shell nav has Inbox/Catalog-era items
+if grep -q 'Inbox' "$REPO_ROOT/apps/openclaw-console/src/components/Shell.tsx" && \
+   grep -q 'Overview' "$REPO_ROOT/apps/openclaw-console/src/components/Shell.tsx" && \
+   grep -q 'Projects' "$REPO_ROOT/apps/openclaw-console/src/components/Shell.tsx" && \
+   grep -q 'Runs' "$REPO_ROOT/apps/openclaw-console/src/components/Shell.tsx" && \
+   grep -q 'Artifacts' "$REPO_ROOT/apps/openclaw-console/src/components/Shell.tsx" && \
+   grep -q 'Catalog' "$REPO_ROOT/apps/openclaw-console/src/components/Shell.tsx"; then
+  pass "shell nav has Inbox, Overview, Projects, Runs, Artifacts, and Catalog"
 else
-  fail "sidebar missing nav items"
+  fail "shell nav missing Inbox/Catalog-era items"
 fi
 
 # Test 29: Sidebar renamed to HQ
@@ -362,13 +362,14 @@ else
   fail "projects page missing navigable project cards (Link + Open + a11y)"
 fi
 
-# Test 33c: Project details page includes Connectors and Phase 0 for Soma
-if grep -q 'Connectors' "$REPO_ROOT/apps/openclaw-console/src/app/projects/[projectId]/page.tsx" && \
-   grep -q 'Phase 0\|soma_kajabi_phase0' "$REPO_ROOT/apps/openclaw-console/src/app/projects/[projectId]/page.tsx" && \
-   grep -q 'ConnectorsCard\|Connectors' "$REPO_ROOT/apps/openclaw-console/src/app/projects/[projectId]/page.tsx"; then
-  pass "project details page includes Connectors UI and Phase 0 for Soma"
+# Test 33c: Project details page exposes the autonomy-first surface
+if grep -q 'Autonomous Mode' "$REPO_ROOT/apps/openclaw-console/src/app/projects/[projectId]/page.tsx" && \
+   grep -q 'Run Next' "$REPO_ROOT/apps/openclaw-console/src/app/projects/[projectId]/page.tsx" && \
+   grep -q 'project-playbook-buttons' "$REPO_ROOT/apps/openclaw-console/src/app/projects/[projectId]/page.tsx" && \
+   grep -q 'Open Catalog' "$REPO_ROOT/apps/openclaw-console/src/app/projects/[projectId]/page.tsx"; then
+  pass "project details page exposes autonomy toggle, Run Next, limited playbooks, and Catalog"
 else
-  fail "project details page must include Connectors panel and Phase 0 action"
+  fail "project details page missing autonomy-first project surface"
 fi
 
 # ── Section 5: Security Invariants ─────────────────────────────

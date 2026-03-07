@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useDeferredValue, useMemo, useState } from "react";
+import { Suspense, startTransition, useDeferredValue, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { getAllPlaybooks } from "@/lib/plugins";
 import { riskLabel } from "@/lib/playbooks";
@@ -73,7 +73,7 @@ function matchesFilter(text: string, terms: string[]): boolean {
   return terms.every((term) => text.includes(term));
 }
 
-export default function CatalogPage() {
+function CatalogPageContent() {
   const token = useToken();
   const searchParams = useSearchParams();
   const initialProject = searchParams.get("project") || "";
@@ -295,5 +295,19 @@ export default function CatalogPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function CatalogPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-sm text-white/60">
+          Loading catalog…
+        </div>
+      }
+    >
+      <CatalogPageContent />
+    </Suspense>
   );
 }
