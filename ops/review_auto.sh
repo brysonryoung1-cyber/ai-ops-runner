@@ -559,7 +559,11 @@ PKTEOF
       PACKET_ATTEMPT=1
       PACKET_RC=1
       while [ "$PACKET_ATTEMPT" -le "$MAX_REVIEW_ATTEMPTS" ]; do
-        run_codex_review "$PACKET_FILE" "$PACKET_VERDICT" || PACKET_RC=$?
+        if run_codex_review "$PACKET_FILE" "$PACKET_VERDICT"; then
+          PACKET_RC=0
+        else
+          PACKET_RC=$?
+        fi
         if [ "$PACKET_RC" -eq 0 ] && [ -f "$PACKET_VERDICT" ] && python3 -c "import json; json.load(open('$PACKET_VERDICT'))" 2>/dev/null; then
           break
         fi
