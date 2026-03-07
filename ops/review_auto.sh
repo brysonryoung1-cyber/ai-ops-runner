@@ -519,10 +519,15 @@ PYEOF
     done
     echo "  Valid verdict from engine: $CURRENT_ENGINE" >&2
   else
-    VERDICT_FROM_CODEX=1
-    echo "==> Running Codex review (packet mode)..."
-    # Generate per-file packets
-    FILE_LIST="$(git diff --name-only "$SINCE_SHA" "$HEAD_SHA")"
+    # Packet mode: try openclaw API first (handles truncated bundle when size cap exceeded)
+    if try_openclaw_fallback 2>/dev/null; then
+      echo "  Valid verdict from openclaw (truncated bundle)" >&2
+      VERDICT_FROM_CODEX=0
+    else
+      VERDICT_FROM_CODEX=1
+      echo "==> Running Codex review (packet mode)..."
+      # Generate per-file packets
+      FILE_LIST="$(git diff --name-only "$SINCE_SHA" "$HEAD_SHA")"
     PACKET_NUM=0
     ALL_VERDICTS=()
 
@@ -610,6 +615,7 @@ with open(out_file, "w") as f:
     json.dump(final, f, indent=2)
 print(final["verdict"])
 PYEOF
+    fi
   fi
 
   # --- Quick check: did codex produce a valid verdict? ---
