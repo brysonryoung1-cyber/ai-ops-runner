@@ -53,13 +53,7 @@ const RAW_ACTIONS: RawAction[] = [
     tags: ["infra", "deploy", "production"],
     tier: "destructive_ops",
   },
-  {
-    id: "rollback",
-    title: "Rollback",
-    description: "Rollback to the last known good tree SHA.",
-    tags: ["infra", "rollback", "break-glass"],
-    tier: "destructive_ops",
-  },
+  // rollback: excluded from catalog until server-side approval gate (deploy_and_verify-style) exists
 ];
 
 function rawTierLabel(tier: PolicyTier): string {

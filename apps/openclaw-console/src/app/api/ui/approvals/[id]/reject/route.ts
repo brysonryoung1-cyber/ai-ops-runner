@@ -53,28 +53,33 @@ export async function POST(
   }
 
   const actor = deriveActor(req.headers.get("x-openclaw-token"));
+  const resolvedAt = new Date().toISOString();
+  const proofPath = resolveProofBundlePath(approval.proof_bundle);
+
+  // Write artifacts first (idempotent: retry after partial write overwrites same content)
+  writeJsonAtomic(join(proofPath, "approval_resolution.json"), {
+    approval_id: approval.id,
+    status: "REJECTED",
+    resolved_at: resolvedAt,
+    resolved_by: actor,
+    note: body.note ?? null,
+    run_id: null,
+  });
+  writeJsonAtomic(join(proofPath, "RESULT.json"), {
+    ok: true,
+    status: "REJECTED",
+    approval_id: approval.id,
+    proof_bundle: approval.proof_bundle,
+  });
+
   const resolved = resolveApproval(id, {
     status: "REJECTED",
-    resolved_at: new Date().toISOString(),
+    resolved_at: resolvedAt,
     resolved_by: actor,
     note: body.note ?? null,
     run_id: null,
   });
   if (resolved) {
-    writeJsonAtomic(join(resolveProofBundlePath(resolved.proof_bundle), "approval_resolution.json"), {
-      approval_id: resolved.id,
-      status: resolved.status,
-      resolved_at: resolved.resolved_at,
-      resolved_by: resolved.resolved_by,
-      note: resolved.note,
-      run_id: null,
-    });
-    writeJsonAtomic(join(resolveProofBundlePath(resolved.proof_bundle), "RESULT.json"), {
-      ok: true,
-      status: "REJECTED",
-      approval_id: resolved.id,
-      proof_bundle: resolved.proof_bundle,
-    });
     await sendTransitionNotification({
       project_id: resolved.project_id,
       event_type: "APPROVAL_RESOLVED",
